@@ -22,7 +22,7 @@ class BADRApp:
     def __init__(self, root):
         self.root = root
         self.root.title("BADR Automation - Déclarations LTA")
-        self.root.geometry("1100x750")
+        self.root.geometry("900x700")
         
         # Application state
         self.current_folder = None
@@ -39,9 +39,9 @@ class BADRApp:
         logger.info("Application window initialized")
     
     def _setup_ui(self):
-        """Setup the main UI with modern enhanced tabs"""
+        """Setup the main UI with tabs"""
         # Create main frame
-        main_frame = ttk.Frame(self.root, padding="0")
+        main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # Configure grid weights
@@ -49,95 +49,34 @@ class BADRApp:
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(0, weight=1)
         main_frame.rowconfigure(0, weight=1)
-        main_frame.rowconfigure(1, weight=0)
         
-        # ========== Enhanced Tab Styling ==========
-        style = ttk.Style()
+        # Create notebook (tabbed interface)
+        self.notebook = ttk.Notebook(main_frame)
+        self.notebook.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
-        # Use a modern theme as base
-        try:
-            style.theme_use('clam')  # Modern, flat appearance
-        except:
-            style.theme_use('default')
-        
-        # Configure notebook (tab container)
-        style.configure('TNotebook',
-                       background='#ffffff',
-                       borderwidth=0,
-                       tabmargins=[5, 5, 0, 0])
-        
-        # Configure individual tabs - MUCH larger and more visible
-        style.configure('TNotebook.Tab',
-                       padding=[25, 15],  # Large padding: 25px horizontal, 15px vertical
-                       font=('Segoe UI', 11, 'bold'),
-                       background='#e9ecef',
-                       foreground='#495057',
-                       borderwidth=0,
-                       focuscolor='none')
-        
-        # Tab states with better colors
-        style.map('TNotebook.Tab',
-                 background=[('selected', '#0066cc'),    # Blue when selected
-                           ('active', '#dee2e6'),        # Light gray on hover
-                           ('!selected', '#e9ecef')],    # Default gray
-                 foreground=[('selected', '#ffffff'),    # White text when selected
-                           ('active', '#212529'),        # Dark text on hover
-                           ('!selected', '#495057')],    # Gray text default
-                 expand=[('selected', [2, 2, 2, 0])],   # Expand selected tab
-                 borderwidth=[('selected', 0)])
-        
-        # ========== Create Notebook ==========
-        notebook_container = ttk.Frame(main_frame)
-        notebook_container.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        notebook_container.columnconfigure(0, weight=1)
-        notebook_container.rowconfigure(0, weight=1)
-        
-        self.notebook = ttk.Notebook(notebook_container)
-        self.notebook.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=(5, 0))
-        
-        # Create tabs with icons
+        # Create tabs
         self.prep_screen = PreparationScreen(self.notebook, self)
         self.phase1_screen = Phase1EDScreen(self.notebook, self)
         self.phase2_screen = Phase2DUMScreen(self.notebook, self)
         self.logs_screen = LogsScreen(self.notebook, self)
         
-        # Add tabs to notebook with icons and better labels
-        self.notebook.add(self.prep_screen.frame, text="  📋  Étape 1: Préparation  ")
-        self.notebook.add(self.phase1_screen.frame, text="  📝  Étape 2: Phase ED  ")
-        self.notebook.add(self.phase2_screen.frame, text="  📦  Étape 3: Phase DUM  ")
-        self.notebook.add(self.logs_screen.frame, text="  📊  Logs & Console  ")
+        # Add tabs to notebook
+        self.notebook.add(self.prep_screen.frame, text="1. Préparation")
+        self.notebook.add(self.phase1_screen.frame, text="2. Phase ED")
+        self.notebook.add(self.phase2_screen.frame, text="3. Phase Déd.")
+        self.notebook.add(self.logs_screen.frame, text="Logs")
         
         # Bind tab change event for auto-refresh
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
         
-        # ========== Status Bar ==========
-        status_frame = tk.Frame(main_frame, bg='#343a40', height=32)
-        status_frame.grid(row=1, column=0, sticky=(tk.W, tk.E))
-        status_frame.grid_propagate(False)
+        # All tabs enabled from start (users can run any phase independently)
+        # Phase 1 and Phase 2 will show warnings if prerequisites not met
         
-        self.status_var = tk.StringVar(value="✓ Prêt")
-        status_label = tk.Label(
-            status_frame,
-            textvariable=self.status_var,
-            bg='#343a40',
-            fg='#ffffff',
-            anchor=tk.W,
-            padx=20,
-            font=('Segoe UI', 9)
-        )
-        status_label.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
-        
-        # Add version info on right side of status bar
-        version_label = tk.Label(
-            status_frame,
-            text="v1.0",
-            bg='#343a40',
-            fg='#6c757d',
-            anchor=tk.E,
-            padx=20,
-            font=('Segoe UI', 8)
-        )
-        version_label.pack(fill=tk.BOTH, side=tk.RIGHT)
+        # Status bar
+        self.status_var = tk.StringVar(value="Prêt")
+        status_bar = ttk.Label(main_frame, textvariable=self.status_var, 
+                              relief=tk.SUNKEN, anchor=tk.W)
+        status_bar.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
     
     def set_status(self, message):
         """Update status bar message"""
@@ -160,12 +99,12 @@ class BADRApp:
     
     def enable_phase1_tab(self):
         """Enable Phase 1 tab after preparation"""
-        # Visual feedback - already enabled
+        self.notebook.tab(1, state="normal")
         logger.info("Phase 1 tab enabled")
     
     def enable_phase2_tab(self):
         """Enable Phase 2 tab after Phase 1"""
-        # Visual feedback - already enabled
+        self.notebook.tab(2, state="normal")
         logger.info("Phase 2 tab enabled")
     
     def log_message(self, message, level="INFO"):
