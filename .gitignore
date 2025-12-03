@@ -1,0 +1,85 @@
+# Ignore everything by default
+*
+
+# But include these essential files and folders
+!.gitignore
+!badr_login_test.py
+!script_all_fuzy_match.py
+!validation.py
+!requirements.txt
+!known_companies.json
+!.env.example
+!README_DEPLOYMENT.md
+!DEPLOYMENT_GUIDE.md
+!QUICK_DEPLOY.md
+!init_git_repo.ps1
+!update_app.ps1
+
+# Include gui folder and its contents
+!gui/
+!gui/**
+
+# Include config folder and its contents
+!config/
+!config/**
+
+# Exclude Python cache files
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.Python
+
+# Exclude environment files (sensitive data)
+.env
+*.env
+
+# Exclude log files
+*.log
+*_logs.txt
+
+# Exclude build artifacts
+build/
+dist/
+*.spec
+*.exe
+
+# Exclude IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Exclude temporary files
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+
+# ============================================================================
+# EMPLOYEE WORK FILES - NEVER TRACKED
+# ============================================================================
+# LTA folders and data added by employees during daily work
+*eme LTA/
+*eme_LTA_shipper_name.txt
+*eme LTA.txt
+*.xlsx
+*.xls
+*.pdf
+summary_file*
+Sheet*
+
+# Screenshots and outputs
+badr_screenshot_*
+output_*
+result_*
+errors_*
+
+# Any folder containing "LTA" (case insensitive)
+*[Ll][Tt][Aa]*/
+
+# Backup and temporary work files
+*_backup*
+*_old*
+*_test*

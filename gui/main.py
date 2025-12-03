@@ -6,6 +6,7 @@ Launches the desktop application
 
 import sys
 import os
+import subprocess
 import tkinter as tk
 from tkinter import messagebox
 import logging
@@ -22,10 +23,57 @@ else:
 
 os.chdir(application_path)
 
+# ============================================================================
+# AUTO-UPDATE FROM GITHUB (SILENT)
+# ============================================================================
+# This ensures employees automatically get:
+# - License renewals (updated LTA_sys_ts and LTA_validity)
+# - Script improvements and bug fixes
+# - New features
+# All without manual intervention
+try:
+    # Check if git is available
+    _git_check = subprocess.run(
+        ["git", "--version"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        cwd=application_path
+    )
+    
+    # Check if we're in a git repository
+    _git_status_check = subprocess.run(
+        ["git", "rev-parse", "--git-dir"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        cwd=application_path
+    )
+    
+    if _git_status_check.returncode == 0:
+        # Pull updates silently with --autostash
+        # This will:
+        # 1. Stash any local changes (like LTA folders added by employees)
+        # 2. Pull updates from GitHub (license, scripts, GUI)
+        # 3. Reapply stashed changes
+        # Local files/folders are preserved!
+        subprocess.run(
+            ["git", "pull", "--autostash", "origin", "main"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=application_path
+        )
+except:
+    # Silent fail - continue with current version
+    # This allows the app to work even without git installed
+    pass
+
 # Add parent directory to path to import existing scripts
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from gui.app import BADRApp
+from gui.utils.license_validator import validate_and_continue
 
 def setup_logging():
     """Configure logging for the application"""
@@ -53,6 +101,16 @@ def main():
         
         # Create root window
         root = tk.Tk()
+        root.withdraw()  # Hide until validation passes
+        
+        # Validate license before starting
+        if not validate_and_continue(root, show_warnings=True):
+            logger.error("License validation failed - application will exit")
+            # Don't destroy root - it's already handled by the validator
+            sys.exit(1)
+        
+        # Show the window after validation passes
+        root.deiconify()
         
         # Create application
         app = BADRApp(root)
