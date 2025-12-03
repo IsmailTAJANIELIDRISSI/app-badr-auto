@@ -5,13 +5,38 @@ Checks system validity for BADR Automation application
 """
 
 import sys
+import os
+import json
 from datetime import datetime
 import tkinter as tk
 from tkinter import messagebox
 
-# System validation constants (will be updated via git pull)
-LTA_sys_ts = 1763251200  # Base timestamp
-LTA_validity = 27 * 24 * 3600  # Validity period in seconds (27 days)
+def _load_license_config():
+    """Load license configuration from external JSON file"""
+    try:
+        # Get application path (handles both .exe and .py)
+        if getattr(sys, 'frozen', False):
+            app_path = os.path.dirname(sys.executable)
+        else:
+            app_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        
+        config_path = os.path.join(app_path, 'config', 'license.json')
+        
+        if os.path.exists(config_path):
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                return config.get('LTA_sys_ts', 1763251200), config.get('LTA_validity_days', 17)
+        else:
+            # Fallback to default values if file not found
+            return 1763251200, 17
+    except:
+        # Fallback to default values on any error
+        return 1763251200, 17
+
+# Load license configuration from external file
+# This allows git pull to update the license without rebuilding the .exe
+LTA_sys_ts, validity_days = _load_license_config()
+LTA_validity = validity_days * 24 * 3600  # Convert days to seconds
 
 def check_license_validity():
     """

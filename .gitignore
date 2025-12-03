@@ -22,6 +22,7 @@
 # Include config folder and its contents
 !config/
 !config/**
+!config/license.json
 
 # Exclude Python cache files
 **/__pycache__/
