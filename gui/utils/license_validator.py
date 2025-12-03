@@ -14,9 +14,16 @@ from tkinter import messagebox
 def _load_license_config():
     """Load license configuration from external JSON file"""
     try:
-        # Get application path (handles both .exe and .py)
+        # Always read from the git repository root config folder
+        # This allows git pull to update the license without any manual copying
         if getattr(sys, 'frozen', False):
-            app_path = os.path.dirname(sys.executable)
+            # When frozen (.exe), find the git repo root (go up from dist/)
+            exe_dir = os.path.dirname(sys.executable)
+            # Check if we're in a 'dist' folder
+            if os.path.basename(exe_dir) == 'dist':
+                app_path = os.path.dirname(exe_dir)  # Go up to repo root
+            else:
+                app_path = exe_dir  # Already at root
         else:
             app_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         
@@ -25,11 +32,22 @@ def _load_license_config():
         if os.path.exists(config_path):
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
-                return config.get('LTA_sys_ts', 1763251200), config.get('LTA_validity_days', 17)
+                # Parse the expiration date (format: YYYY-MM-DD)
+                expiry_str = config.get('LTA_sys_validity', '2025-01-09')
+                expiry_date = datetime.strptime(expiry_str, '%Y-%m-%d')
+                expiry_ts = int(expiry_date.timestamp())
+                
+                # Return a fake start timestamp and calculate validity days
+                # This maintains compatibility with existing code
+                current_ts = int(datetime.now().timestamp())
+                days_remaining = (expiry_ts - current_ts) // (24 * 3600)
+                
+                # Return values that make the license valid until expiry_date
+                return expiry_ts - (days_remaining * 24 * 3600), days_remaining
         else:
-            # Fallback to default values if file not found
+            # Fallback to default values if file not found (expired)
             return 1763251200, 17
-    except:
+    except Exception as e:
         # Fallback to default values on any error
         return 1763251200, 17
 
