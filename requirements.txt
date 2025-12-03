@@ -1,0 +1,27 @@
+# BADR LTA Automation - Python Requirements
+# Installation: pip install -r requirements.txt
+
+# Core Selenium and Web Automation
+selenium==4.15.2
+
+# Excel Processing
+openpyxl>=3.1.2
+
+# PDF Processing
+pdfplumber>=0.10.0
+PyPDF2>=3.0.1
+
+# Image Processing
+Pillow>=10.0.0
+
+# AI Integration (Gemini)
+google-generativeai>=0.3.0
+
+# Fuzzy Matching
+rapidfuzz>=3.5.0
+
+# Environment Variables
+python-dotenv>=1.0.0
+
+# Executable Builder
+pyinstaller>=6.0.0
