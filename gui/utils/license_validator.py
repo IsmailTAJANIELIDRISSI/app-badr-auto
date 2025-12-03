@@ -11,7 +11,7 @@ from tkinter import messagebox
 
 # System validation constants (will be updated via git pull)
 LTA_sys_ts = 1763251200  # Base timestamp
-LTA_validity = 17 * 24 * 3600  # Validity period in seconds (27 days)
+LTA_validity = 27 * 24 * 3600  # Validity period in seconds (27 days)
 
 def check_license_validity():
     """
