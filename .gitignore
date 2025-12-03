@@ -24,6 +24,12 @@
 !config/**
 !config/license.json
 
+# Include dist folder with the executable
+!dist/
+!dist/MedAfrica.exe
+!dist/config/
+!dist/config/**
+
 # Exclude Python cache files
 **/__pycache__/
 **/*.pyc
