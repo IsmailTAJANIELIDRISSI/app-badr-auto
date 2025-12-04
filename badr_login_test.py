@@ -2932,6 +2932,36 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
             
             print(f"      ✓ {len(dum_lots_data)} DUMs détectés pour création de lots")
             
+            # GESTION SPÉCIALE: Si 1 seul DUM, créer 2 lots (BADR n'accepte pas 1 seul lot)
+            if len(dum_lots_data) == 1:
+                print(f"\n      ⚠️  DÉTECTION: 1 seul DUM - création de 2 lots pour conformité BADR")
+                original_dum = dum_lots_data[0]
+                
+                # Diviser poids et contenants par 2
+                p_half = original_dum['p'] // 2
+                p_remaining = original_dum['p'] - p_half
+                p_brut_half = original_dum['p_brut'] // 2
+                p_brut_remaining = original_dum['p_brut'] - p_brut_half
+                
+                # Créer 2 lots
+                dum_lots_data = [
+                    {
+                        'dum_name': f"{original_dum['dum_name']} (Lot 1/2)",
+                        'p': p_half,
+                        'p_brut': p_brut_half,
+                        'is_split': True,
+                        'split_index': 1
+                    },
+                    {
+                        'dum_name': f"{original_dum['dum_name']} (Lot 2/2)",
+                        'p': p_remaining,
+                        'p_brut': p_brut_remaining,
+                        'is_split': True,
+                        'split_index': 2
+                    }
+                ]
+                print(f"      ✓ Division: Lot 1 ({p_half} contenants, {p_brut_half} kg) + Lot 2 ({p_remaining} contenants, {p_brut_remaining} kg)")
+            
         except Exception as e:
             print(f"      ❌ Erreur lecture DUMs depuis generated_excel: {e}")
             driver.switch_to.default_content()
@@ -2971,7 +3001,11 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                 # 3. Si format "235-94908726" → "235-94908726/2" pour DUM 2
                 
                 # Toujours ajouter /N à la fin (ne jamais remplacer)
-                lot_reference = f"{lta_reference_clean}/{dum_index}"
+                # Si lot splitté, utiliser split_index au lieu de dum_index
+                if dum_data.get('is_split', False):
+                    lot_reference = f"{lta_reference_clean}/{dum_data['split_index']}"
+                else:
+                    lot_reference = f"{lta_reference_clean}/{dum_index}"
                 
                 ref_lot_input = wait.until(
                     EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'referenceLot_IT_id')]"))
@@ -4381,13 +4415,35 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             sheet_name = dum_data.get('sheet_name', '')
             dum_number = sheet_name.split()[-1] if sheet_name.startswith('Sheet') else '1'
             
-            # Format de la référence lot
-            if "/" in validated_lta_reference:
-                lot_reference = f"{validated_lta_reference}/{dum_number}"
-            else:
-                lot_reference = f"{validated_lta_reference}/{dum_number}"
+            # GESTION SPÉCIALE: Si 1 seul DUM (Sheet 1), ajouter /1 et /2
+            # Vérifier si c'est le seul DUM en cherchant si summary_file a d'autres DUMs
+            is_single_dum = False
+            try:
+                summary_files = glob.glob(os.path.join(lta_folder_path, "summary_file*.xlsx"))
+                if summary_files:
+                    wb_check = load_workbook(summary_files[0], data_only=True)
+                    ws_check = wb_check.active
+                    dum_count = sum(1 for row in ws_check.iter_rows(min_row=2, max_row=20) if row[0].value and 'Sheet' in str(row[0].value))
+                    wb_check.close()
+                    is_single_dum = (dum_count == 1)
+            except:
+                pass
             
-            print(f"      📄 Référence lot: {lot_reference}")
+            if is_single_dum:
+                # Pour un seul DUM, créer 2 références: /1 et /2
+                lot_references = [
+                    f"{validated_lta_reference}/1",
+                    f"{validated_lta_reference}/2"
+                ]
+                print(f"      📄 Références lots (DUM unique): {lot_references[0]} et {lot_references[1]}")
+            else:
+                # Format de la référence lot standard
+                if "/" in validated_lta_reference:
+                    lot_reference = f"{validated_lta_reference}/{dum_number}"
+                else:
+                    lot_reference = f"{validated_lta_reference}/{dum_number}"
+                lot_references = [lot_reference]
+                print(f"      📄 Référence lot: {lot_reference}")
             
             # PDS.1: Naviguer vers l'onglet "Préapurement DS"
             print("\n   📑 Navigation vers l'onglet 'Préapurement DS'...")
@@ -4536,7 +4592,29 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 print(f"      ❌ Erreur saisie clé: {e}")
                 return False
             
-            # PDS.3.7: Lieu de chargement (autocomplete)
+            # PDS.3.7: Référence lot (ajouter les lots)
+            print(f"\n      📦 Ajout des lots DS...")
+            for lot_ref in lot_references:
+                try:
+                    # Cliquer sur "Nouveau" pour ajouter un lot
+                    nouveau_lot_btn_ds = wait.until(
+                        EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btnNouveauLot') or contains(text(), 'Ajouter')]" ))
+                    )
+                    nouveau_lot_btn_ds.click()
+                    time.sleep(1)
+                    
+                    # Entrer la référence du lot
+                    ref_lot_ds_input = wait.until(
+                        EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'refLotId') or contains(@name, 'refLotId')]" ))
+                    )
+                    ref_lot_ds_input.clear()
+                    ref_lot_ds_input.send_keys(lot_ref)
+                    print(f"         ✓ Lot ajouté: {lot_ref}")
+                    time.sleep(0.5)
+                except Exception as lot_err:
+                    print(f"         ⚠️  Erreur ajout lot {lot_ref}: {lot_err}")
+            
+            # PDS.3.8: Lieu de chargement (autocomplete)
             if loading_location:
                 try:
                     lieu_input = wait.until(
