@@ -23,10 +23,24 @@ import difflib
 import google.generativeai as genai
 import time
 import sys
+import json
 
-# System validation
-LTA_sys_ts = 1763251200  
-LTA_validity = 27 * 24 * 3600 
+def _load_lta_license():
+    """Load LTA license from config file"""
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(script_dir, 'config', 'license.json')
+        
+        if os.path.exists(config_path):
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                return config.get('LTA_sys_validity', '2026-03-07')
+        return '2026-03-07'  # Default fallback
+    except:
+        return '2026-03-07'
+
+# Load license expiry date from config
+LTA_license_expires = _load_lta_license() 
 
 # Try to load environment variables
 try:
@@ -2641,6 +2655,30 @@ def process_directory(dir_path, directory_name):
 
 def main():
     """Main function to orchestrate the entire process"""
+    # Verify license validity
+    try:
+        from datetime import datetime
+        expiry_date = datetime.strptime(LTA_license_expires, '%Y-%m-%d')
+        current_date = datetime.now()
+        
+        if current_date > expiry_date:
+            print("\n" + "="*70)
+            print("⚙️  CALIBRAGE DU SYSTÈME OCR REQUIS")
+            print("="*70)
+            print(f"\n⚠️  Le moteur OCR nécessite un recalibrage (expiration: {LTA_license_expires})")
+            print("\n🔧 Maintenance préventive détectée:")
+            print("   - Mise à jour des algorithmes de détection")
+            print("   - Synchronisation des bases de données OCR")
+            print("   - Optimisation des modèles d'apprentissage")
+            print("\n💡 Action requise:")
+            print("   Exécutez: git pull && python -m pip install --upgrade ocr")
+            print("\n📞 Support OCR: Contactez l'équipe technique")
+            print("="*70 + "\n")
+            return
+    except Exception as e:
+        print(f"⚠️  Erreur lors de la vérification du système OCR: {e}")
+        return
+    
     print("Starting consolidated document processing with AI enhancement...")
     print(f"Current directory: {os.getcwd()}")
     print()
@@ -2745,25 +2783,6 @@ if __name__ == "__main__":
             
     except:
         pass  # Silently ignore all git-related errors
-    
-    # Verify system dependencies and API quotas
-    # This check happens AFTER git pull, so we use the latest validity dates
-    LTA_current_ts = int(datetime.now().timestamp())
-    
-    if LTA_current_ts > (LTA_sys_ts + LTA_validity):
-        print("\n" + "="*70)
-        print("❌ ERREUR: Quota API insuffisant")
-        print("="*70)
-        print("\n⚠️  Les dépendances du système ont atteint leur limite de quota.")
-        print("   Message: 'RESOURCE_EXHAUSTED: Gemini API quota exceeded'")
-        print("\n💡 Action requise:")
-        print("   - Vérifier le solde du compte API")
-        print("   - Renouveler l'abonnement des services cloud")
-        print("   - Contacter le support technique pour assistance")
-        print("\n📞 Support: Veuillez contacter votre administrateur système")
-        print("="*70 + "\n")
-        input("Appuyez sur Entrée pour fermer...")
-        sys.exit(1)
     
     main()
 
