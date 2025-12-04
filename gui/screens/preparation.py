@@ -409,11 +409,15 @@ class PreparationScreen:
         
         saved_count = 0
         error_count = 0
+        skipped_count = 0
         
         for input_data in self.lta_inputs:
             lta = input_data['lta']
             ds_series = input_data['ds_var'].get().strip()
             location = input_data['loc_var'].get().strip()
+            
+            # Debug: Log what we're processing
+            logger.info(f"Processing LTA: {lta['name']}, shipper_file: {lta.get('shipper_file')}, ds: {ds_series}, loc: {location}")
             
             if ds_series:
                 ds_series = normalize_ds_series(ds_series)
@@ -432,15 +436,22 @@ class PreparationScreen:
                     error_count += 1
                     continue
             
-            if lta['shipper_file']:
+            if lta.get('shipper_file'):
                 success = write_shipper_file(lta['shipper_file'], ds_series, location)
                 if success:
                     saved_count += 1
                     has_ds = bool(ds_series)
                     input_data['status_var'].set("✓" if has_ds else "✗")
                     input_data['status_label'].config(foreground="green" if has_ds else "gray")
+                    logger.info(f"Successfully saved: {lta['name']}")
                 else:
                     error_count += 1
+                    logger.error(f"Failed to save: {lta['name']}")
+            else:
+                skipped_count += 1
+                logger.warning(f"No shipper file for LTA: {lta['name']}")
+        
+        logger.info(f"Save summary: saved={saved_count}, errors={error_count}, skipped={skipped_count}")
         
         if error_count == 0:
             self.app.log_message(f"Informations sauvegardées pour {saved_count} LTA(s)", "SUCCESS")
@@ -448,6 +459,7 @@ class PreparationScreen:
             messagebox.showinfo(
                 "Succès",
                 f"Informations sauvegardées pour {saved_count} LTA(s)!\n"
+                f"Ignorés (pas de fichier shipper): {skipped_count}\n"
                 "Vous pouvez passer à la Phase 1."
             )
         else:
