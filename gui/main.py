@@ -10,7 +10,7 @@ import subprocess
 import tkinter as tk
 from tkinter import messagebox
 import logging
-
+# salam
 # IMPORTANT: Change working directory to the script's location
 # This fixes the issue when launching from Start Menu (which uses C:\Windows\system32)
 if getattr(sys, 'frozen', False):
