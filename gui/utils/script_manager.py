@@ -217,7 +217,7 @@ class ScriptManager:
         thread = threading.Thread(target=execute, daemon=True)
         thread.start()
     
-    def run_phase1(self, folder_path, credentials, lta_selection=None, progress_callback=None, completion_callback=None):
+    def run_phase1(self, folder_path, credentials, lta_selection=None, progress_callback=None, completion_callback=None, selected_lta_names=None):
         """
         Execute Phase 1 of badr_login_test.py
         
@@ -227,6 +227,7 @@ class ScriptManager:
             lta_selection: List of LTA indices to process, or "all" for all LTAs
             progress_callback: Function to call with progress updates
             completion_callback: Function to call when complete
+            selected_lta_names: List of LTA folder names to process (for filtering)
         """
         def execute():
             try:
@@ -271,106 +272,149 @@ class ScriptManager:
                     # Running in development - use current Python
                     python_exe = sys.executable
                 
-                # Construct command with phase "1" and LTA selection
-                cmd = [
-                    python_exe,
-                    script_path,
-                    "1"  # Phase 1 selection
-                ]
+                # If specific LTAs selected, temporarily move unselected folders
+                moved_folders = []
+                temp_dir = None
                 
-                # Add LTA selection argument
-                if lta_selection is None or lta_selection == "all":
-                    cmd.append("all")
-                elif isinstance(lta_selection, list):
-                    # Convert list of indices to comma-separated string
-                    indices_str = ",".join(str(i) for i in lta_selection)
-                    cmd.append(indices_str)
-                else:
-                    cmd.append("all")
-                
-                logger.info(f"Executing Phase 1: {script_path} with selection: {lta_selection}")
-                
-                # Set environment for UTF-8 and disable buffering
-                env = os.environ.copy()
-                env['PYTHONIOENCODING'] = 'utf-8'
-                env['PYTHONUNBUFFERED'] = '1'  # Disable Python buffering for real-time output
-                
-                # Run script
-                process = subprocess.Popen(
-                    cmd,
-                    cwd=project_root,  # Run from project root
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    encoding='utf-8',
-                    env=env,
-                    stdin=subprocess.DEVNULL,
-                    bufsize=1  # Line buffered
-                )
-                self.current_process = process
-                
-                # Open log file for BADR script output
-                log_file_path = os.path.join(project_root, "badr_login_test_logs.txt")
-                with open(log_file_path, 'a', encoding='utf-8') as log_file:
-                    # Write session header
-                    from datetime import datetime
-                    log_file.write(f"\n{'='*70}\n")
-                    log_file.write(f"PHASE 1 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                    log_file.write(f"{'='*70}\n\n")
+                try:
+                    if selected_lta_names:
+                        import shutil
+                        temp_dir = os.path.join(folder_path, ".temp_unselected")
+                        os.makedirs(temp_dir, exist_ok=True)
+                        
+                        # Move unselected LTA folders to temp
+                        for item in os.listdir(folder_path):
+                            item_path = os.path.join(folder_path, item)
+                            if os.path.isdir(item_path) and item not in selected_lta_names and item != ".temp_unselected":
+                                if "LTA" in item or "lta" in item:
+                                    shutil.move(item_path, os.path.join(temp_dir, item))
+                                    moved_folders.append(item)
+                        
+                        logger.info(f"Phase 1: Temporarily moved {len(moved_folders)} unselected folders")
                     
-                    # Read output in real-time
-                    stdout_lines = []
-                    stderr_lines = []
-                    
-                    while True:
-                        output = process.stdout.readline()
-                        if output == '' and process.poll() is not None:
-                            break
-                        if output:
-                            line = output.strip()
-                            stdout_lines.append(output)
-                            logger.info(f"Phase 1: {line}")
+                    try:
+                        # Construct command with phase "1" and LTA selection
+                        cmd = [
+                            python_exe,
+                            script_path,
+                            "1"  # Phase 1 selection
+                        ]
+                        
+                        # Add LTA selection argument
+                        if lta_selection is None or lta_selection == "all":
+                            cmd.append("all")
+                        elif isinstance(lta_selection, list):
+                            # Convert list of indices to comma-separated string
+                            indices_str = ",".join(str(i) for i in lta_selection)
+                            cmd.append(indices_str)
+                        else:
+                            cmd.append("all")
+                        
+                        logger.info(f"Executing Phase 1: {script_path} with selection: {lta_selection}")
+                        
+                        # Set environment for UTF-8 and disable buffering
+                        env = os.environ.copy()
+                        env['PYTHONIOENCODING'] = 'utf-8'
+                        env['PYTHONUNBUFFERED'] = '1'  # Disable Python buffering for real-time output
+                        
+                        # Run script
+                        process = subprocess.Popen(
+                            cmd,
+                            cwd=project_root,  # Run from project root
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            encoding='utf-8',
+                            env=env,
+                            stdin=subprocess.DEVNULL,
+                            bufsize=1  # Line buffered
+                        )
+                        self.current_process = process
+                        
+                        # Open log file for BADR script output
+                        log_file_path = os.path.join(project_root, "badr_login_test_logs.txt")
+                        with open(log_file_path, 'a', encoding='utf-8') as log_file:
+                            # Write session header
+                            from datetime import datetime
+                            log_file.write(f"\n{'='*70}\n")
+                            log_file.write(f"PHASE 1 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                            log_file.write(f"{'='*70}\n\n")
                             
-                            # Write to log file
-                            log_file.write(output)
-                            log_file.flush()  # Ensure immediate write
+                            # Read output in real-time
+                            stdout_lines = []
+                            stderr_lines = []
                             
-                            # Send to logs screen in real-time
-                            self.app.logs_screen.add_script_output(output, "badr")
+                            while True:
+                                output = process.stdout.readline()
+                                if output == '' and process.poll() is not None:
+                                    break
+                                if output:
+                                    line = output.strip()
+                                    stdout_lines.append(output)
+                                    logger.info(f"Phase 1: {line}")
+                                    
+                                    # Write to log file
+                                    log_file.write(output)
+                                    log_file.flush()  # Ensure immediate write
+                                    
+                                    # Send to logs screen in real-time
+                                    self.app.logs_screen.add_script_output(output, "badr")
+                                    
+                                    if progress_callback and line:
+                                        if "Traitement du dossier" in line:
+                                            progress_callback(50, f"Traitement: {line[:30]}...")
+                                        elif "CONNEXION: Authentification réussie" in line:
+                                            progress_callback(30, "Connexion réussie")
                             
-                            if progress_callback and line:
-                                if "Traitement du dossier" in line:
-                                    progress_callback(50, f"Traitement: {line[:30]}...")
-                                elif "CONNEXION: Authentification réussie" in line:
-                                    progress_callback(30, "Connexion réussie")
+                            rc = process.poll()
+                            
+                            # Read any remaining stderr
+                            stderr_output = process.stderr.read()
+                            if stderr_output:
+                                stderr_lines.append(stderr_output)
+                                log_file.write("\n=== ERRORS ===\n")
+                                log_file.write(stderr_output + "\n")
+                                self.app.logs_screen.add_script_output("\n=== ERRORS ===\n" + stderr_output + "\n", "badr")
+                        
+                        logger.info(f"BADR logs saved to: {log_file_path}")
+                        
+                        if rc != 0:
+                            logger.error(f"Phase 1 failed with code {rc}")
+                            raise Exception(f"Script failed with exit code {rc}")
+                        
+                        logger.info("Phase 1 completed successfully")
+                        if progress_callback:
+                            progress_callback(100, "Phase 1 terminée avec succès")
+                        
+                        if completion_callback:
+                            completion_callback(success=True)
                     
-                    rc = process.poll()
-                    
-                    # Read any remaining stderr
-                    stderr_output = process.stderr.read()
-                    if stderr_output:
-                        stderr_lines.append(stderr_output)
-                        log_file.write("\n=== ERRORS ===\n")
-                        log_file.write(stderr_output + "\n")
-                        self.app.logs_screen.add_script_output("\n=== ERRORS ===\n" + stderr_output + "\n", "badr")
+                    finally:
+                        # Restore moved folders (always, even on error)
+                        if moved_folders and temp_dir:
+                            import shutil
+                            for folder in moved_folders:
+                                src = os.path.join(temp_dir, folder)
+                                dst = os.path.join(folder_path, folder)
+                                try:
+                                    if os.path.exists(src):
+                                        shutil.move(src, dst)
+                                except Exception as restore_err:
+                                    logger.error(f"Failed to restore folder {folder}: {restore_err}")
+                            
+                            # Remove temp directory
+                            try:
+                                if os.path.exists(temp_dir) and not os.listdir(temp_dir):
+                                    os.rmdir(temp_dir)
+                            except Exception as cleanup_err:
+                                logger.error(f"Failed to cleanup temp directory: {cleanup_err}")
+                            
+                            logger.info(f"Phase 1: Restored {len(moved_folders)} folders")
                 
-                logger.info(f"BADR logs saved to: {log_file_path}")
-                
-                if rc != 0:
-                    logger.error(f"Phase 1 failed with code {rc}")
-                    raise Exception(f"Script failed with exit code {rc}")
-                
-                logger.info("Phase 1 completed successfully")
-                if progress_callback:
-                    progress_callback(100, "Phase 1 terminée avec succès")
-                
-                if completion_callback:
-                    completion_callback(success=True)
-                
-            except Exception as e:
-                logger.error(f"Phase 1 failed: {e}", exc_info=True)
-                if completion_callback:
-                    completion_callback(success=False, error=str(e))
+                except Exception as e:
+                    logger.error(f"Phase 1 failed: {e}", exc_info=True)
+                    if completion_callback:
+                        completion_callback(success=False, error=str(e))
             finally:
                 self.is_running = False
                 self.current_process = None

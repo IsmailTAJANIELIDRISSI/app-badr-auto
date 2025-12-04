@@ -403,6 +403,7 @@ class Phase1EDScreen:
         
         if mode == "all":
             lta_selection = "all"
+            selected_lta_names = None  # None means all
             selected_count = len(self.ltas_with_ds)
         else:
             selected_indices = [i for i, var in enumerate(self.lta_checkboxes) if var.get()]
@@ -414,6 +415,8 @@ class Phase1EDScreen:
                 )
                 return
             
+            # Get folder names of selected LTAs
+            selected_lta_names = [self.ltas_with_ds[i]['name'] for i in selected_indices]
             lta_selection = selected_indices
             selected_count = len(selected_indices)
         
@@ -460,7 +463,8 @@ class Phase1EDScreen:
             credentials,
             lta_selection,
             on_progress,
-            on_complete
+            on_complete,
+            selected_lta_names=selected_lta_names  # Pass folder names for filtering
         )
     
     def save_signed_series(self):
