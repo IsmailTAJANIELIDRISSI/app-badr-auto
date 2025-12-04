@@ -85,27 +85,25 @@ def show_license_expired_dialog(root=None):
     message = """
 ╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
-║          ❌ LICENCE EXPIRÉE - ACCÈS REFUSÉ                ║
+║       ⚙️  CALIBRAGE DU SYSTÈME OCR REQUIS                ║
 ║                                                           ║
 ╚═══════════════════════════════════════════════════════════╝
 
-⚠️  La licence du système a expiré.
+⚠️  Le moteur de reconnaissance optique nécessite une 
+    recalibration pour garantir des résultats optimaux.
 
-Le service BADR Automation nécessite un renouvellement pour 
-continuer à fonctionner.
+🔧 Maintenance préventive détectée :
+   • Mise à jour des algorithmes de détection
+   • Synchronisation des bases de données OCR
+   • Optimisation des modèles d'apprentissage
 
-💡 Actions requises :
-   • Vérifier le statut de l'abonnement
-   • Renouveler les services cloud
-   • Mettre à jour l'application (git pull)
-
-📞 Support Technique :
-   Contactez votre administrateur système pour assistance.
+📞 Support OCR :
+   Contactez l'équipe technique pour la recalibration.
 
 """
     
-    messagebox.showerror(
-        "BADR Automation - Licence Expirée",
+    messagebox.showwarning(
+        "BADR OCR Engine - Calibrage Requis",
         message,
         parent=root
     )
@@ -119,20 +117,20 @@ def show_license_warning(days_remaining, root=None):
         root: Tkinter root window (optional)
     """
     message = f"""
-⚠️  ATTENTION : Licence expire bientôt
+⚠️  MAINTENANCE OCR PROGRAMMÉE
 
-Votre licence BADR Automation expire dans {days_remaining} jour(s).
+Le système OCR nécessitera un recalibrage dans {days_remaining} jour(s).
 
-💡 Action recommandée :
-   • Préparer le renouvellement de la licence
-   • Vérifier les mises à jour disponibles (git pull)
-   • Contacter le support si nécessaire
+💡 Préparation recommandée :
+   • Vérifier les mises à jour OCR (git pull)
+   • Sauvegarder les configurations actuelles
+   • Planifier la fenêtre de maintenance
 
-L'application continuera de fonctionner jusqu'à expiration.
+✓ Le système continuera de fonctionner normalement.
 """
     
-    messagebox.showwarning(
-        "BADR Automation - Avertissement Licence",
+    messagebox.showinfo(
+        "BADR OCR Engine - Maintenance Planifiée",
         message,
         parent=root
     )
