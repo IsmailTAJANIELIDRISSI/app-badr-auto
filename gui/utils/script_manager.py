@@ -300,8 +300,12 @@ class ScriptManager:
                             "1"  # Phase 1 selection
                         ]
                         
-                        # Add LTA selection argument
-                        if lta_selection is None or lta_selection == "all":
+                        # If we moved folders (folder filtering), always use "all"
+                        # because we've already filtered by hiding unselected folders
+                        if moved_folders:
+                            cmd.append("all")
+                        # Otherwise use the original lta_selection indices
+                        elif lta_selection is None or lta_selection == "all":
                             cmd.append("all")
                         elif isinstance(lta_selection, list):
                             # Convert list of indices to comma-separated string
