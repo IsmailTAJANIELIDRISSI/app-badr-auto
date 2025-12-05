@@ -7,8 +7,11 @@ Handles folder selection, script execution, and DS entry
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import logging
+import os
 from gui.utils.script_manager import ScriptManager
-from gui.utils.file_utils import detect_ltas, write_shipper_file
+from gui.utils.file_utils import (detect_ltas, write_shipper_file, 
+                                  get_lta_shipper_name, update_lta_shipper_name,
+                                  get_lta_blocage_info, update_lta_blocage)
 from gui.utils.validators import validate_ds_series, validate_location, validate_folder_path, normalize_ds_series
 
 logger = logging.getLogger(__name__)
@@ -240,7 +243,7 @@ class PreparationScreen:
         self.script_manager.run_preparation(folder, on_progress, on_complete, selected_ltas)
     
     def populate_lta_table(self):
-        """Populate the LTA table with improved scrolling and responsive design"""
+        """Populate the LTA table with enhanced UI including shipper, location select, and blocage"""
         folder = self.folder_var.get()
         ltas = detect_ltas(folder)
         
@@ -254,142 +257,282 @@ class PreparationScreen:
         if self.table_frame_content:
             self.table_frame_content.destroy()
         
-        # Create main container with proper scrolling
+        # Predefined locations
+        self.locations = [
+            "ISTAMBOUL ATATUR",
+            "JEDDAH K/ABDUL A",
+            "BAHREIN MOHARRAQ",
+            "DOHA INT",
+            "ABOU DHABI INT",
+            "SHANGHAI PU DONG"
+        ]
+        
+        # Create main container with scrolling
         main_container = ttk.Frame(self.table_frame)
         main_container.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         main_container.columnconfigure(0, weight=1)
         main_container.rowconfigure(0, weight=1)
         
-        # Create canvas with scrollbar
+        # Canvas with scrollbar
         canvas = tk.Canvas(main_container, highlightthickness=0)
         scrollbar = ttk.Scrollbar(main_container, orient="vertical", command=canvas.yview)
         
         self.table_frame_content = ttk.Frame(canvas)
-        
-        # Configure canvas scrolling
         canvas.configure(yscrollcommand=scrollbar.set)
         
-        # Grid layout
         canvas.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
         
-        # Create window in canvas
         canvas_window = canvas.create_window((0, 0), window=self.table_frame_content, anchor="nw")
         
-        # Configure content columns to be responsive
-        self.table_frame_content.columnconfigure(0, weight=0, minsize=40)   # Checkbox
-        self.table_frame_content.columnconfigure(1, weight=1, minsize=200)  # LTA name + reference
-        self.table_frame_content.columnconfigure(2, weight=1, minsize=120)  # DS Series
-        self.table_frame_content.columnconfigure(3, weight=2, minsize=180)  # Location
-        self.table_frame_content.columnconfigure(4, weight=0, minsize=40)   # Status
+        # Configure content columns
+        self.table_frame_content.columnconfigure(0, weight=1)
         
-        # Headers
-        headers = [
-            ("☑", 0, 40),
-            ("LTA", 1, 200),
-            ("DS Série", 2, 120),
-            ("Lieu Chargement", 3, 180),
-            ("✓", 4, 40)
-        ]
-        
-        for text, col, width in headers:
-            header = ttk.Label(
-                self.table_frame_content,
-                text=text,
-                font=('Arial', 9, 'bold'),
-                width=width//8
-            )
-            header.grid(row=0, column=col, padx=5, pady=5, sticky=tk.W)
-        
-        # Separator
-        ttk.Separator(self.table_frame_content, orient='horizontal').grid(
-            row=1, column=0, columnspan=5, sticky=(tk.W, tk.E), pady=5
-        )
-        
-        # Populate rows
+        # Populate rows with card-style layout
         self.lta_inputs = []
         checkbox_vars = []
         checkbox_widgets = []
         
         for idx, lta in enumerate(ltas):
-            row = idx + 2
+            # Card frame for each LTA
+            card = ttk.LabelFrame(
+                self.table_frame_content,
+                text=f"  {lta['name']}  ",
+                padding="15",
+                relief="raised"
+            )
+            card.grid(row=idx, column=0, sticky=(tk.W, tk.E), padx=10, pady=8)
+            card.columnconfigure(1, weight=1)
             
-            # Checkbox
+            row_num = 0
+            
+            # === ROW 1: Checkbox + LTA Reference ===
             cb_var = tk.BooleanVar(value=True)
             checkbox_vars.append(cb_var)
             cb = ttk.Checkbutton(
-                self.table_frame_content,
+                card,
+                text="Traiter ce LTA",
                 variable=cb_var,
                 state="disabled" if self.selection_mode.get() == "all" else "normal"
             )
-            cb.grid(row=row, column=0, padx=5, pady=3)
+            cb.grid(row=row_num, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
             checkbox_widgets.append(cb)
             
-            # LTA name
-            lta_display = f"{lta['name']} - {lta.get('lta_reference', 'N/A')}"
-            lta_label = ttk.Label(
-                self.table_frame_content,
-                text=lta_display,
-                width=25
-            )
-            lta_label.grid(row=row, column=1, padx=5, pady=3, sticky=tk.W)
+            # LTA Reference
+            if lta.get('lta_reference'):
+                ref_label = ttk.Label(
+                    card,
+                    text=f"Référence: {lta['lta_reference']}",
+                    font=('Arial', 9, 'italic'),
+                    foreground='gray'
+                )
+                ref_label.grid(row=row_num, column=2, sticky=tk.E, pady=(0, 10))
             
-            # DS Series input
+            row_num += 1
+            
+            # === ROW 2: Shipper Name ===
+            ttk.Label(card, text="Expéditeur (Shipper):", font=('Arial', 9, 'bold')).grid(
+                row=row_num, column=0, sticky=tk.W, pady=5
+            )
+            
+            # Extract shipper from line 6 - use parent folder, not subfolder
+            shipper_name = get_lta_shipper_name(folder, lta['name'])
+            
+            shipper_var = tk.StringVar(value=shipper_name)
+            shipper_entry = ttk.Entry(card, textvariable=shipper_var, width=50, font=('Arial', 9))
+            shipper_entry.grid(row=row_num, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5, padx=(10, 0))
+            
+            row_num += 1
+            
+            # === ROW 3: DS Series ===
+            ttk.Label(card, text="DS Série:", font=('Arial', 9, 'bold')).grid(
+                row=row_num, column=0, sticky=tk.W, pady=5
+            )
+            
             ds_var = tk.StringVar(value=lta.get('ds_series', ''))
-            ds_entry = ttk.Entry(self.table_frame_content, textvariable=ds_var, width=15)
-            ds_entry.grid(row=row, column=2, padx=5, pady=3, sticky=(tk.W, tk.E))
+            ds_entry = ttk.Entry(card, textvariable=ds_var, width=20, font=('Arial', 9))
+            ds_entry.grid(row=row_num, column=1, sticky=tk.W, pady=5, padx=(10, 0))
             
-            # Location input
-            loc_var = tk.StringVar(value=lta.get('location', ''))
-            loc_entry = ttk.Entry(self.table_frame_content, textvariable=loc_var, width=25)
-            loc_entry.grid(row=row, column=3, padx=5, pady=3, sticky=(tk.W, tk.E))
-            
-            # Status indicator
-            status_var = tk.StringVar(value="✓" if lta.get('has_ds') else "✗")
-            status_label = ttk.Label(
-                self.table_frame_content,
-                textvariable=status_var,
+            # DS Validé status
+            ds_status_var = tk.StringVar(value="✓" if lta.get('has_ds') else "✗")
+            ds_status_label = ttk.Label(
+                card,
+                textvariable=ds_status_var,
                 foreground="green" if lta.get('has_ds') else "gray",
-                font=('Arial', 10, 'bold')
+                font=('Arial', 11, 'bold')
             )
-            status_label.grid(row=row, column=4, padx=5, pady=3)
+            ds_status_label.grid(row=row_num, column=2, sticky=tk.E, pady=5)
             
+            row_num += 1
+            
+            # === ROW 4: Location with Select/Custom ===
+            ttk.Label(card, text="Lieu de Chargement:", font=('Arial', 9, 'bold')).grid(
+                row=row_num, column=0, sticky=tk.W, pady=5
+            )
+            
+            # Radio buttons for location mode
+            loc_frame = ttk.Frame(card)
+            loc_frame.grid(row=row_num, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5, padx=(10, 0))
+            
+            loc_mode_var = tk.StringVar(value="select")
+            loc_var = tk.StringVar(value=lta.get('location', ''))
+            
+            # Combobox for predefined locations
+            loc_combo = ttk.Combobox(
+                loc_frame,
+                textvariable=loc_var,
+                values=self.locations,
+                width=25,
+                font=('Arial', 9),
+                state="readonly"
+            )
+            loc_combo.grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+            
+            # Set to current value if exists
+            if loc_var.get() and loc_var.get() in self.locations:
+                loc_combo.set(loc_var.get())
+            elif loc_var.get():
+                loc_mode_var.set("custom")
+            
+            # Custom location entry (initially hidden)
+            loc_custom_entry = ttk.Entry(loc_frame, textvariable=loc_var, width=25, font=('Arial', 9))
+            
+            # Radio buttons to switch mode
+            def make_toggle_location(mode_var, combo, custom):
+                def toggle():
+                    if mode_var.get() == "select":
+                        combo.grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+                        custom.grid_remove()
+                    else:
+                        combo.grid_remove()
+                        custom.grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+                return toggle
+            
+            toggle_func = make_toggle_location(loc_mode_var, loc_combo, loc_custom_entry)
+            
+            ttk.Radiobutton(
+                loc_frame,
+                text="Liste",
+                variable=loc_mode_var,
+                value="select",
+                command=toggle_func
+            ).grid(row=0, column=1, padx=5)
+            
+            ttk.Radiobutton(
+                loc_frame,
+                text="Autre",
+                variable=loc_mode_var,
+                value="custom",
+                command=toggle_func
+            ).grid(row=0, column=2, padx=5)
+            
+            # Initialize visibility
+            toggle_func()
+            
+            row_num += 1
+            
+            # === ROW 5: Blocage Section ===
+            # Separator
+            ttk.Separator(card, orient='horizontal').grid(
+                row=row_num, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 10)
+            )
+            row_num += 1
+            
+            # Get blocage info - use parent folder
+            blocage_info = get_lta_blocage_info(folder, lta['name'])
+            
+            blocage_var = tk.BooleanVar(value=blocage_info['is_blocage'])
+            blocage_cb = ttk.Checkbutton(
+                card,
+                text="🔒 LTA Blocage",
+                variable=blocage_var
+            )
+            blocage_cb.grid(row=row_num, column=0, columnspan=3, sticky=tk.W, pady=5)
+            
+            row_num += 1
+            
+            # Blocage weights frame (shown only if blocage checked)
+            blocage_frame = ttk.Frame(card)
+            blocage_frame.grid(row=row_num, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+            blocage_frame.columnconfigure(1, weight=1)
+            blocage_frame.columnconfigure(3, weight=1)
+            
+            ttk.Label(blocage_frame, text="Poids Total:", font=('Arial', 9)).grid(
+                row=0, column=0, sticky=tk.W, padx=(20, 5)
+            )
+            total_weight_var = tk.StringVar(value=blocage_info.get('total_weight', ''))
+            total_weight_entry = ttk.Entry(
+                blocage_frame,
+                textvariable=total_weight_var,
+                width=15,
+                font=('Arial', 9)
+            )
+            total_weight_entry.grid(row=0, column=1, sticky=tk.W, padx=5)
+            
+            ttk.Label(blocage_frame, text="Poids Bloqué:", font=('Arial', 9)).grid(
+                row=0, column=2, sticky=tk.W, padx=(20, 5)
+            )
+            blocked_weight_var = tk.StringVar(value=blocage_info.get('blocked_weight', ''))
+            blocked_weight_entry = ttk.Entry(
+                blocage_frame,
+                textvariable=blocked_weight_var,
+                width=15,
+                font=('Arial', 9)
+            )
+            blocked_weight_entry.grid(row=0, column=3, sticky=tk.W, padx=5)
+            
+            # Toggle blocage frame visibility - use factory function
+            def make_toggle_blocage(bvar, bframe):
+                def toggle():
+                    if bvar.get():
+                        bframe.grid()
+                    else:
+                        bframe.grid_remove()
+                return toggle
+            
+            toggle_blocage_func = make_toggle_blocage(blocage_var, blocage_frame)
+            blocage_cb.config(command=toggle_blocage_func)
+            toggle_blocage_func()
+            
+            # Store all variables
             self.lta_inputs.append({
                 'lta': lta,
+                'checkbox_var': cb_var,
+                'checkbox_widget': cb,
+                'shipper_var': shipper_var,
                 'ds_var': ds_var,
                 'loc_var': loc_var,
-                'status_var': status_var,
-                'status_label': status_label,
-                'checkbox_var': cb_var,
-                'checkbox_widget': cb
+                'loc_mode_var': loc_mode_var,
+                'blocage_var': blocage_var,
+                'total_weight_var': total_weight_var,
+                'blocked_weight_var': blocked_weight_var,
+                'status_var': ds_status_var,
+                'status_label': ds_status_label
             })
         
         self.lta_checkboxes = checkbox_vars
         self.checkbox_widgets = checkbox_widgets
         
-        # Update scroll region when content changes
+        # Configure scroll region
         def configure_scroll_region(event=None):
             canvas.configure(scrollregion=canvas.bbox("all"))
-            # Make canvas window width match canvas width
             canvas_width = canvas.winfo_width()
             canvas.itemconfig(canvas_window, width=canvas_width)
         
         self.table_frame_content.bind("<Configure>", configure_scroll_region)
         canvas.bind("<Configure>", configure_scroll_region)
         
-        # Fix mousewheel scrolling (cross-platform)
+        # Mousewheel scrolling
         def on_mousewheel(event):
-            # Windows and MacOS have different delta values
             if event.num == 5 or event.delta < 0:
                 canvas.yview_scroll(1, "units")
             elif event.num == 4 or event.delta > 0:
                 canvas.yview_scroll(-1, "units")
         
-        # Bind mousewheel to canvas and all children
         def bind_mousewheel(widget):
-            widget.bind("<MouseWheel>", on_mousewheel)  # Windows/MacOS
-            widget.bind("<Button-4>", on_mousewheel)    # Linux scroll up
-            widget.bind("<Button-5>", on_mousewheel)    # Linux scroll down
+            widget.bind("<MouseWheel>", on_mousewheel)
+            widget.bind("<Button-4>", on_mousewheel)
+            widget.bind("<Button-5>", on_mousewheel)
             for child in widget.winfo_children():
                 bind_mousewheel(child)
         
@@ -403,22 +546,27 @@ class PreparationScreen:
         self.app.log_message(f"{len(ltas)} LTA(s) détecté(s) - Formulaire prêt", "SUCCESS")
     
     def save_and_continue(self):
-        """Save DS information and enable Phase 1"""
+        """Save DS information including shipper, location, and blocage data"""
         logger.info("Saving DS information...")
         self.app.log_message("Sauvegarde des informations DS...", "INFO")
         
         saved_count = 0
         error_count = 0
         skipped_count = 0
+        folder = self.folder_var.get()
         
         for input_data in self.lta_inputs:
             lta = input_data['lta']
             ds_series = input_data['ds_var'].get().strip()
             location = input_data['loc_var'].get().strip()
+            shipper_name = input_data['shipper_var'].get().strip()
+            is_blocage = input_data['blocage_var'].get()
+            total_weight = input_data['total_weight_var'].get().strip()
+            blocked_weight = input_data['blocked_weight_var'].get().strip()
             
-            # Debug: Log what we're processing
-            logger.info(f"Processing LTA: {lta['name']}, shipper_file: {lta.get('shipper_file')}, ds: {ds_series}, loc: {location}")
+            logger.info(f"Processing LTA: {lta['name']}, DS: {ds_series}, Location: {location}, Shipper: {shipper_name}, Blocage: {is_blocage}")
             
+            # Validate DS if provided
             if ds_series:
                 ds_series = normalize_ds_series(ds_series)
                 input_data['ds_var'].set(ds_series)
@@ -429,6 +577,7 @@ class PreparationScreen:
                     error_count += 1
                     continue
             
+            # Validate location if provided
             if location:
                 is_valid, error_msg = validate_location(location)
                 if not is_valid:
@@ -436,20 +585,62 @@ class PreparationScreen:
                     error_count += 1
                     continue
             
-            if lta.get('shipper_file'):
-                success = write_shipper_file(lta['shipper_file'], ds_series, location)
-                if success:
-                    saved_count += 1
-                    has_ds = bool(ds_series)
-                    input_data['status_var'].set("✓" if has_ds else "✗")
-                    input_data['status_label'].config(foreground="green" if has_ds else "gray")
-                    logger.info(f"Successfully saved: {lta['name']}")
-                else:
+            # Validate weights if blocage
+            if is_blocage:
+                if not total_weight or not blocked_weight:
+                    messagebox.showerror(
+                        "Erreur de Validation",
+                        f"{lta['name']}: Les poids total et bloqué sont requis pour un LTA blocage"
+                    )
                     error_count += 1
-                    logger.error(f"Failed to save: {lta['name']}")
-            else:
-                skipped_count += 1
-                logger.warning(f"No shipper file for LTA: {lta['name']}")
+                    continue
+                
+                try:
+                    float(total_weight)
+                    float(blocked_weight)
+                except ValueError:
+                    messagebox.showerror(
+                        "Erreur de Validation",
+                        f"{lta['name']}: Les poids doivent être des nombres valides"
+                    )
+                    error_count += 1
+                    continue
+            
+            try:
+                # Update shipper name (line 6 of LTA file + line 1 of shipper file)
+                # Use parent folder (folder) not subfolder
+                if shipper_name:
+                    update_lta_shipper_name(folder, lta['name'], shipper_name)
+                
+                # Update blocage information
+                update_lta_blocage(
+                    folder,
+                    lta['name'],
+                    is_blocage,
+                    total_weight if is_blocage else '',
+                    blocked_weight if is_blocage else ''
+                )
+                
+                # Update DS and location in shipper file
+                if lta.get('shipper_file'):
+                    success = write_shipper_file(lta['shipper_file'], ds_series, location)
+                    if success:
+                        saved_count += 1
+                        has_ds = bool(ds_series)
+                        input_data['status_var'].set("✓" if has_ds else "✗")
+                        input_data['status_label'].config(foreground="green" if has_ds else "gray")
+                        logger.info(f"Successfully saved: {lta['name']}")
+                    else:
+                        error_count += 1
+                        logger.error(f"Failed to save: {lta['name']}")
+                else:
+                    # No shipper file but still update LTA file
+                    saved_count += 1
+                    logger.info(f"Updated LTA file (no shipper): {lta['name']}")
+                
+            except Exception as e:
+                logger.error(f"Error saving {lta['name']}: {e}")
+                error_count += 1
         
         logger.info(f"Save summary: saved={saved_count}, errors={error_count}, skipped={skipped_count}")
         
@@ -459,7 +650,6 @@ class PreparationScreen:
             messagebox.showinfo(
                 "Succès",
                 f"Informations sauvegardées pour {saved_count} LTA(s)!\n"
-                f"Ignorés (pas de fichier shipper): {skipped_count}\n"
                 "Vous pouvez passer à la Phase 1."
             )
         else:

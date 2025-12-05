@@ -51,19 +51,30 @@ def detect_ltas(folder_path):
         for folder_name in lta_folders:
             folder_full_path = os.path.join(folder_path, folder_name)
             
-            # Look for shipper file
+            # Look for shipper file (in parent directory)
             shipper_pattern = f"{folder_name.replace(' ', '_')}_*.txt"
             shipper_files = glob.glob(os.path.join(folder_path, shipper_pattern))
             
-            # Look for LTA file
-            lta_file_pattern = f"{folder_name}.txt"
-            lta_file_path = os.path.join(folder_path, lta_file_pattern)
+            # Look for LTA file (in parent directory with folder name)
+            # Try different patterns
+            lta_file_path = None
+            possible_patterns = [
+                f"{folder_name}.txt",  # "1er LTA.txt"
+                f"{folder_name.replace(' ', '')}.txt",  # "1erLTA.txt"
+                f"{folder_name.lower().replace(' ', '')}.txt"  # "1erlta.txt"
+            ]
+            
+            for pattern in possible_patterns:
+                test_path = os.path.join(folder_path, pattern)
+                if os.path.exists(test_path):
+                    lta_file_path = test_path
+                    break
             
             lta_info = {
                 'name': folder_name,
                 'folder_path': folder_full_path,
                 'shipper_file': shipper_files[0] if shipper_files else None,
-                'lta_file': lta_file_path if os.path.exists(lta_file_path) else None,
+                'lta_file': lta_file_path,
                 'has_ds': False,  # Will be updated after reading shipper file
                 'ds_series': None,  # Original DS from shipper file line 2
                 'validated_ds': None,  # Validated DS from shipper file line 4
@@ -81,13 +92,19 @@ def detect_ltas(folder_path):
                     lta_info['validated_ds'] = shipper_data.get('ds_reference')  # Line 4
                     lta_info['location'] = shipper_data.get('location')
             
-            # Read LTA file if exists to get signed series
-            if lta_info['lta_file']:
-                lta_data = read_lta_file(lta_info['lta_file'])
-                if lta_data:
-                    lta_info['signed_ds'] = lta_data.get('signed_series')  # Line 8
-                    raw_reference = lta_data.get('lta_reference')  # Line 4
-                    lta_info['lta_reference'] = clean_lta_reference(raw_reference)
+            # Read LTA file if exists to get signed series and reference
+            if lta_info['lta_file'] and os.path.exists(lta_info['lta_file']):
+                try:
+                    with open(lta_info['lta_file'], 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                    
+                    if len(lines) >= 8:
+                        lta_info['signed_ds'] = lines[7].strip() if len(lines) > 7 else None  # Line 8
+                    if len(lines) >= 4:
+                        raw_reference = lines[3].strip() if len(lines) > 3 else None  # Line 4
+                        lta_info['lta_reference'] = clean_lta_reference(raw_reference)
+                except Exception as e:
+                    logger.error(f"Error reading LTA file {lta_info['lta_file']}: {e}")
             
             ltas.append(lta_info)
         
@@ -250,3 +267,224 @@ def get_dum_count(lta_folder_path):
     except Exception as e:
         logger.error(f"Error counting DUMs: {e}")
         return 0
+
+def read_lta_file(lta_folder_path, folder_name):
+    """
+    Read LTA text file content
+    
+    Args:
+        lta_folder_path: Path to LTA folder (parent directory containing the LTA txt file)
+        folder_name: Name of LTA folder (e.g., "1er LTA", "2eme LTA")
+        
+    Returns:
+        List of lines from the file, or None if error
+    """
+    try:
+        # LTA txt file is in the parent directory, not in the LTA subfolder
+        parent_dir = lta_folder_path if not os.path.isdir(os.path.join(lta_folder_path, folder_name)) else lta_folder_path
+        
+        # Try different patterns
+        possible_patterns = [
+            f"{folder_name}.txt",
+            f"{folder_name.replace(' ', '')}.txt",
+            f"{folder_name.lower().replace(' ', '')}.txt"
+        ]
+        
+        txt_files = []
+        for pattern in possible_patterns:
+            txt_files = glob.glob(os.path.join(parent_dir, pattern))
+            if txt_files:
+                break
+        
+        if not txt_files:
+            logger.warning(f"LTA file not found for: {folder_name}")
+            return None
+        
+        with open(txt_files[0], 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        return lines
+    
+    except Exception as e:
+        logger.error(f"Error reading LTA file for {folder_name}: {e}")
+        return None
+
+def write_lta_file_line(lta_folder_path, folder_name, line_number, content):
+    """
+    Write specific line to LTA text file
+    
+    Args:
+        lta_folder_path: Path to parent folder containing LTA txt file
+        folder_name: Name of LTA folder
+        line_number: Line number to write (1-indexed)
+        content: Content to write (without newline)
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Read existing content
+        lines = read_lta_file(lta_folder_path, folder_name)
+        if lines is None:
+            return False
+        
+        # Ensure we have enough lines
+        while len(lines) < line_number:
+            lines.append('\n')
+        
+        # Update specific line (convert to 0-indexed)
+        lines[line_number - 1] = content + '\n'
+        
+        # Find file path in parent directory
+        parent_dir = lta_folder_path
+        possible_patterns = [
+            f"{folder_name}.txt",
+            f"{folder_name.replace(' ', '')}.txt",
+            f"{folder_name.lower().replace(' ', '')}.txt"
+        ]
+        
+        txt_files = []
+        for pattern in possible_patterns:
+            txt_files = glob.glob(os.path.join(parent_dir, pattern))
+            if txt_files:
+                break
+        
+        if not txt_files:
+            return False
+        
+        # Write back
+        with open(txt_files[0], 'w', encoding='utf-8') as f:
+            f.writelines(lines)
+        
+        logger.info(f"Updated line {line_number} in LTA file: {txt_files[0]}")
+        return True
+    
+    except Exception as e:
+        logger.error(f"Error writing line {line_number} to LTA file: {e}")
+        return False
+
+def get_lta_shipper_name(lta_folder_path, folder_name):
+    """
+    Extract shipper name from line 6 of LTA file
+    
+    Args:
+        lta_folder_path: Path to LTA folder
+        folder_name: Name of LTA folder
+        
+    Returns:
+        Shipper name string, or empty string if not found
+    """
+    try:
+        lines = read_lta_file(lta_folder_path, folder_name)
+        if lines and len(lines) >= 6:
+            return lines[5].strip()  # Line 6 is index 5
+        return ""
+    except Exception as e:
+        logger.error(f"Error getting shipper name: {e}")
+        return ""
+
+def update_lta_shipper_name(lta_folder_path, folder_name, shipper_name):
+    """
+    Update shipper name in both LTA file (line 6) and shipper file (line 1)
+    
+    Args:
+        lta_folder_path: Path to parent folder containing both LTA txt file and shipper file
+        folder_name: Name of LTA folder
+        shipper_name: New shipper name
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Update line 6 of LTA file
+        success1 = write_lta_file_line(lta_folder_path, folder_name, 6, shipper_name)
+        
+        # Update line 1 of shipper file (in same parent directory)
+        shipper_pattern = folder_name.replace(' ', '_') + "_*.txt"
+        shipper_files = glob.glob(os.path.join(lta_folder_path, shipper_pattern))
+        
+        success2 = False
+        if shipper_files:
+            try:
+                with open(shipper_files[0], 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                
+                if len(lines) >= 1:
+                    lines[0] = shipper_name + '\n'
+                else:
+                    lines = [shipper_name + '\n']
+                
+                with open(shipper_files[0], 'w', encoding='utf-8') as f:
+                    f.writelines(lines)
+                
+                success2 = True
+                logger.info(f"Updated shipper name in both files for: {folder_name}")
+            except Exception as e:
+                logger.error(f"Error updating shipper file: {e}")
+        
+        return success1 and success2
+    
+    except Exception as e:
+        logger.error(f"Error updating shipper name: {e}")
+        return False
+
+def get_lta_blocage_info(lta_folder_path, folder_name):
+    """
+    Check if LTA is blocage and get weights
+    
+    Args:
+        lta_folder_path: Path to LTA folder
+        folder_name: Name of LTA folder
+        
+    Returns:
+        Dict with: is_blocage, total_weight, blocked_weight
+    """
+    try:
+        lines = read_lta_file(lta_folder_path, folder_name)
+        if not lines:
+            return {'is_blocage': False, 'total_weight': '', 'blocked_weight': ''}
+        
+        is_blocage = len(lines) >= 5 and 'blocage' in lines[4].lower()
+        total_weight = lines[11].strip() if len(lines) >= 12 else ''
+        blocked_weight = lines[12].strip() if len(lines) >= 13 else ''
+        
+        return {
+            'is_blocage': is_blocage,
+            'total_weight': total_weight,
+            'blocked_weight': blocked_weight
+        }
+    except Exception as e:
+        logger.error(f"Error getting blocage info: {e}")
+        return {'is_blocage': False, 'total_weight': '', 'blocked_weight': ''}
+
+def update_lta_blocage(lta_folder_path, folder_name, is_blocage, total_weight='', blocked_weight=''):
+    """
+    Update blocage information in LTA file
+    
+    Args:
+        lta_folder_path: Path to LTA folder
+        folder_name: Name of LTA folder
+        is_blocage: Boolean indicating if blocage
+        total_weight: Total weight (line 12)
+        blocked_weight: Blocked weight (line 13)
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        success = True
+        
+        # Update line 5
+        if is_blocage:
+            success &= write_lta_file_line(lta_folder_path, folder_name, 5, 'blocage')
+            success &= write_lta_file_line(lta_folder_path, folder_name, 12, str(total_weight))
+            success &= write_lta_file_line(lta_folder_path, folder_name, 13, str(blocked_weight))
+        else:
+            success &= write_lta_file_line(lta_folder_path, folder_name, 5, '')
+        
+        logger.info(f"Updated blocage info for: {folder_name}")
+        return success
+    
+    except Exception as e:
+        logger.error(f"Error updating blocage: {e}")
+        return False

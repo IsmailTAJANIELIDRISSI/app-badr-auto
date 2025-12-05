@@ -426,42 +426,67 @@ def save_dum_series_to_excel(lta_folder_path, dum_number, serie):
         dum_number: Numéro du DUM (1, 2, 3, 4, etc.)
         serie: Série du DUM (ex: "0139769N")
     """
-    try:
-        # Trouver le fichier generated_excel dans le dossier LTA
-        generated_excel_path = None
-        for file in os.listdir(lta_folder_path):
-            if file.startswith("generated_excel") and file.endswith(".xlsx"):
-                generated_excel_path = os.path.join(lta_folder_path, file)
-                break
-        
-        if not generated_excel_path:
-            print(f"      ⚠️  Fichier generated_excel non trouvé dans {lta_folder_path}")
-            return False
-        
-        # Calculer la position de la cellule: C + (12 + (dum_number - 1) * 7)
-        row_number = 12 + (dum_number - 1) * 7
-        cell_position = f"C{row_number}"
-        
-        # Ouvrir le fichier Excel (data_only=False pour pouvoir écrire)
-        wb = load_workbook(generated_excel_path, data_only=False)
-        ws = wb['Summary']
-        
-        # Écrire la série dans la cellule
-        ws[cell_position] = serie
-        
-        # Sauvegarder le fichier
-        wb.save(generated_excel_path)
-        wb.close()
-        
-        print(f"      ✓ Série écrite dans generated_excel")
-        print(f"         Cellule {cell_position}: {serie}")
-        
-        return True
-        
-    except Exception as e:
-        print(f"      ❌ Erreur écriture série dans generated_excel: {e}")
-        traceback.print_exc()
-        return False
+    max_retries = 3
+    retry_delay = 2  # secondes
+    
+    for attempt in range(max_retries):
+        try:
+            # Trouver le fichier generated_excel dans le dossier LTA
+            generated_excel_path = None
+            for file in os.listdir(lta_folder_path):
+                if file.startswith("generated_excel") and file.endswith(".xlsx"):
+                    generated_excel_path = os.path.join(lta_folder_path, file)
+                    break
+            
+            if not generated_excel_path:
+                print(f"      ⚠️  Fichier generated_excel non trouvé dans {lta_folder_path}")
+                return False
+            
+            # Calculer la position de la cellule: C + (12 + (dum_number - 1) * 7)
+            row_number = 12 + (dum_number - 1) * 7
+            cell_position = f"C{row_number}"
+            
+            # Attendre un peu avant d'ouvrir (éviter conflits)
+            if attempt > 0:
+                print(f"      🔄 Tentative {attempt + 1}/{max_retries}...")
+                time.sleep(retry_delay)
+            
+            # Ouvrir le fichier Excel (data_only=False pour pouvoir écrire)
+            wb = None
+            try:
+                wb = load_workbook(generated_excel_path, data_only=False)
+                ws = wb['Summary']
+                
+                # Écrire la série dans la cellule
+                ws[cell_position] = serie
+                
+                # Sauvegarder le fichier
+                wb.save(generated_excel_path)
+                
+                print(f"      ✓ Série écrite dans generated_excel")
+                print(f"         Cellule {cell_position}: {serie}")
+                
+                return True
+                
+            finally:
+                # Toujours fermer le workbook
+                if wb:
+                    try:
+                        wb.close()
+                    except:
+                        pass
+            
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"      ⚠️  Erreur tentative {attempt + 1}: {e}")
+                print(f"      ⏳ Nouvelle tentative dans {retry_delay}s...")
+            else:
+                print(f"      ❌ Erreur écriture série dans generated_excel après {max_retries} tentatives: {e}")
+                print(f"      💡 Vérifiez que le fichier Excel n'est pas ouvert dans Excel")
+                traceback.print_exc()
+                return False
+    
+    return False
 
 def detect_blocage_from_lta_file(lta_folder_path):
     """
@@ -4592,9 +4617,32 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 print(f"      ❌ Erreur saisie clé: {e}")
                 return False
             
-            # PDS.3.7: Référence lot (ajouter les lots)
+            # PDS.3.7: Référence lot (ajouter les lots avec valeurs divisées si DUM unique)
             print(f"\n      📦 Ajout des lots DS...")
-            for lot_ref in lot_references:
+            
+            # Si DUM unique, diviser poids et contenants par 2
+            if is_single_dum:
+                total_pieces = dum_data.get('total_pieces', 0)
+                p_half = total_pieces // 2
+                p_remaining = total_pieces - p_half
+                
+                gross_weight = dum_data.get('total_gross_weight', 0)
+                p_brut_half = gross_weight / 2
+                p_brut_remaining = gross_weight - p_brut_half
+                
+                lot_values = [
+                    {'pieces': p_half, 'gross_weight': p_brut_half},
+                    {'pieces': p_remaining, 'gross_weight': p_brut_remaining}
+                ]
+                print(f"      ⚠️  Division DUM unique: Lot 1 ({p_half} colis, {p_brut_half:.2f} kg) + Lot 2 ({p_remaining} colis, {p_brut_remaining:.2f} kg)")
+            else:
+                # DUM normal: utiliser les valeurs complètes pour chaque lot
+                lot_values = [{
+                    'pieces': dum_data.get('total_pieces', 0),
+                    'gross_weight': dum_data.get('total_gross_weight', 0)
+                }] * len(lot_references)
+            
+            for idx, lot_ref in enumerate(lot_references):
                 try:
                     # Cliquer sur "Nouveau" pour ajouter un lot
                     nouveau_lot_btn_ds = wait.until(
@@ -4609,7 +4657,22 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                     )
                     ref_lot_ds_input.clear()
                     ref_lot_ds_input.send_keys(lot_ref)
-                    print(f"         ✓ Lot ajouté: {lot_ref}")
+                    
+                    # Entrer le nombre de colis pour ce lot
+                    pieces_input = wait.until(
+                        EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'nbColisId') or contains(@name, 'nbColis')]" ))
+                    )
+                    pieces_input.clear()
+                    pieces_input.send_keys(str(lot_values[idx]['pieces']))
+                    
+                    # Entrer le poids brut pour ce lot
+                    weight_input = wait.until(
+                        EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'poidsBrutId') or contains(@name, 'poidsBrut')]" ))
+                    )
+                    weight_input.clear()
+                    weight_input.send_keys(str(lot_values[idx]['gross_weight']))
+                    
+                    print(f"         ✓ Lot ajouté: {lot_ref} ({lot_values[idx]['pieces']} colis, {lot_values[idx]['gross_weight']:.2f} kg)")
                     time.sleep(0.5)
                 except Exception as lot_err:
                     print(f"         ⚠️  Erreur ajout lot {lot_ref}: {lot_err}")
