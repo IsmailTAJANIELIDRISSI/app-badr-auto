@@ -4473,6 +4473,10 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             # PDS.1: Naviguer vers l'onglet "Préapurement DS"
             print("\n   📑 Navigation vers l'onglet 'Préapurement DS'...")
             try:
+                # Attendre que le blocker UI disparaisse
+                wait_for_ui_blocker_disappear(driver, timeout=10)
+                time.sleep(1)
+                
                 preapurement_tab = wait.until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab3']"))
                 )
@@ -4481,7 +4485,16 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 time.sleep(2)
             except Exception as e:
                 print(f"      ❌ Erreur navigation 'Préapurement DS': {e}")
-                return False
+                # Retry avec JavaScript si le clic échoue
+                try:
+                    print("      🔄 Tentative avec JavaScript...")
+                    driver.execute_script("arguments[0].click();", 
+                        driver.find_element(By.CSS_SELECTOR, "a[href='#mainTab:tab3']"))
+                    print("      ✓ Onglet 'Préapurement DS' cliqué (JS)")
+                    time.sleep(2)
+                except Exception as js_err:
+                    print(f"      ❌ Échec retry JavaScript: {js_err}")
+                    return False
             
             # PDS.2: Cliquer sur "Nouveau"
             print("\n   ➕ Création d'un nouveau préapurement...")
@@ -4643,6 +4656,7 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 }] * len(lot_references)
             
             for idx, lot_ref in enumerate(lot_references):
+                lot_added = False
                 try:
                     # Cliquer sur "Nouveau" pour ajouter un lot
                     nouveau_lot_btn_ds = wait.until(
@@ -4672,10 +4686,14 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                     weight_input.clear()
                     weight_input.send_keys(str(lot_values[idx]['gross_weight']))
                     
+                    lot_added = True
                     print(f"         ✓ Lot ajouté: {lot_ref} ({lot_values[idx]['pieces']} colis, {lot_values[idx]['gross_weight']:.2f} kg)")
                     time.sleep(0.5)
                 except Exception as lot_err:
-                    print(f"         ⚠️  Erreur ajout lot {lot_ref}: {lot_err}")
+                    # N'afficher l'erreur que si le lot n'a pas été ajouté
+                    if not lot_added:
+                        print(f"         ⚠️  Erreur ajout lot {lot_ref}: {lot_err}")
+                    # Sinon, ignorer l'erreur (élément disparu après ajout réussi)
             
             # PDS.3.8: Lieu de chargement (autocomplete)
             if loading_location:
