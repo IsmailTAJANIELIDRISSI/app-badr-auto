@@ -4440,7 +4440,8 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             sheet_name = dum_data.get('sheet_name', '')
             dum_number = sheet_name.split()[-1] if sheet_name.startswith('Sheet') else '1'
             
-            # GESTION SPÉCIALE: Si 1 seul DUM (Sheet 1), ajouter /1 et /2
+            # GESTION SPÉCIALE: Si 1 seul DUM ET c'est Sheet 1, ajouter /1 et /2
+            # Si c'est Sheet 3 seul, c'est que l'utilisateur a supprimé Sheet 1 et 2 → pas de division
             # Vérifier si c'est le seul DUM en cherchant si summary_file a d'autres DUMs
             is_single_dum = False
             try:
@@ -4450,19 +4451,20 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                     ws_check = wb_check.active
                     dum_count = sum(1 for row in ws_check.iter_rows(min_row=2, max_row=20) if row[0].value and 'Sheet' in str(row[0].value))
                     wb_check.close()
-                    is_single_dum = (dum_count == 1)
+                    # Division automatique SEULEMENT si Sheet 1 ET un seul DUM
+                    is_single_dum = (dum_count == 1 and dum_number == '1')
             except:
                 pass
             
             if is_single_dum:
-                # Pour un seul DUM, créer 2 références: /1 et /2
+                # Pour un seul DUM (Sheet 1 uniquement), créer 2 références: /1 et /2
                 lot_references = [
                     f"{validated_lta_reference}/1",
                     f"{validated_lta_reference}/2"
                 ]
-                print(f"      📄 Références lots (DUM unique): {lot_references[0]} et {lot_references[1]}")
+                print(f"      📄 Références lots (DUM unique Sheet 1): {lot_references[0]} et {lot_references[1]}")
             else:
-                # Format de la référence lot standard
+                # Format de la référence lot standard (utilise le numéro du Sheet)
                 if "/" in validated_lta_reference:
                     lot_reference = f"{validated_lta_reference}/{dum_number}"
                 else:
