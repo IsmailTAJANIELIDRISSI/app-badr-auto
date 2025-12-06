@@ -24,11 +24,9 @@
 !config/**
 !config/license.json
 
-# Include dist folder with the executable
-!dist/
-!dist/MedAfrica.exe
-!dist/config/
-!dist/config/**
+# Exclude dist folder (build artifacts including .exe)
+dist/
+*.exe
 
 # Exclude Python cache files
 **/__pycache__/
@@ -45,9 +43,11 @@
 *.log
 *_logs.txt
 
-# Exclude build artifacts
+# Exclude build artifacts and executables
 build/
 dist/
+*.exe
+*.spec
 *.spec
 *.exe
 
