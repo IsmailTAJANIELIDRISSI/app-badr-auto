@@ -4441,19 +4441,36 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             dum_number = sheet_name.split()[-1] if sheet_name.startswith('Sheet') else '1'
             
             # GESTION SPÉCIALE: Si 1 seul DUM ET c'est Sheet 1, ajouter /1 et /2
-            # Si c'est Sheet 3 seul, c'est que l'utilisateur a supprimé Sheet 1 et 2 → pas de division
-            # Vérifier si c'est le seul DUM en cherchant si summary_file a d'autres DUMs
+            # IMPORTANT: Compter les DUMs dans generated_excel (C11, C18, C25, C32, C39...)
+            # car summary_file peut être modifié par l'utilisateur après erreur
+            # Si LTA avait plusieurs DUMs à l'origine, ne pas faire la division
             is_single_dum = False
             try:
-                summary_files = glob.glob(os.path.join(lta_folder_path, "summary_file*.xlsx"))
-                if summary_files:
-                    wb_check = load_workbook(summary_files[0], data_only=True)
-                    ws_check = wb_check.active
-                    dum_count = sum(1 for row in ws_check.iter_rows(min_row=2, max_row=20) if row[0].value and 'Sheet' in str(row[0].value))
+                generated_excel_files = glob.glob(os.path.join(lta_folder_path, "generated_excel*.xlsx"))
+                if generated_excel_files:
+                    wb_check = load_workbook(generated_excel_files[0], data_only=True)
+                    ws_check = wb_check['Summary']  # Sheet 'Summary'
+                    
+                    # Compter les DUMs en vérifiant les cellules C11, C18, C25, C32, C39...
+                    # Pattern: C + (11 + (dum_index - 1) * 7)
+                    original_dum_count = 0
+                    for dum_idx in range(1, 10):  # Vérifier jusqu'à 9 DUMs max
+                        row_num = 11 + (dum_idx - 1) * 7
+                        cell_value = ws_check[f'C{row_num}'].value
+                        if cell_value and 'DUM' in str(cell_value).upper():
+                            original_dum_count += 1
+                        else:
+                            break  # Plus de DUMs après cette ligne
+                    
                     wb_check.close()
-                    # Division automatique SEULEMENT si Sheet 1 ET un seul DUM
-                    is_single_dum = (dum_count == 1 and dum_number == '1')
-            except:
+                    
+                    # Division automatique SEULEMENT si 1 DUM à l'origine ET c'est Sheet 1
+                    is_single_dum = (original_dum_count == 1 and dum_number == '1')
+                    
+                    if original_dum_count > 1:
+                        print(f"      ℹ️  LTA original avec {original_dum_count} DUMs - pas de division automatique")
+            except Exception as check_err:
+                print(f"      ⚠️  Erreur vérification generated_excel: {check_err}")
                 pass
             
             if is_single_dum:
@@ -7092,7 +7109,3 @@ if __name__ == "__main__":
 
     # mailtrap
     # mailtraposos
-    # mailtraposos2
-    # mailtraposos3
-    # mailtraposos4
-    # mailtraposos55
