@@ -247,9 +247,6 @@ def start_fresh_edge():
         f"--remote-debugging-port={debug_port}",
         f"--user-data-dir={profile_path}",
         "--no-first-run",
-        "--ignore-certificate-errors",
-        "--ignore-ssl-errors",
-        "--allow-insecure-localhost",
     ]
     
     subprocess.Popen(command)
@@ -309,9 +306,34 @@ def navigate_and_login(driver):
         password_field = wait.until(
             EC.presence_of_element_located((By.ID, "connexionForm:pwdConnexionId"))
         )
-        password_field.clear()
-        password_field.send_keys(BADR_PASSWORD)
-        print("✓ Mot de passe saisi")
+        
+        # Vérifier si le champ contient déjà du texte (éviter doublon)
+        current_value = password_field.get_attribute('value') or ''
+        
+        if current_value == BADR_PASSWORD:
+            print("✓ Mot de passe déjà présent (correct)")
+        elif current_value:
+            # Champ contient autre chose - nettoyer et ressaisir
+            print(f"   ⚠️  Champ contient '{current_value[:3]}...' - nettoyage...")
+            password_field.clear()
+            time.sleep(0.5)
+            password_field.send_keys(BADR_PASSWORD)
+            print("✓ Mot de passe saisi (après nettoyage)")
+        else:
+            # Champ vide - saisie normale
+            password_field.send_keys(BADR_PASSWORD)
+            print("✓ Mot de passe saisi")
+        
+        # Vérifier que la valeur finale est correcte
+        final_value = password_field.get_attribute('value') or ''
+        if final_value != BADR_PASSWORD:
+            print(f"   ⚠️  ATTENTION: Valeur finale incorrecte (longueur: {len(final_value)} vs attendu: {len(BADR_PASSWORD)})")
+            # Dernière tentative de correction
+            password_field.clear()
+            time.sleep(0.5)
+            password_field.send_keys(BADR_PASSWORD)
+            print("   ✓ Correction appliquée")
+        
         time.sleep(1)
         
         # ÉTAPE 2: Cliquer sur le bouton de connexion
