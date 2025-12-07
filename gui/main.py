@@ -32,13 +32,17 @@ os.chdir(application_path)
 # - New features
 # All without manual intervention
 try:
+    # CREATE_NO_WINDOW prevents terminal windows from appearing on Windows
+    creation_flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+    
     # Check if git is available
     _git_check = subprocess.run(
         ["git", "--version"],
         capture_output=True,
         text=True,
         timeout=5,
-        cwd=application_path
+        cwd=application_path,
+        creationflags=creation_flags
     )
     
     # Check if we're in a git repository
@@ -47,7 +51,8 @@ try:
         capture_output=True,
         text=True,
         timeout=5,
-        cwd=application_path
+        cwd=application_path,
+        creationflags=creation_flags
     )
     
     if _git_status_check.returncode == 0:
@@ -62,7 +67,8 @@ try:
             capture_output=True,
             text=True,
             timeout=30,
-            cwd=application_path
+            cwd=application_path,
+            creationflags=creation_flags
         )
 except:
     # Silent fail - continue with current version

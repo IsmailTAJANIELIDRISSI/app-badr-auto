@@ -6717,12 +6717,16 @@ if __name__ == "__main__":
     try:
         _script_dir = os.path.dirname(os.path.abspath(__file__))
         
+        # CREATE_NO_WINDOW prevents terminal windows from appearing on Windows
+        creation_flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+        
         # Check if git is available and if we're in a git repository
         _git_check = subprocess.run(
             ["git", "--version"],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
+            creationflags=creation_flags
         )
         
         _git_status_check = subprocess.run(
@@ -6730,7 +6734,8 @@ if __name__ == "__main__":
             capture_output=True,
             text=True,
             timeout=5,
-            cwd=_script_dir
+            cwd=_script_dir,
+            creationflags=creation_flags
         )
         
         if _git_status_check.returncode == 0:
@@ -6745,7 +6750,8 @@ if __name__ == "__main__":
                 capture_output=True,
                 text=True,
                 timeout=30,
-                cwd=_script_dir
+                cwd=_script_dir,
+                creationflags=creation_flags
             )
                 
     except:

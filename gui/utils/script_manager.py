@@ -115,6 +115,8 @@ class ScriptManager:
                         python_exe = sys.executable
                     
                     # Use Popen for real-time output
+                    # CREATE_NO_WINDOW hides the terminal window on Windows
+                    creation_flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
                     process = subprocess.Popen(
                         [python_exe, fuzzy_script],
                         cwd=folder_path,
@@ -124,7 +126,8 @@ class ScriptManager:
                         encoding='utf-8',
                         env=env,
                         stdin=subprocess.DEVNULL,
-                        bufsize=1  # Line buffered
+                        bufsize=1,  # Line buffered
+                        creationflags=creation_flags
                     )
                     
                     # Read output in real-time
@@ -158,6 +161,8 @@ class ScriptManager:
                             progress_callback(70, "Exécution de validation.py...")
                         
                         # Use same environment with UTF-8 encoding
+                        # CREATE_NO_WINDOW hides the terminal window on Windows
+                        creation_flags_val = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
                         result = subprocess.run(
                             [python_exe, validation_script],
                             cwd=folder_path,
@@ -166,7 +171,8 @@ class ScriptManager:
                             encoding='utf-8',
                             env=env,
                             stdin=subprocess.DEVNULL,
-                            timeout=60  # 1 minute timeout
+                            timeout=60,  # 1 minute timeout
+                            creationflags=creation_flags_val
                         )
                         
                         if result.returncode != 0:
@@ -321,7 +327,8 @@ class ScriptManager:
                         env['PYTHONIOENCODING'] = 'utf-8'
                         env['PYTHONUNBUFFERED'] = '1'  # Disable Python buffering for real-time output
                         
-                        # Run script
+                        # Run script - CREATE_NO_WINDOW hides the terminal window on Windows
+                        creation_flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
                         process = subprocess.Popen(
                             cmd,
                             cwd=project_root,  # Run from project root
@@ -331,7 +338,8 @@ class ScriptManager:
                             encoding='utf-8',
                             env=env,
                             stdin=subprocess.DEVNULL,
-                            bufsize=1  # Line buffered
+                            bufsize=1,  # Line buffered
+                            creationflags=creation_flags
                         )
                         self.current_process = process
                         
@@ -504,7 +512,8 @@ class ScriptManager:
                 env['PYTHONIOENCODING'] = 'utf-8'
                 env['PYTHONUNBUFFERED'] = '1'  # Disable Python buffering for real-time output
                 
-                # Run script
+                # Run script - CREATE_NO_WINDOW hides the terminal window on Windows
+                creation_flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
                 process = subprocess.Popen(
                     cmd,
                     cwd=project_root,
@@ -514,7 +523,8 @@ class ScriptManager:
                     encoding='utf-8',
                     env=env,
                     stdin=subprocess.DEVNULL,
-                    bufsize=1  # Line buffered
+                    bufsize=1,  # Line buffered
+                    creationflags=creation_flags
                 )
                 self.current_process = process
                 
