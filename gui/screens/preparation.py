@@ -8,10 +8,13 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import logging
 import os
+import subprocess
+import platform
 from gui.utils.script_manager import ScriptManager
 from gui.utils.file_utils import (detect_ltas, write_shipper_file, 
                                   get_lta_shipper_name, update_lta_shipper_name,
-                                  get_lta_blocage_info, update_lta_blocage)
+                                  get_lta_blocage_info, update_lta_blocage,
+                                  find_lta_pdf)
 from gui.utils.validators import validate_ds_series, validate_location, validate_folder_path, normalize_ds_series
 
 logger = logging.getLogger(__name__)
@@ -330,7 +333,7 @@ class PreparationScreen:
             
             row_num += 1
             
-            # === ROW 2: Shipper Name ===
+            # === ROW 2: Shipper Name with PDF Button ===
             ttk.Label(card, text="Expéditeur (Shipper):", font=('Arial', 9, 'bold')).grid(
                 row=row_num, column=0, sticky=tk.W, pady=5
             )
@@ -338,9 +341,89 @@ class PreparationScreen:
             # Extract shipper from line 6 - use parent folder, not subfolder
             shipper_name = get_lta_shipper_name(folder, lta['name'])
             
+            # Create frame for shipper entry + PDF button
+            shipper_frame = ttk.Frame(card)
+            shipper_frame.grid(row=row_num, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5, padx=(10, 0))
+            
             shipper_var = tk.StringVar(value=shipper_name)
-            shipper_entry = ttk.Entry(card, textvariable=shipper_var, width=50, font=('Arial', 9))
-            shipper_entry.grid(row=row_num, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5, padx=(10, 0))
+            shipper_entry = ttk.Entry(shipper_frame, textvariable=shipper_var, width=45, font=('Arial', 9))
+            shipper_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            
+            # PDF button to open MAWB PDF
+            def open_lta_pdf(lta_folder=folder, lta_name=lta['name']):
+                """Open the LTA MAWB PDF file"""
+                pdf_path = find_lta_pdf(lta_folder, lta_name)
+                if pdf_path:
+                    try:
+                        # Open PDF with default application
+                        if platform.system() == 'Windows':
+                            os.startfile(pdf_path)
+                        elif platform.system() == 'Darwin':  # macOS
+                            subprocess.run(['open', pdf_path])
+                        else:  # Linux
+                            subprocess.run(['xdg-open', pdf_path])
+                        logger.info(f"Opened PDF: {pdf_path}")
+                    except Exception as e:
+                        messagebox.showerror("Erreur", f"Impossible d'ouvrir le PDF:\n{e}")
+                        logger.error(f"Failed to open PDF {pdf_path}: {e}")
+                else:
+                    messagebox.showwarning("PDF Introuvable", 
+                                        f"Le fichier PDF pour '{lta_name}' n'a pas été trouvé.\n\n"
+                                        f"Vérifiez que le fichier existe avec le format:\n"
+                                        f"{lta_name} - [MAWB].pdf")
+            
+            # Find PDF to determine if button should be enabled
+            pdf_exists = find_lta_pdf(folder, lta['name']) is not None
+            
+            # Create professional PDF button
+            if pdf_exists:
+                pdf_button = tk.Button(
+                    shipper_frame,
+                    text="📄 Voir PDF",
+                    font=('Segoe UI', 9),
+                    fg='#ffffff',
+                    bg='#007bff',
+                    activebackground='#0056b3',
+                    activeforeground='#ffffff',
+                    relief='flat',
+                    borderwidth=0,
+                    cursor='hand2',
+                    command=open_lta_pdf,
+                    padx=12,
+                    pady=6
+                )
+            
+            # Hover effects
+            def on_enter(e, btn=pdf_button):
+                btn.config(bg='#0056b3')
+            
+            def on_leave(e, btn=pdf_button):
+                btn.config(bg='#007bff')
+            
+            pdf_button.bind('<Enter>', on_enter)
+            pdf_button.bind('<Leave>', on_leave)
+
+            
+            # Tooltip for PDF button
+            if pdf_exists:
+                pdf_filename = os.path.basename(find_lta_pdf(folder, lta['name']))
+                self._create_tooltip(pdf_button, f"Ouvrir {pdf_filename}")
+            else:
+                pdf_button = tk.Button(
+                    shipper_frame,
+                    text="📄 PDF",
+                    font=('Segoe UI', 9, 'bold'),  # Added 'bold' here
+                    fg='white',                     # Changed to white
+                    bg='#e9ecef',
+                    relief='flat',
+                    borderwidth=0,
+                    cursor='arrow',
+                    state='disabled',
+                    padx=12,
+                    pady=6
+                )
+                self._create_tooltip(pdf_button, "PDF non disponible")
+            pdf_button.pack(side=tk.LEFT, padx=(8, 0))
             
             row_num += 1
             
@@ -655,3 +738,30 @@ class PreparationScreen:
         else:
             self.app.log_message(f"Sauvegarde terminée avec {error_count} erreur(s)", "WARNING")
             messagebox.showwarning("Attention", f"Sauvegarde terminée avec {error_count} erreur(s)")
+    
+    def _create_tooltip(self, widget, text):
+        """Create a tooltip for a widget"""
+        def show_tooltip(event):
+            tooltip = tk.Toplevel()
+            tooltip.wm_overrideredirect(True)
+            tooltip.wm_geometry(f"+{event.x_root+10}+{event.y_root+10}")
+            
+            label = tk.Label(
+                tooltip,
+                text=text,
+                background="#ffffe0",
+                relief=tk.SOLID,
+                borderwidth=1,
+                font=('Arial', 8)
+            )
+            label.pack()
+            
+            widget.tooltip = tooltip
+        
+        def hide_tooltip(event):
+            if hasattr(widget, 'tooltip'):
+                widget.tooltip.destroy()
+                del widget.tooltip
+        
+        widget.bind('<Enter>', show_tooltip)
+        widget.bind('<Leave>', hide_tooltip)

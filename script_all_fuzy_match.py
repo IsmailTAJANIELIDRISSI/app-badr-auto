@@ -1604,7 +1604,7 @@ def rename_excel_files(dir_path, mawb_number):
 def delete_unwanted_files(dir_path):
     """Delete IMG and Manifest files"""
     print("  Cleaning up unwanted files...")
-    img_patterns = ["IMG*.*", "*.img", "*.jpg"]
+    img_patterns = ["IMG*.*", "*.img", "*.jpg", "*.png", "*.jpeg", "*image*"]
     found_img = False
     for pattern in img_patterns:
         img_files = glob.glob(os.path.join(dir_path, pattern))
@@ -2269,42 +2269,57 @@ def validate_and_correct_article_values(file_path):
         
         # Process each exceeding article
         import random
-        total_excess = Decimal('0')
+        total_excess_int = Decimal('0')
         modified_cells = []
         
         for art in exceeding_articles:
             original_value = art['value']
+            current_value = original_value
+            total_reduced = Decimal('0')
             
-            # Calculate integer excess: subtract 400 or 450 (random)
-            # This keeps the new value between ~110-160 or ~50-100 depending on original
-            if original_value > Decimal('600'):
-                reduction = random.choice([400, 450, 500])
-            else:
-                reduction = random.choice([100, 150, 200])
+            # BOUCLE: Soustraire jusqu'à atteindre < 499
+            while current_value >= Decimal('499'):
+                # Déterminer la réduction à appliquer
+                excess = current_value - Decimal('499')
+                
+                if excess >= Decimal('500'):
+                    reduction = random.choice([400, 450, 500])
+                elif excess >= Decimal('200'):
+                    reduction = random.choice([200, 250, 300])
+                elif excess >= Decimal('100'):
+                    reduction = random.choice([100, 150])
+                else:
+                    # Pour les petits excès, soustraire juste assez pour passer sous 499
+                    reduction = int((excess + Decimal('1')).to_integral_value(rounding=ROUND_HALF_UP))
+                
+                # S'assurer qu'on ne descend pas trop bas
+                if current_value - Decimal(reduction) < Decimal('50'):
+                    # Ajuster la réduction pour garder au moins 50 MAD
+                    reduction = int((current_value - Decimal('80')).to_integral_value(rounding=ROUND_HALF_UP))
+                    if reduction <= 0:
+                        reduction = 50  # Minimum de réduction
+                
+                current_value -= Decimal(reduction)
+                total_reduced += Decimal(reduction)
             
-            # Make sure we don't go negative
-            if original_value - Decimal(reduction) < Decimal('50'):
-                reduction = int((original_value - Decimal('100')).to_integral_value(rounding=ROUND_HALF_UP))
-            
-            new_value = original_value - Decimal(reduction)
-            total_excess += Decimal(reduction)
+            total_excess_int += total_reduced
             
             # Update the cell - KEEP FULL PRECISION
-            art['cell'].value = float(new_value)
-            art['value'] = new_value
+            art['cell'].value = float(current_value)
+            art['value'] = current_value
             modified_cells.append(art)
             
-            print(f"         • Ligne {art['row']}: {original_value:.2f} → {new_value:.5f} MAD (-{reduction})")
+            print(f"         • Ligne {art['row']}: {original_value:.2f} → {current_value:.5f} MAD (-{total_reduced})")
         
         # Redistribute excess to low-value articles PRESERVING DECIMALS
-        if low_value_articles and total_excess > Decimal('0'):
+        if low_value_articles and total_excess_int > Decimal('0'):
             # Limit to max 10 articles for redistribution
             articles_to_update = low_value_articles[:min(10, len(low_value_articles))]
             
-            print(f"      📊 Redistribution de {total_excess} MAD sur {len(articles_to_update)} article(s)")
+            print(f"      📊 Redistribution de {total_excess_int} MAD sur {len(articles_to_update)} article(s)")
             
             # Create integer distribution amounts: 100, 200, 50, etc.
-            remaining = total_excess
+            remaining = total_excess_int
             increments = []
             
             while remaining > 0 and len(increments) < len(articles_to_update):
@@ -2345,12 +2360,12 @@ def validate_and_correct_article_values(file_path):
                 
                 print(f"         • Ligne {art['row']}: {original_value:.5f} → {new_value:.5f} MAD (+{increment})")
         
-        elif total_excess > Decimal('0'):
+        elif total_excess_int > Decimal('0'):
             # No low-value articles - add to last article
-            print(f"      ℹ️  Ajout de {total_excess} MAD au dernier article")
+            print(f"      ℹ️  Ajout de {total_excess_int} MAD au dernier article")
             if articles:
                 last_art = articles[-1]
-                new_val = last_art['value'] + total_excess
+                new_val = last_art['value'] + total_excess_int
                 if new_val <= Decimal('499'):
                     last_art['cell'].value = float(new_val)
                     print(f"         • Ligne {last_art['row']}: {last_art['value']:.5f} → {new_val:.5f} MAD")

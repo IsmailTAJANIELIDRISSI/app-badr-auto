@@ -488,3 +488,63 @@ def update_lta_blocage(lta_folder_path, folder_name, is_blocage, total_weight=''
     except Exception as e:
         logger.error(f"Error updating blocage: {e}")
         return False
+
+def find_lta_pdf(lta_folder_path, folder_name):
+    """
+    Find the LTA MAWB PDF file inside the LTA folder
+    
+    Args:
+        lta_folder_path: Path to parent folder containing LTA folders
+        folder_name: Name of LTA folder (e.g., "1er LTA", "2eme LTA")
+        
+    Returns:
+        Full path to PDF file if found, None otherwise
+    """
+    try:
+        # Read LTA file to get MAWB (line 3)
+        lines = read_lta_file(lta_folder_path, folder_name)
+        if not lines or len(lines) < 3:
+            logger.warning(f"Cannot read MAWB from LTA file for: {folder_name}")
+            return None
+        
+        mawb = lines[2].strip()  # Line 3 is index 2
+        if not mawb:
+            logger.warning(f"MAWB is empty for: {folder_name}")
+            return None
+        
+        # PDF is INSIDE the LTA folder, not in parent directory
+        lta_subfolder = os.path.join(lta_folder_path, folder_name)
+        
+        if not os.path.exists(lta_subfolder):
+            logger.warning(f"LTA subfolder does not exist: {lta_subfolder}")
+            return None
+        
+        # Try multiple MAWB formats since PDFs may have dashes
+        # Format 1: Original MAWB as-is (e.g., "60751449613")
+        # Format 2: MAWB with dash after 3rd digit (e.g., "607-51449613")
+        mawb_formats = [
+            mawb,  # Original format
+            f"{mawb[:3]}-{mawb[3:]}" if len(mawb) > 3 else mawb  # With dash after 3rd char
+        ]
+        
+        # Try each MAWB format
+        for mawb_variant in mawb_formats:
+            pdf_filename = f"{folder_name} - {mawb_variant}.pdf"
+            pdf_path = os.path.join(lta_subfolder, pdf_filename)
+            
+            if os.path.exists(pdf_path):
+                logger.info(f"✓ Found PDF: {pdf_path}")
+                return pdf_path
+        
+        # If not found, log debug info
+        logger.warning(f"✗ PDF not found for {folder_name}")
+        logger.info(f"  - MAWB from line 3: '{mawb}'")
+        logger.info(f"  - Tried formats: {mawb_formats}")
+        pdf_files = glob.glob(os.path.join(lta_subfolder, "*.pdf"))
+        logger.info(f"  - PDF files in folder: {[os.path.basename(f) for f in pdf_files]}")
+        
+        return None
+    
+    except Exception as e:
+        logger.error(f"Error finding PDF for {folder_name}: {e}")
+        return None
