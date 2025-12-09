@@ -169,18 +169,14 @@ class PreparationScreen:
         
         self.app.current_folder = folder
         
-        import os
-        lta_folders = []
-        for item in os.listdir(folder):
-            item_path = os.path.join(folder, item)
-            if os.path.isdir(item_path) and ("LTA" in item or "lta" in item):
-                lta_folders.append(item)
+        # Use the full detect_ltas function to get complete LTA information
+        ltas = detect_ltas(folder)
         
-        if not lta_folders:
+        if not ltas:
             messagebox.showinfo("Information", "Aucun dossier LTA détecté")
             return
         
-        self.all_ltas = sorted(lta_folders)
+        self.all_ltas = [lta['name'] for lta in ltas]
         self.app.log_message(f"{len(self.all_ltas)} dossiers LTA détectés", "INFO")
         self.populate_lta_table()
     
@@ -392,28 +388,26 @@ class PreparationScreen:
                     padx=12,
                     pady=6
                 )
-            
-            # Hover effects
-            def on_enter(e, btn=pdf_button):
-                btn.config(bg='#0056b3')
-            
-            def on_leave(e, btn=pdf_button):
-                btn.config(bg='#007bff')
-            
-            pdf_button.bind('<Enter>', on_enter)
-            pdf_button.bind('<Leave>', on_leave)
-
-            
-            # Tooltip for PDF button
-            if pdf_exists:
+                
+                # Hover effects for enabled button
+                def on_enter(e, btn=pdf_button):
+                    btn.config(bg='#0056b3')
+                
+                def on_leave(e, btn=pdf_button):
+                    btn.config(bg='#007bff')
+                
+                pdf_button.bind('<Enter>', on_enter)
+                pdf_button.bind('<Leave>', on_leave)
+                
+                # Tooltip for PDF button
                 pdf_filename = os.path.basename(find_lta_pdf(folder, lta['name']))
                 self._create_tooltip(pdf_button, f"Ouvrir {pdf_filename}")
             else:
                 pdf_button = tk.Button(
                     shipper_frame,
                     text="📄 PDF",
-                    font=('Segoe UI', 9, 'bold'),  # Added 'bold' here
-                    fg='white',                     # Changed to white
+                    font=('Segoe UI', 9, 'bold'),
+                    fg='white',
                     bg='#e9ecef',
                     relief='flat',
                     borderwidth=0,
