@@ -3951,7 +3951,7 @@ def read_dum_data_from_summary(summary_excel_path):
                 'total_freight': total_freight,
                 'insurance': insurance,
                 'cartons': row[headers.get('cartons', 7) - 1] if 'cartons' in headers else 0,
-                'total_positions': row[headers.get('total_positions', 8) - 1] if 'total_positions' in headers else 0,
+                'total_positions': row[headers.get('total_positions', 8) - 1] if 'total_positions' in headers else 0,  # Nombre de contenants (P)
             }
             
             dum_list.append(dum_data)
@@ -4674,11 +4674,11 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             # PDS.3.7: Référence lot (ajouter les lots avec valeurs divisées si DUM unique)
             print(f"\n      📦 Ajout des lots DS...")
             
-            # Si DUM unique, diviser poids et contenants par 2
+            # Si DUM unique, diviser total_positions (contenants) et poids par 2
             if is_single_dum:
-                total_pieces = dum_data.get('total_pieces', 0)
-                p_half = total_pieces // 2
-                p_remaining = total_pieces - p_half
+                total_positions = dum_data.get('total_positions', 0)  # Nombre de contenants (total position)
+                p_half = total_positions // 2
+                p_remaining = total_positions - p_half
                 
                 gross_weight = dum_data.get('total_gross_weight', 0)
                 p_brut_half = gross_weight / 2
@@ -4688,11 +4688,11 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                     {'pieces': p_half, 'gross_weight': p_brut_half},
                     {'pieces': p_remaining, 'gross_weight': p_brut_remaining}
                 ]
-                print(f"      ⚠️  Division DUM unique: Lot 1 ({p_half} colis, {p_brut_half:.2f} kg) + Lot 2 ({p_remaining} colis, {p_brut_remaining:.2f} kg)")
+                print(f"      ⚠️  Division DUM unique: Lot 1 ({p_half} contenants, {p_brut_half:.2f} kg) + Lot 2 ({p_remaining} contenants, {p_brut_remaining:.2f} kg)")
             else:
-                # DUM normal: utiliser les valeurs complètes pour chaque lot
+                # DUM normal: utiliser total_positions (contenants) pour chaque lot
                 lot_values = [{
-                    'pieces': dum_data.get('total_pieces', 0),
+                    'pieces': dum_data.get('total_positions', 0),  # Nombre de contenants (total position)
                     'gross_weight': dum_data.get('total_gross_weight', 0)
                 }] * len(lot_references)
             
