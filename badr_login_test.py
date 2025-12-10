@@ -1827,10 +1827,11 @@ def correct_blocage_weights(lta_folder_path, corrected_weight):
                     
                     dum = dum_pbrut_cells[i]
                     # Calculer la marge disponible: P,BRUT - P,NET
-                    available_margin = round(dum['pbrut_value'] - dum['pnet_value'], 2)
+                    # IMPORTANT: Garder au moins 1 kg de marge (P,BRUT doit rester > P,NET)
+                    available_margin = round(dum['pbrut_value'] - dum['pnet_value'] - 1, 2)
                     
                     if available_margin > 0.01:
-                        # On peut soustraire de ce DUM
+                        # On peut soustraire de ce DUM (en gardant P,BRUT > P,NET)
                         can_subtract = min(available_margin, remaining_to_subtract)
                         new_pbrut = round(dum['pbrut_value'] - can_subtract, 2)
                         
@@ -1846,12 +1847,12 @@ def correct_blocage_weights(lta_folder_path, corrected_weight):
                         })
                         
                         print(f"         ✓ DUM {dum['dum_number']} ({dum['pbrut_cell']}): {dum['pbrut_value']} → {new_pbrut} kg (-{can_subtract} kg)")
-                        print(f"            Marge respectée: P,NET={dum['pnet_value']} ≤ P,BRUT={new_pbrut}")
+                        print(f"            Règle respectée: P,NET={dum['pnet_value']} < P,BRUT={new_pbrut} (marge: {round(new_pbrut - dum['pnet_value'], 2)} kg)")
                         
                         remaining_to_subtract = round(remaining_to_subtract - can_subtract, 2)
                         dum['pbrut_value'] = new_pbrut  # Mettre à jour pour le calcul final
                     else:
-                        print(f"         ⚠️  DUM {dum['dum_number']}: Pas de marge (P,BRUT={dum['pbrut_value']} ≈ P,NET={dum['pnet_value']})")
+                        print(f"         ⚠️  DUM {dum['dum_number']}: Marge insuffisante (P,BRUT={dum['pbrut_value']}, P,NET={dum['pnet_value']}, disponible={max(0, available_margin)} kg)")
                 
                 if remaining_to_subtract > 0.01:
                     print(f"         ⚠️  ATTENTION: {remaining_to_subtract} kg n'ont pas pu être soustraits (marges insuffisantes)")
