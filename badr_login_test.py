@@ -18,6 +18,7 @@ from openpyxl import load_workbook
 from datetime import datetime
 from dotenv import load_dotenv
 import json
+import psutil
 
 # Load environment variables
 load_dotenv()
@@ -43,6 +44,52 @@ def _load_lta_license():
 
 # Load license expiry date from config
 LTA_license_expires = _load_lta_license()  
+
+def close_excel_file(file_path):
+    """
+    Ferme un fichier Excel s'il est ouvert par Excel.
+    
+    Args:
+        file_path: Chemin absolu du fichier Excel à fermer
+    
+    Returns:
+        bool: True si fichier fermé ou n'était pas ouvert, False si erreur
+    """
+    try:
+        file_name = os.path.basename(file_path)
+        excel_closed = False
+        
+        # Parcourir tous les processus Excel
+        for proc in psutil.process_iter(['pid', 'name']):
+            try:
+                if proc.info['name'] and 'EXCEL.EXE' in proc.info['name'].upper():
+                    # Vérifier si ce processus a le fichier ouvert
+                    try:
+                        for item in proc.open_files():
+                            if file_path.lower() in item.path.lower():
+                                print(f"      ⚠️  Fichier {file_name} ouvert dans Excel (PID: {proc.info['pid']})")
+                                print(f"      🔄 Fermeture du processus Excel...")
+                                proc.terminate()
+                                proc.wait(timeout=3)
+                                excel_closed = True
+                                print(f"      ✓ Processus Excel fermé")
+                                time.sleep(1)  # Attendre que le fichier soit libéré
+                                break
+                    except (psutil.AccessDenied, psutil.NoSuchProcess):
+                        continue
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        
+        if not excel_closed:
+            # Fichier pas ouvert, c'est OK
+            return True
+        
+        return True
+        
+    except Exception as e:
+        print(f"      ⚠️  Erreur lors de la fermeture Excel: {e}")
+        # Continuer quand même, l'opération pourrait réussir
+        return True
 
 def get_fresh_profile_path():
     """Crée un chemin unique pour un profil temporaire"""
@@ -345,6 +392,20 @@ def navigate_and_login(driver):
         print("✓ Connexion cliquée - attente de redirection...")
         time.sleep(5)  # Attendre le chargement
         
+        # ÉTAPE 3: Vérifier s'il y a une session active
+        print("\n🔍 Vérification session active...")
+        try:
+            # Chercher le lien de session active
+            session_link = driver.find_element(By.ID, "connexionForm:sessionConnexionId")
+            print("⚠️  Session active détectée!")
+            print("🔄 Clic pour désactiver l'ancienne session...")
+            session_link.click()
+            time.sleep(5)
+            print("✓ Ancienne session désactivée, redirection vers accueil")
+        except Exception as e:
+            # Pas de session active, connexion normale
+            print("✓ Pas de session active, connexion directe")
+        
         return True
         
     except Exception as e:
@@ -476,6 +537,9 @@ def save_dum_series_to_excel(lta_folder_path, dum_number, serie):
             # Ouvrir le fichier Excel (data_only=False pour pouvoir écrire)
             wb = None
             try:
+                # Fermer le fichier Excel s'il est ouvert
+                close_excel_file(generated_excel_path)
+                
                 wb = load_workbook(generated_excel_path, data_only=False)
                 ws = wb['Summary']
                 
@@ -1058,6 +1122,9 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
         
         # Lire les DUMs
         try:
+            # Fermer le fichier Excel s'il est ouvert
+            close_excel_file(generated_excel_path)
+            
             wb = load_workbook(generated_excel_path, data_only=True)
             ws = wb['Summary']
             
@@ -1673,6 +1740,9 @@ def correct_blocage_weights(lta_folder_path, corrected_weight):
         # ========== BC.2: Mise à jour generated_excel ==========
         print(f"\n      📊 Mise à jour generated_excel...")
         
+        # Fermer le fichier Excel s'il est ouvert
+        close_excel_file(generated_excel_path)
+        
         wb = load_workbook(generated_excel_path, data_only=False)
         ws = wb['Summary']
         
@@ -1759,6 +1829,9 @@ def correct_blocage_weights(lta_folder_path, corrected_weight):
         
         # ========== BC.3: Mise à jour summary_file ==========
         print(f"\n      📊 Mise à jour summary_file...")
+        
+        # Fermer le fichier Excel s'il est ouvert
+        close_excel_file(summary_file_path)
         
         wb_summary = load_workbook(summary_file_path, data_only=False)
         ws_summary = wb_summary.active
@@ -1920,6 +1993,9 @@ def mark_dum_as_error_in_excel(lta_folder_path, dum_number, serie=None):
             return
         
         # Ouvrir le fichier Excel
+        # Fermer le fichier Excel s'il est ouvert
+        close_excel_file(generated_excel_path)
+        
         wb = load_workbook(generated_excel_path, data_only=False)
         ws = wb['Summary']
         
@@ -2728,6 +2804,9 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
         
         # ED.5.2: Lire et extraire les totaux (avant "FOURNISSEUR")
         try:
+            # Fermer le fichier Excel s'il est ouvert
+            close_excel_file(generated_excel_path)
+            
             wb = load_workbook(generated_excel_path, data_only=True)
             ws = wb['Summary']
             
@@ -2772,6 +2851,9 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
         print("\n   🔍 Validation des totaux (somme DUMs)...")
         
         try:
+            # Fermer le fichier Excel s'il est ouvert
+            close_excel_file(generated_excel_path)
+            
             wb = load_workbook(generated_excel_path, data_only=True)
             ws = wb['Summary']
             
@@ -2932,6 +3014,9 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
         
         # Lire les données des DUMs depuis generated_excel
         try:
+            # Fermer le fichier Excel s'il est ouvert
+            close_excel_file(generated_excel_path)
+            
             wb = load_workbook(generated_excel_path, data_only=True)
             ws = wb['Summary']
             
@@ -3876,6 +3961,9 @@ def read_dum_data_from_summary(summary_excel_path):
              total_gross_weight, total_freight, insurance, cartons
     """
     try:
+        # Fermer le fichier Excel s'il est ouvert
+        close_excel_file(summary_excel_path)
+        
         wb = load_workbook(summary_excel_path, data_only=True)
         
         # Find the sheet with the summary table (usually first sheet or named 'Summary')
@@ -4470,6 +4558,9 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             try:
                 generated_excel_files = glob.glob(os.path.join(lta_folder_path, "generated_excel*.xlsx"))
                 if generated_excel_files:
+                    # Fermer le fichier Excel s'il est ouvert
+                    close_excel_file(generated_excel_files[0])
+                    
                     wb_check = load_workbook(generated_excel_files[0], data_only=True)
                     ws_check = wb_check['Summary']  # Sheet 'Summary'
                     
@@ -5074,6 +5165,11 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             )
             doc_type_option.click()
             print("         ✓ Type sélectionné: A0004 (TITRE DE PROPRIÉTÉ ET/OU DE TRANSPORT)")
+            
+            # Attendre que le blocker AJAX disparaisse après sélection du type
+            print("         ⏳ Attente mise à jour formulaire...")
+            if wait_for_ui_blocker_disappear(driver, timeout=5):
+                print("         ✓ Formulaire mis à jour")
             time.sleep(1)
         except Exception as e:
             print(f"      ❌ Erreur sélection type document: {e}")
@@ -5081,31 +5177,63 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         
         # 7.1.2: Entrer la référence "LTA"
         print("      2️⃣ Saisie de la référence 'LTA'...")
-        try:
-            # Chercher l'input "Référence" par XPath - plus robuste que l'ID dynamique
-            # On cherche l'input qui vient après le label "Référence"
-            ref_input = wait.until(
-                EC.presence_of_element_located((By.XPATH, "//label[contains(text(), 'Référence')]/parent::td/following-sibling::td//input[@type='text']"))
-            )
-            # Attendre qu'il soit cliquable
-            wait.until(lambda d: ref_input.is_enabled())
-            ref_input.clear()
-            ref_input.send_keys("LTA")
-            print("         ✓ Référence: LTA")
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"      ❌ Erreur saisie référence (méthode 1): {e}")
-            # Méthode alternative: chercher par pattern d'ID
+        
+        # Attendre que le champ référence soit actif (enabled) après la sélection du type
+        ref_input_success = False
+        max_ref_attempts = 3
+        
+        for attempt in range(1, max_ref_attempts + 1):
             try:
-                print("      🔄 Tentative alternative...")
-                ref_input_alt = driver.find_element(By.XPATH, "//input[contains(@id, 'mainTab:form7:j_id') and @type='text' and @maxlength='10']")
-                ref_input_alt.clear()
-                ref_input_alt.send_keys("LTA")
-                print("         ✓ Référence: LTA (méthode alternative)")
-                time.sleep(0.5)
-            except Exception as e2:
-                print(f"      ❌ Erreur saisie référence (méthode 2): {e2}")
-                return False
+                if attempt > 1:
+                    print(f"      🔄 Tentative {attempt}/{max_ref_attempts}...")
+                    time.sleep(1)
+                
+                # Re-localiser l'input à chaque tentative (éviter stale element)
+                ref_input = wait.until(
+                    EC.presence_of_element_located((By.XPATH, "//label[contains(text(), 'Référence')]/parent::td/following-sibling::td//input[@type='text' and @maxlength='10']"))
+                )
+                
+                # Attendre qu'il soit enabled (pas disabled après sélection type)
+                wait.until(lambda d: ref_input.is_enabled() and not ref_input.get_attribute('disabled'))
+                
+                # Clear et saisie
+                ref_input.clear()
+                time.sleep(0.3)
+                ref_input.send_keys("LTA")
+                
+                # Vérifier que la valeur a été saisie
+                if ref_input.get_attribute('value') == "LTA":
+                    print("         ✓ Référence: LTA")
+                    ref_input_success = True
+                    time.sleep(0.5)
+                    break
+                else:
+                    print(f"         ⚠️  Valeur non enregistrée (tentative {attempt})")
+                    
+            except Exception as e:
+                if attempt == max_ref_attempts:
+                    print(f"      ⚠️  Méthode XPath échouée après {max_ref_attempts} tentatives: {e}")
+                    # Méthode alternative: chercher par pattern d'ID
+                    try:
+                        print("      🔄 Tentative alternative (par ID)...")
+                        ref_input_alt = wait.until(
+                            EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'mainTab:form7:j_id') and @type='text' and @maxlength='10' and not(@disabled)]"))
+                        )
+                        ref_input_alt.clear()
+                        time.sleep(0.3)
+                        ref_input_alt.send_keys("LTA")
+                        if ref_input_alt.get_attribute('value') == "LTA":
+                            print("         ✓ Référence: LTA (méthode alternative)")
+                            ref_input_success = True
+                            time.sleep(0.5)
+                        else:
+                            print("         ⚠️  Valeur non enregistrée (méthode alternative)")
+                    except Exception as e2:
+                        print(f"      ❌ Erreur saisie référence (méthode alternative): {e2}")
+        
+        if not ref_input_success:
+            print("      ❌ Impossible de saisir la référence après toutes les tentatives")
+            return False
         
         # 7.1.3: Sélectionner la date actuelle
         print("      3️⃣ Sélection de la date actuelle...")
@@ -5294,6 +5422,11 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             )
             doc_type_option.click()
             print("         ✓ Type sélectionné: A0006 (FACTURE)")
+            
+            # Attendre que le blocker AJAX disparaisse après sélection du type
+            print("         ⏳ Attente mise à jour formulaire...")
+            if wait_for_ui_blocker_disappear(driver, timeout=5):
+                print("         ✓ Formulaire mis à jour")
             time.sleep(1)
         except Exception as e:
             print(f"      ❌ Erreur sélection option FACTURE: {e}")
@@ -5301,29 +5434,63 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         
         # 7.2.2: Entrer la référence "mnN"
         print(f"      2️⃣ Saisie de la référence '{mn_reference}'...")
-        try:
-            # Chercher l'input "Référence" par XPath
-            ref_input = wait.until(
-                EC.presence_of_element_located((By.XPATH, "//label[contains(text(), 'Référence')]/parent::td/following-sibling::td//input[@type='text']"))
-            )
-            wait.until(lambda d: ref_input.is_enabled())
-            ref_input.clear()
-            ref_input.send_keys(mn_reference)
-            print(f"         ✓ Référence: {mn_reference}")
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"      ❌ Erreur saisie référence (méthode 1): {e}")
-            # Méthode alternative
+        
+        # Attendre que le champ référence soit actif après la sélection du type
+        ref_input_success = False
+        max_ref_attempts = 3
+        
+        for attempt in range(1, max_ref_attempts + 1):
             try:
-                print("      🔄 Tentative alternative...")
-                ref_input_alt = driver.find_element(By.XPATH, "//input[contains(@id, 'mainTab:form7:j_id') and @type='text' and @maxlength='10']")
-                ref_input_alt.clear()
-                ref_input_alt.send_keys(mn_reference)
-                print(f"         ✓ Référence: {mn_reference} (méthode alternative)")
-                time.sleep(0.5)
-            except Exception as e2:
-                print(f"      ❌ Erreur saisie référence (méthode 2): {e2}")
-                return False
+                if attempt > 1:
+                    print(f"      🔄 Tentative {attempt}/{max_ref_attempts}...")
+                    time.sleep(1)
+                
+                # Re-localiser l'input à chaque tentative (éviter stale element)
+                ref_input = wait.until(
+                    EC.presence_of_element_located((By.XPATH, "//label[contains(text(), 'Référence')]/parent::td/following-sibling::td//input[@type='text' and @maxlength='10']"))
+                )
+                
+                # Attendre qu'il soit enabled
+                wait.until(lambda d: ref_input.is_enabled() and not ref_input.get_attribute('disabled'))
+                
+                # Clear et saisie
+                ref_input.clear()
+                time.sleep(0.3)
+                ref_input.send_keys(mn_reference)
+                
+                # Vérifier que la valeur a été saisie
+                if ref_input.get_attribute('value') == mn_reference:
+                    print(f"         ✓ Référence: {mn_reference}")
+                    ref_input_success = True
+                    time.sleep(0.5)
+                    break
+                else:
+                    print(f"         ⚠️  Valeur non enregistrée (tentative {attempt})")
+                    
+            except Exception as e:
+                if attempt == max_ref_attempts:
+                    print(f"      ⚠️  Méthode XPath échouée après {max_ref_attempts} tentatives: {e}")
+                    # Méthode alternative: chercher par pattern d'ID
+                    try:
+                        print("      🔄 Tentative alternative (par ID)...")
+                        ref_input_alt = wait.until(
+                            EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'mainTab:form7:j_id') and @type='text' and @maxlength='10' and not(@disabled)]"))
+                        )
+                        ref_input_alt.clear()
+                        time.sleep(0.3)
+                        ref_input_alt.send_keys(mn_reference)
+                        if ref_input_alt.get_attribute('value') == mn_reference:
+                            print(f"         ✓ Référence: {mn_reference} (méthode alternative)")
+                            ref_input_success = True
+                            time.sleep(0.5)
+                        else:
+                            print(f"         ⚠️  Valeur non enregistrée (méthode alternative)")
+                    except Exception as e2:
+                        print(f"      ❌ Erreur saisie référence (méthode alternative): {e2}")
+        
+        if not ref_input_success:
+            print("      ❌ Impossible de saisir la référence après toutes les tentatives")
+            return False
         
         # 7.2.3: Sélectionner la date actuelle (à nouveau)
         print("      3️⃣ Sélection de la date actuelle...")
@@ -5469,35 +5636,68 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         # ==================================================================
         print("\n   ☑️  Activation 'Commerce électronique - Oui'...")
         try:
-            # Attendre que le radio button soit présent
-            time.sleep(1)
+            # Attendre que le tableau Commerce électronique soit visible (révélé après 1er clic VALIDER)
+            print("      ⏳ Attente du champ Commerce électronique...")
             
-            # Méthode directe: chercher tous les div.ui-radiobutton-box dans le tableau Commerce électronique
-            # et prendre le premier (Oui)
-            commerce_elec_radios = driver.find_elements(By.CSS_SELECTOR, "table#mainTab\\:form0\\:commerceElectronique div.ui-radiobutton-box")
-            if len(commerce_elec_radios) >= 1:
-                commerce_elec_radios[0].click()  # Le premier = Oui
-                print("      ✓ Radio 'Commerce électronique - Oui' coché")
-                time.sleep(1)
-            else:
-                print(f"      ⚠️  Aucun radio button trouvé (nombre: {len(commerce_elec_radios)})")
-                # Méthode alternative: JavaScript
+            # Attendre que le tableau soit présent dans le DOM
+            commerce_table = wait.until(
+                EC.presence_of_element_located((By.ID, "mainTab:form0:commerceElectronique"))
+            )
+            print("      ✓ Tableau Commerce électronique trouvé")
+            time.sleep(1)  # Attendre que le champ soit complètement rendu
+            
+            # Méthode 1: Cliquer sur le div.ui-radiobutton-box (interface visuelle)
+            try:
+                commerce_elec_radios = driver.find_elements(By.CSS_SELECTOR, "table#mainTab\\:form0\\:commerceElectronique div.ui-radiobutton-box")
+                if len(commerce_elec_radios) >= 1:
+                    # Attendre que l'élément soit cliquable
+                    wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "table#mainTab\\:form0\\:commerceElectronique div.ui-radiobutton-box")))
+                    commerce_elec_radios[0].click()
+                    print("      ✓ Radio 'Commerce électronique - Oui' coché (méthode click)")
+                    time.sleep(1)
+                else:
+                    raise Exception(f"Aucun radio button trouvé (nombre: {len(commerce_elec_radios)})")
+            except Exception as click_err:
+                # Méthode 2: JavaScript direct sur l'input radio
+                print(f"      ⚠️  Méthode click échouée: {click_err}")
                 print("      🔄 Tentative avec JavaScript...")
+                
                 js_code = """
+                // Essayer plusieurs méthodes pour cocher le radio
                 var radio = document.getElementById('mainTab:form0:commerceElectronique:0');
                 if (radio) {
                     radio.checked = true;
-                    var event = new Event('change', { bubbles: true });
-                    radio.dispatchEvent(event);
+                    radio.click();
+                    
+                    // Déclencher les événements pour notifier PrimeFaces
+                    var changeEvent = new Event('change', { bubbles: true });
+                    radio.dispatchEvent(changeEvent);
+                    
+                    var clickEvent = new Event('click', { bubbles: true });
+                    radio.dispatchEvent(clickEvent);
+                    
+                    return 'success';
                 } else {
-                    throw new Error('Radio button not found');
+                    // Chercher le premier input radio dans le tableau
+                    var table = document.getElementById('mainTab:form0:commerceElectronique');
+                    if (table) {
+                        var radios = table.querySelectorAll('input[type="radio"]');
+                        if (radios.length > 0) {
+                            radios[0].checked = true;
+                            radios[0].click();
+                            return 'success-alternative';
+                        }
+                    }
+                    throw new Error('Radio button not found in DOM');
                 }
                 """
-                driver.execute_script(js_code)
+                result = driver.execute_script(js_code)
+                print(f"      ✓ Radio coché via JavaScript ({result})")
                 time.sleep(0.5)
-                print("      ✓ Radio coché via JavaScript")
+                
         except Exception as e:
             print(f"      ❌ Impossible de cocher Commerce électronique: {e}")
+            traceback.print_exc()
             return False
         
         # ==================================================================
