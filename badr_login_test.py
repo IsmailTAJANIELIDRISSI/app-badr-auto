@@ -4671,214 +4671,211 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 print(f"      ❌ Erreur saisie clé: {e}")
                 return False
             
-            # PDS.3.7: Référence lot (ajouter les lots avec valeurs divisées si DUM unique)
-            print(f"\n      📦 Ajout des lots DS...")
+            # PDS.3.7: BOUCLE pour ajouter tous les lots (1 ou 2 selon is_single_dum)
+            # Pour single DUM: 2 lots (/1 et /2)
+            # Pour LTA normal: 1 lot
+            num_lots_to_add = len(lot_references)
             
-            # Si DUM unique, diviser total_positions (contenants) et poids par 2
-            if is_single_dum:
-                total_positions = dum_data.get('total_positions', 0)  # Nombre de contenants (total position)
-                p_half = total_positions // 2
-                p_remaining = total_positions - p_half
+            for lot_idx in range(num_lots_to_add):
+                current_lot_ref = lot_references[lot_idx]
+                lot_label = f"Lot {lot_idx + 1}/{num_lots_to_add}" if num_lots_to_add > 1 else "Lot unique"
                 
-                gross_weight = dum_data.get('total_gross_weight', 0)
-                p_brut_half = gross_weight / 2
-                p_brut_remaining = gross_weight - p_brut_half
+                print(f"\n      📦 Traitement {lot_label}: {current_lot_ref}")
                 
-                lot_values = [
-                    {'pieces': p_half, 'gross_weight': p_brut_half},
-                    {'pieces': p_remaining, 'gross_weight': p_brut_remaining}
-                ]
-                print(f"      ⚠️  Division DUM unique: Lot 1 ({p_half} contenants, {p_brut_half:.2f} kg) + Lot 2 ({p_remaining} contenants, {p_brut_remaining:.2f} kg)")
-            else:
-                # DUM normal: utiliser total_positions (contenants) pour chaque lot
-                lot_values = [{
-                    'pieces': dum_data.get('total_positions', 0),  # Nombre de contenants (total position)
-                    'gross_weight': dum_data.get('total_gross_weight', 0)
-                }] * len(lot_references)
-            
-            for idx, lot_ref in enumerate(lot_references):
-                lot_added = False
-                try:
-                    # Cliquer sur "Nouveau" pour ajouter un lot
-                    nouveau_lot_btn_ds = wait.until(
-                        EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btnNouveauLot') or contains(text(), 'Ajouter')]" ))
-                    )
-                    nouveau_lot_btn_ds.click()
-                    time.sleep(1)
-                    
-                    # Entrer la référence du lot
-                    ref_lot_ds_input = wait.until(
-                        EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'refLotId') or contains(@name, 'refLotId')]" ))
-                    )
-                    ref_lot_ds_input.clear()
-                    ref_lot_ds_input.send_keys(lot_ref)
-                    
-                    # Entrer le nombre de colis pour ce lot
-                    pieces_input = wait.until(
-                        EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'nbColisId') or contains(@name, 'nbColis')]" ))
-                    )
-                    pieces_input.clear()
-                    pieces_input.send_keys(str(lot_values[idx]['pieces']))
-                    
-                    # Entrer le poids brut pour ce lot
-                    weight_input = wait.until(
-                        EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'poidsBrutId') or contains(@name, 'poidsBrut')]" ))
-                    )
-                    weight_input.clear()
-                    weight_input.send_keys(str(lot_values[idx]['gross_weight']))
-                    
-                    lot_added = True
-                    print(f"         ✓ Lot ajouté: {lot_ref} ({lot_values[idx]['pieces']} colis, {lot_values[idx]['gross_weight']:.2f} kg)")
-                    time.sleep(0.5)
-                except Exception as lot_err:
-                    # N'afficher l'erreur que si le lot n'a pas été ajouté
-                    if not lot_added:
-                        print(f"         ⚠️  Erreur ajout lot {lot_ref}: {lot_err}")
-                    # Sinon, ignorer l'erreur (élément disparu après ajout réussi)
-            
-            # PDS.3.8: Lieu de chargement (autocomplete)
-            if loading_location:
-                try:
-                    lieu_input = wait.until(
-                        EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'lieuChargCmb') or contains(@name, 'lieuChargCmb')]"))
-                    )
-                    lieu_input.clear()
-                    lieu_input.send_keys(loading_location)
-                    print(f"      ✓ Lieu chargement: {loading_location}")
-                    time.sleep(2)
-                    
-                    # Sélectionner la première suggestion
+                # Si ce n'est PAS le premier lot, cliquer sur "Nouveau" pour ajouter un nouveau préapurement
+                if lot_idx > 0:
+                    print(f"         ➕ Ajout d'un nouveau préapurement pour {lot_label}...")
                     try:
-                        lieu_suggestion = wait.until(
-                            EC.element_to_be_clickable((By.CSS_SELECTOR, "li.ui-autocomplete-item"))
+                        nouveau_preap_btn = wait.until(
+                            EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btnNouveauPreap')]"))
                         )
-                        lieu_suggestion.click()
-                        print("      ✓ Suggestion lieu sélectionnée")
-                        time.sleep(1)
-                    except:
-                        print("      ⚠️  Aucune suggestion trouvée, on continue...")
-                except Exception as e:
-                    print(f"      ⚠️  Erreur saisie lieu chargement: {e}")
-            
-            # PDS.3.8: Référence lot
-            try:
-                lot_ref_input = wait.until(
-                    EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'ref_lot') or contains(@name, 'ref_lot')]"))
-                )
-                lot_ref_input.clear()
-                lot_ref_input.send_keys(lot_reference)
-                print(f"      ✓ Référence lot: {lot_reference}")
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"      ❌ Erreur saisie référence lot: {e}")
-                return False
-            
-            # PDS.4: Cliquer sur "OK" pour récupérer les données
-            print("\n   🔍 Récupération des données du lot...")
-            try:
-                # Méthode 1: Par nom du bouton
-                ok_btn = wait.until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@id, 'btnRefPreapOk') or contains(text(), 'OK')]"))
-                )
+                        nouveau_preap_btn.click()
+                        print(f"         ✓ Bouton 'Nouveau' cliqué pour {lot_label}")
+                        time.sleep(2)
+                        
+                        # Re-remplir les champs communs (Type DS, Bureau, Régime, Année, Série, Clé)
+                        print(f"         📝 Re-remplissage des champs pour {lot_label}...")
+                        
+                        # Type DS "Depotage(05)"
+                        try:
+                            type_ds_trigger = wait.until(
+                                EC.element_to_be_clickable((By.CSS_SELECTOR, "div#mainTab\\:form3\\:typeDsId div.ui-selectonemenu-trigger"))
+                            )
+                            type_ds_trigger.click()
+                            time.sleep(1)
+                            depotage_option = wait.until(
+                                EC.element_to_be_clickable((By.XPATH, "//li[@data-label='Depotage(05)']"))
+                            )
+                            depotage_option.click()
+                            time.sleep(1)
+                        except:
+                            # Fallback JavaScript
+                            driver.execute_script("""
+                                var select = document.getElementById('mainTab:form3:typeDsId_input');
+                                if (select) { select.value = '05'; select.dispatchEvent(new Event('change', { bubbles: true })); }
+                            """)
+                            time.sleep(1)
+                        
+                        # Bureau, Régime, Année, Série, Clé
+                        driver.find_element(By.XPATH, "//input[contains(@id, 'bureauId') or contains(@name, 'bureauId')]").send_keys("301")
+                        time.sleep(0.5)
+                        driver.find_element(By.XPATH, "//input[contains(@id, 'regimeId') or contains(@name, 'regimeId')]").send_keys("000")
+                        time.sleep(0.5)
+                        driver.find_element(By.XPATH, "//input[contains(@id, 'anneeId') or contains(@name, 'anneeId')]").send_keys(str(time.strftime("%Y")))
+                        time.sleep(0.5)
+                        driver.find_element(By.XPATH, "//input[contains(@id, 'serieId') or contains(@name, 'serieId')]").send_keys(ds_serie)
+                        time.sleep(0.5)
+                        driver.find_element(By.XPATH, "//input[contains(@id, 'cleId') or contains(@name, 'cleId')]").send_keys(ds_cle)
+                        time.sleep(0.5)
+                        
+                        print(f"         ✓ Champs re-remplis pour {lot_label}")
+                        
+                    except Exception as e:
+                        print(f"         ❌ Erreur ajout nouveau préapurement: {e}")
+                        return False
+                
+                # Lieu de chargement (seulement pour le premier lot)
+                if lot_idx == 0 and loading_location:
+                    try:
+                        lieu_input = wait.until(
+                            EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'lieuChargCmb') or contains(@name, 'lieuChargCmb')]"))
+                        )
+                        lieu_input.clear()
+                        lieu_input.send_keys(loading_location)
+                        print(f"         ✓ Lieu chargement: {loading_location}")
+                        time.sleep(2)
+                        
+                        # Sélectionner la première suggestion
+                        try:
+                            lieu_suggestion = wait.until(
+                                EC.element_to_be_clickable((By.CSS_SELECTOR, "li.ui-autocomplete-item"))
+                            )
+                            lieu_suggestion.click()
+                            print("         ✓ Suggestion lieu sélectionnée")
+                            time.sleep(1)
+                        except:
+                            print("         ⚠️  Aucune suggestion trouvée, on continue...")
+                    except Exception as e:
+                        print(f"         ⚠️  Erreur saisie lieu chargement: {e}")
+                
+                # Référence lot (spécifique à chaque lot)
                 try:
-                    ok_btn.click()
-                    print("      ✓ Bouton 'OK' cliqué")
-                except:
-                    # Fallback: JavaScript click
-                    driver.execute_script("arguments[0].click();", ok_btn)
-                    print("      ✓ Bouton 'OK' cliqué (via JavaScript)")
-                time.sleep(3)
-            except Exception as e:
-                print(f"      ❌ Erreur clic 'OK': {e}")
-                return False
-            
-            # PDS.5: Valider les données récupérées
-            print("\n   ✅ Validation des données récupérées...")
-            try:
-                # Lire poids brut
-                poids_brut_span = wait.until(
-                    EC.presence_of_element_located((By.ID, "mainTab:form3:poidLotId"))
-                )
-                poids_brut_text = poids_brut_span.text.strip()
-                # Remplacer virgule par point (format français → format Python)
-                poids_brut_text = poids_brut_text.replace(',', '.')
-                # Garder la valeur EXACTE en float (ne pas arrondir)
-                retrieved_weight = float(poids_brut_text)
-                
-                # Lire nombre contenants
-                nbr_contenants_span = wait.until(
-                    EC.presence_of_element_located((By.ID, "mainTab:form3:nbrContenantLotId"))
-                )
-                nbr_contenants_text = nbr_contenants_span.text.strip()
-                # Gérer aussi le cas où il pourrait y avoir une virgule
-                nbr_contenants_text = nbr_contenants_text.replace(',', '.')
-                retrieved_containers = float(nbr_contenants_text)
-                
-                # Valeurs attendues depuis DUM data (aussi en float pour comparer exactement)
-                expected_weight = float(dum_data.get('total_gross_weight', 0))
-                expected_containers = float(dum_data.get('total_positions', 0))
-                
-                print(f"      📊 Poids brut: {retrieved_weight} (attendu: {expected_weight})")
-                print(f"      📦 Contenants: {retrieved_containers} (attendu: {expected_containers})")
-                
-                # Vérifier correspondance
-                if retrieved_weight != expected_weight or retrieved_containers != expected_containers:
-                    print(f"      ❌ DIVERGENCE DÉTECTÉE!")
-                    
-                    # Créer fichier d'erreur
-                    error_filename = f"-------------error-entering-ds-mead-on-declaration-{lta_name}-DUM{dum_number}.txt"
-                    error_filepath = os.path.join(parent_dir, error_filename)
-                    
-                    from datetime import datetime
-                    current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    
-                    with open(error_filepath, 'w', encoding='utf-8') as f:
-                        f.write(f"ERREUR - Préapurement DS - Données Incohérentes\n\n")
-                        f.write(f"LTA: {lta_name} - {validated_lta_reference}\n")
-                        f.write(f"DUM: {dum_number}\n")
-                        f.write(f"Date: {current_datetime}\n")
-                        f.write(f"Étape: Préapurement DS - Validation après click OK\n\n")
-                        f.write(f"VALEURS ATTENDUES (DUM {dum_number}):\n")
-                        f.write(f"- Poids brut (P,BRUT): {expected_weight}\n")
-                        f.write(f"- Nombre contenants (P): {expected_containers}\n\n")
-                        f.write(f"VALEURS RÉCUPÉRÉES (Système):\n")
-                        f.write(f"- Poids brut: {retrieved_weight}\n")
-                        f.write(f"- Nombre contenants: {retrieved_containers}\n\n")
-                        f.write(f"ÉCART DÉTECTÉ:\n")
-                        f.write(f"- Poids brut: {expected_weight} ≠ {retrieved_weight} (Différence: {expected_weight - retrieved_weight})\n")
-                        f.write(f"- Contenants: {expected_containers} ≠ {retrieved_containers} (Différence: {expected_containers - retrieved_containers})\n\n")
-                        f.write(f"MESSAGE: Les données du lot de dédouanement ne correspondent pas aux\n")
-                        f.write(f"données du DUM actuel. Vérification manuelle requise.\n\n")
-                        f.write(f"RÉFÉRENCE LOT UTILISÉE: {lot_reference}\n")
-                        f.write(f"RÉFÉRENCE DS MEAD: {ds_serie} {ds_cle}\n")
-                    
-                    print(f"      ✓ Fichier d'erreur créé: {error_filename}")
-                    print(f"      ⚠️  Arrêt du traitement de ce DUM")
+                    lot_ref_input = wait.until(
+                        EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'preapurement_ref_lot') or contains(@name, 'preapurement_ref_lot')]"))
+                    )
+                    lot_ref_input.clear()
+                    lot_ref_input.send_keys(current_lot_ref)
+                    print(f"         ✓ Référence lot: {current_lot_ref}")
+                    time.sleep(0.5)
+                except Exception as e:
+                    print(f"         ❌ Erreur saisie référence lot: {e}")
                     return False
                 
-                print(f"      ✅ VALIDATION OK - Données correspondent")
-                
-            except Exception as e:
-                print(f"      ❌ Erreur validation données: {e}")
-                return False
-            
-            # PDS.6: Confirmer le préapurement
-            print("\n   ✅ Confirmation du préapurement...")
-            try:
-                confirmer_btn = wait.until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@id, 'btnConfirmerPreap') or (contains(@class, 'ui-button') and contains(., 'Confirmer'))]"))
-                )
+                # Cliquer sur "OK" pour récupérer les données
+                print(f"         🔍 Récupération des données du lot...")
                 try:
-                    confirmer_btn.click()
-                    print("      ✓ Bouton 'Confirmer' cliqué")
-                except:
-                    # Fallback: JavaScript click
-                    driver.execute_script("arguments[0].click();", confirmer_btn)
-                    print("      ✓ Bouton 'Confirmer' cliqué (via JavaScript)")
-                time.sleep(2)
-            except Exception as e:
-                print(f"      ❌ Erreur confirmation préapurement: {e}")
-                return False
+                    ok_btn = wait.until(
+                        EC.element_to_be_clickable((By.XPATH, "//button[contains(@id, 'btnRefPreapOk') or contains(text(), 'OK')]"))
+                    )
+                    try:
+                        ok_btn.click()
+                        print(f"         ✓ Bouton 'OK' cliqué")
+                    except:
+                        driver.execute_script("arguments[0].click();", ok_btn)
+                        print(f"         ✓ Bouton 'OK' cliqué (via JavaScript)")
+                    time.sleep(3)
+                except Exception as e:
+                    print(f"         ❌ Erreur clic 'OK': {e}")
+                    return False
+                
+                # Validation des données (SEULEMENT pour LTA normal, PAS pour single DUM division)
+                if not is_single_dum:
+                    print(f"\n         ✅ Validation des données récupérées...")
+                    try:
+                        # Lire poids brut
+                        poids_brut_span = wait.until(
+                            EC.presence_of_element_located((By.ID, "mainTab:form3:poidLotId"))
+                        )
+                        poids_brut_text = poids_brut_span.text.strip().replace(',', '.')
+                        retrieved_weight = float(poids_brut_text)
+                        
+                        # Lire nombre contenants
+                        nbr_contenants_span = wait.until(
+                            EC.presence_of_element_located((By.ID, "mainTab:form3:nbrContenantLotId"))
+                        )
+                        nbr_contenants_text = nbr_contenants_span.text.strip().replace(',', '.')
+                        retrieved_containers = float(nbr_contenants_text)
+                        
+                        # Valeurs attendues
+                        expected_weight = float(dum_data.get('total_gross_weight', 0))
+                        expected_containers = float(dum_data.get('total_positions', 0))
+                        
+                        print(f"         📊 Poids brut: {retrieved_weight} (attendu: {expected_weight})")
+                        print(f"         📦 Contenants: {retrieved_containers} (attendu: {expected_containers})")
+                        
+                        # Vérifier correspondance
+                        if retrieved_weight != expected_weight or retrieved_containers != expected_containers:
+                            print(f"         ❌ DIVERGENCE DÉTECTÉE!")
+                            
+                            # Créer fichier d'erreur
+                            error_filename = f"-------------error-entering-ds-mead-on-declaration-{lta_name}-DUM{dum_number}.txt"
+                            error_filepath = os.path.join(parent_dir, error_filename)
+                            
+                            from datetime import datetime
+                            current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            
+                            with open(error_filepath, 'w', encoding='utf-8') as f:
+                                f.write(f"ERREUR - Préapurement DS - Données Incohérentes\n\n")
+                                f.write(f"LTA: {lta_name} - {validated_lta_reference}\n")
+                                f.write(f"DUM: {dum_number}\n")
+                                f.write(f"Date: {current_datetime}\n")
+                                f.write(f"Étape: Préapurement DS - Validation après click OK\n\n")
+                                f.write(f"VALEURS ATTENDUES (DUM {dum_number}):\n")
+                                f.write(f"- Poids brut (P,BRUT): {expected_weight}\n")
+                                f.write(f"- Nombre contenants (P): {expected_containers}\n\n")
+                                f.write(f"VALEURS RÉCUPÉRÉES (Système):\n")
+                                f.write(f"- Poids brut: {retrieved_weight}\n")
+                                f.write(f"- Nombre contenants: {retrieved_containers}\n\n")
+                                f.write(f"ÉCART DÉTECTÉ:\n")
+                                f.write(f"- Poids brut: {expected_weight} ≠ {retrieved_weight} (Différence: {expected_weight - retrieved_weight})\n")
+                                f.write(f"- Contenants: {expected_containers} ≠ {retrieved_containers} (Différence: {expected_containers - retrieved_containers})\n\n")
+                                f.write(f"MESSAGE: Les données du lot de dédouanement ne correspondent pas aux\n")
+                                f.write(f"données du DUM actuel. Vérification manuelle requise.\n\n")
+                                f.write(f"RÉFÉRENCE LOT UTILISÉE: {current_lot_ref}\n")
+                                f.write(f"RÉFÉRENCE DS MEAD: {ds_serie} {ds_cle}\n")
+                            
+                            print(f"         ✓ Fichier d'erreur créé: {error_filename}")
+                            print(f"         ⚠️  Arrêt du traitement de ce DUM")
+                            return False
+                        
+                        print(f"         ✅ VALIDATION OK - Données correspondent")
+                        
+                    except Exception as e:
+                        print(f"         ❌ Erreur validation données: {e}")
+                        return False
+                else:
+                    print(f"         ⏭️  Validation poids/contenants ignorée (DUM unique avec division)")
+                
+                # Confirmer le préapurement
+                print(f"         ✅ Confirmation du préapurement {lot_label}...")
+                try:
+                    confirmer_btn = wait.until(
+                        EC.element_to_be_clickable((By.XPATH, "//button[contains(@id, 'btnConfirmerPreap') or (contains(@class, 'ui-button') and contains(., 'Confirmer'))]"))
+                    )
+                    try:
+                        confirmer_btn.click()
+                        print(f"         ✓ Bouton 'Confirmer' cliqué pour {lot_label}")
+                    except:
+                        driver.execute_script("arguments[0].click();", confirmer_btn)
+                        print(f"         ✓ Bouton 'Confirmer' cliqué (via JavaScript) pour {lot_label}")
+                    time.sleep(2)
+                except Exception as e:
+                    print(f"         ❌ Erreur confirmation préapurement: {e}")
+                    return False
+                
+                print(f"         ✅ {lot_label} traité avec succès!")
+            
+            # FIN DE LA BOUCLE - Tous les lots ont été ajoutés
             
             print("\n   ✅ Préapurement DS complété avec succès!")
             print("="*70)
