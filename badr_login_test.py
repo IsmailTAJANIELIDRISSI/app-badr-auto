@@ -1764,17 +1764,22 @@ def correct_blocage_weights(lta_folder_path, corrected_weight):
             # Vérifier si c'est un header DUM
             if cell_value and isinstance(cell_value, str) and 'DUM' in cell_value.upper():
                 dum_count += 1
+                pnet_row = row + 3  # P,NET est 3 lignes sous le header
                 pbrut_row = row + 4  # P,BRUT est 4 lignes sous le header
+                pnet_cell = f'B{pnet_row}'
                 pbrut_cell = f'B{pbrut_row}'
+                pnet_value = ws[pnet_cell].value
                 pbrut_value = ws[pbrut_cell].value
                 
                 dum_pbrut_cells.append({
                     'dum_number': dum_count,
-                    'cell': pbrut_cell,
-                    'value': float(pbrut_value) if pbrut_value else 0.0
+                    'pnet_cell': pnet_cell,
+                    'pbrut_cell': pbrut_cell,
+                    'pnet_value': float(pnet_value) if pnet_value else 0.0,
+                    'pbrut_value': float(pbrut_value) if pbrut_value else 0.0
                 })
                 
-                print(f"         ✓ DUM {dum_count} trouvé ({pbrut_cell}): {pbrut_value} kg")
+                print(f"         ✓ DUM {dum_count} trouvé ({pbrut_cell}): P,NET={pnet_value} kg, P,BRUT={pbrut_value} kg")
                 
                 row += 7  # Passer au prochain DUM potentiel
             else:
@@ -1782,7 +1787,7 @@ def correct_blocage_weights(lta_folder_path, corrected_weight):
                 
                 # Si on a déjà trouvé des DUMs et qu'on a 10 lignes vides, arrêter
                 if dum_count > 0:
-                    last_pbrut_row = int(dum_pbrut_cells[-1]['cell'][1:])
+                    last_pbrut_row = int(dum_pbrut_cells[-1]['pbrut_cell'][1:])
                     if row > last_pbrut_row and all(ws[f'C{r}'].value is None for r in range(row, min(row + 10, 500))):
                         break
         
@@ -1795,32 +1800,84 @@ def correct_blocage_weights(lta_folder_path, corrected_weight):
         print(f"         📊 Total: {dum_count} DUMs détectés")
         
         # BC.2.3: Calculer la somme des DUM P,BRUT
-        dum_sum = sum(dum['value'] for dum in dum_pbrut_cells)
+        dum_sum = sum(dum['pbrut_value'] for dum in dum_pbrut_cells)
         dum_sum = round(dum_sum, 2)
         print(f"         📊 Somme actuelle: {dum_sum} kg")
         
-        # BC.2.4: Ajuster le dernier DUM si nécessaire
+        # BC.2.4: Ajuster les DUMs si nécessaire
         difference = round(dum_sum - corrected_weight, 2)
         
         if abs(difference) < 0.01:
             print(f"\n      ✅ Aucun ajustement nécessaire (différence: {difference} kg)")
-            last_adjusted_value = dum_pbrut_cells[-1]['value']
         else:
             print(f"\n      ⚙️  Ajustement requis:")
-            print(f"         Différence: {dum_sum} - {corrected_weight} = {difference} kg")
+            print(f"         Différence à ajuster: {difference} kg")
             
-            last_dum = dum_pbrut_cells[-1]
-            old_value = last_dum['value']
-            new_value = round(old_value - difference, 2)
-            
-            ws[last_dum['cell']] = new_value
-            print(f"         ✓ Dernier DUM ajusté ({last_dum['cell']}): {old_value} → {new_value}")
+            if difference > 0:
+                # Cas 1: On doit SOUSTRAIRE (dum_sum > corrected_weight)
+                print(f"         📉 Soustraction nécessaire")
+                
+                remaining_to_subtract = difference
+                adjusted_dums = []
+                
+                # Parcourir les DUMs en ordre inverse pour soustraire
+                for i in range(len(dum_pbrut_cells) - 1, -1, -1):
+                    if remaining_to_subtract <= 0.01:
+                        break
+                    
+                    dum = dum_pbrut_cells[i]
+                    # Calculer la marge disponible: P,BRUT - P,NET
+                    available_margin = round(dum['pbrut_value'] - dum['pnet_value'], 2)
+                    
+                    if available_margin > 0.01:
+                        # On peut soustraire de ce DUM
+                        can_subtract = min(available_margin, remaining_to_subtract)
+                        new_pbrut = round(dum['pbrut_value'] - can_subtract, 2)
+                        
+                        # Mettre à jour dans Excel
+                        ws[dum['pbrut_cell']] = new_pbrut
+                        
+                        adjusted_dums.append({
+                            'dum_number': dum['dum_number'],
+                            'cell': dum['pbrut_cell'],
+                            'old_value': dum['pbrut_value'],
+                            'new_value': new_pbrut,
+                            'subtracted': can_subtract
+                        })
+                        
+                        print(f"         ✓ DUM {dum['dum_number']} ({dum['pbrut_cell']}): {dum['pbrut_value']} → {new_pbrut} kg (-{can_subtract} kg)")
+                        print(f"            Marge respectée: P,NET={dum['pnet_value']} ≤ P,BRUT={new_pbrut}")
+                        
+                        remaining_to_subtract = round(remaining_to_subtract - can_subtract, 2)
+                        dum['pbrut_value'] = new_pbrut  # Mettre à jour pour le calcul final
+                    else:
+                        print(f"         ⚠️  DUM {dum['dum_number']}: Pas de marge (P,BRUT={dum['pbrut_value']} ≈ P,NET={dum['pnet_value']})")
+                
+                if remaining_to_subtract > 0.01:
+                    print(f"         ⚠️  ATTENTION: {remaining_to_subtract} kg n'ont pas pu être soustraits (marges insuffisantes)")
+                else:
+                    print(f"         ✅ Soustraction complète réussie")
+                    
+            else:
+                # Cas 2: On doit AJOUTER (dum_sum < corrected_weight)
+                print(f"         📈 Addition nécessaire")
+                
+                to_add = abs(difference)
+                last_dum = dum_pbrut_cells[-1]
+                new_pbrut = round(last_dum['pbrut_value'] + to_add, 2)
+                
+                ws[last_dum['pbrut_cell']] = new_pbrut
+                print(f"         ✓ Dernier DUM ajusté ({last_dum['pbrut_cell']}): {last_dum['pbrut_value']} → {new_pbrut} kg (+{to_add} kg)")
+                print(f"            Règle respectée: P,NET={last_dum['pnet_value']} < P,BRUT={new_pbrut}")
+                
+                last_dum['pbrut_value'] = new_pbrut  # Mettre à jour pour le calcul final
             
             # Vérifier la nouvelle somme
-            new_sum = round(dum_sum - difference, 2)
-            print(f"         ✓ Nouvelle somme: {new_sum} kg ✅")
-            
-            last_adjusted_value = new_value
+            new_sum = sum(dum['pbrut_value'] for dum in dum_pbrut_cells)
+            new_sum = round(new_sum, 2)
+            print(f"         ✓ Nouvelle somme: {new_sum} kg")
+            print(f"         ✓ Objectif: {corrected_weight} kg")
+            print(f"         ✓ Écart final: {round(abs(new_sum - corrected_weight), 2)} kg ✅")
         
         # Sauvegarder generated_excel
         wb.save(generated_excel_path)
@@ -1836,13 +1893,19 @@ def correct_blocage_weights(lta_folder_path, corrected_weight):
         wb_summary = load_workbook(summary_file_path, data_only=False)
         ws_summary = wb_summary.active
         
-        # Calculer la dernière ligne: DUM_Count + 1 (header en ligne 1)
-        last_row = dum_count + 1
-        last_cell = f'D{last_row}'
-        
-        old_summary_value = ws_summary[last_cell].value
-        ws_summary[last_cell] = last_adjusted_value
-        print(f"         ✓ Dernière ligne ({last_cell}): {old_summary_value} → {last_adjusted_value}")
+        # Mettre à jour TOUS les DUMs ajustés dans summary_file (colonne D)
+        # Format summary_file: Row 1 = Header, Row 2 = DUM 1, Row 3 = DUM 2, etc.
+        # Colonne D = P,BRUT
+        for dum in dum_pbrut_cells:
+            summary_row = dum['dum_number'] + 1  # +1 car header en ligne 1
+            summary_cell = f'D{summary_row}'
+            old_value = ws_summary[summary_cell].value
+            new_value = dum['pbrut_value']
+            
+            # Ne logger que si la valeur a changé
+            if old_value != new_value:
+                ws_summary[summary_cell] = new_value
+                print(f"         ✓ DUM {dum['dum_number']} ({summary_cell}): {old_value} → {new_value}")
         
         # Sauvegarder summary_file
         wb_summary.save(summary_file_path)
