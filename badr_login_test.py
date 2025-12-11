@@ -8062,7 +8062,7 @@ if __name__ == "__main__":
                             if selected_lta_indices == "all":
                                 print("\n✓ Mode GUI: Traitement de TOUS les LTAs")
                                 s = lta_folders
-                            elif isinstance(selssected_lta_indices, list):
+                            elif isinstance(selected_lta_indices, list):
                                 print(f"\n✓ Mode GUI: Traitement de {len(selected_lta_indices)} LTA(s) sélectionné(s)")
                                 folders_to_process = [lta_folders[i] for i in selected_lta_indices if 0 <= i < len(lta_folders)]
                                 if folders_to_process:

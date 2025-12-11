@@ -51,16 +51,59 @@ class PartialConfigDialog:
             
             if not excel_files:
                 logger.error(f"No generated_excel file found in {lta_subfolder}")
+                messagebox.showwarning(
+                    "Fichier introuvable",
+                    f"Le fichier 'generated_excel' n'a pas été trouvé dans:\n{lta_subfolder}\n\n"
+                    "Veuillez exécuter la détection LTA d'abord."
+                )
                 return None
             
+            logger.info(f"Loading LTA data from: {excel_files[0]}")
             wb = load_workbook(excel_files[0], data_only=True)
+            
+            # Check if Summary sheet exists
+            if 'Summary' not in wb.sheetnames:
+                logger.error(f"Summary sheet not found. Available sheets: {wb.sheetnames}")
+                wb.close()
+                messagebox.showerror(
+                    "Erreur",
+                    f"La feuille 'Summary' n'existe pas dans le fichier Excel.\n\n"
+                    f"Feuilles disponibles: {', '.join(wb.sheetnames)}"
+                )
+                return None
+            
             ws = wb['Summary']
             
             # Get total weight and positions from Summary sheet
-            # Weight is in column D, row 5 (P,BRUT)
-            # Positions is in column D, row 6 (P)
-            total_weight = ws['D5'].value
-            total_positions = ws['D6'].value
+            # Try multiple possible locations for totals
+            total_weight = None
+            total_positions = None
+            
+            # Method 1: Try cells D5 and D6
+            if ws['D5'].value and isinstance(ws['D5'].value, (int, float)):
+                total_weight = ws['D5'].value
+            if ws['D6'].value and isinstance(ws['D6'].value, (int, float)):
+                total_positions = ws['D6'].value
+            
+            # Method 2: Search for "P,BRUT" and "P" labels in column C
+            if total_weight is None or total_positions is None:
+                for row in range(1, 20):
+                    cell_c = ws[f'C{row}'].value
+                    if cell_c:
+                        cell_c_str = str(cell_c).strip().upper()
+                        if 'P,BRUT' in cell_c_str or 'P.BRUT' in cell_c_str:
+                            val = ws[f'D{row}'].value
+                            if val and isinstance(val, (int, float)):
+                                total_weight = val
+                                logger.info(f"Found total weight at D{row}: {total_weight}")
+                        elif cell_c_str == 'P' and total_weight:  # P usually comes after P,BRUT
+                            val = ws[f'D{row}'].value
+                            if val and isinstance(val, (int, float)):
+                                total_positions = val
+                                logger.info(f"Found total positions at D{row}: {total_positions}")
+                                break
+            
+            logger.info(f"Total weight: {total_weight}, Total positions: {total_positions}")
             
             # Count DUMs by checking C11, C18, C25, C32, C39...
             dums = []
@@ -76,6 +119,8 @@ class PartialConfigDialog:
                     dum_weight = ws[f'D{dum_weight_row}'].value or 0
                     dum_positions = ws[f'D{dum_positions_row}'].value or 0
                     
+                    logger.info(f"DUM {dum_idx}: weight={dum_weight}, positions={dum_positions}")
+                    
                     dums.append({
                         'number': dum_idx,
                         'weight': float(dum_weight) if dum_weight else 0,
@@ -86,6 +131,8 @@ class PartialConfigDialog:
             
             wb.close()
             
+            logger.info(f"Loaded {len(dums)} DUMs")
+            
             return {
                 'total_weight': float(total_weight) if total_weight else 0,
                 'total_positions': int(total_positions) if total_positions else 0,
@@ -94,6 +141,11 @@ class PartialConfigDialog:
             
         except Exception as e:
             logger.error(f"Error loading LTA data: {e}", exc_info=True)
+            messagebox.showerror(
+                "Erreur",
+                f"Erreur lors du chargement des données LTA:\n{str(e)}\n\n"
+                f"Vérifiez le fichier Excel 'generated_excel' dans:\n{lta_subfolder}"
+            )
             return None
     
     def _setup_ui(self):
@@ -282,44 +334,63 @@ class PartialConfigDialog:
     
     def _update_distribution_preview(self):
         """Update the DUM distribution preview for all partials"""
-        # Collect partial weights
-        partial_weights = []
-        for form_data in self.partial_forms:
-            try:
-                weight = float(form_data['weight_var'].get().strip())
-                partial_weights.append(weight)
-            except ValueError:
-                partial_weights.append(0)
-        
-        # Calculate distribution
-        distribution = self._calculate_dum_distribution(partial_weights)
-        
-        # Update each partial's display
-        for idx, form_data in enumerate(self.partial_forms):
-            if idx < len(distribution):
-                partial_dist = distribution[idx]
-                
-                # Update positions
-                form_data['positions_var'].set(str(partial_dist['positions']))
-                
-                # Update DUM list
-                dums_text = form_data['dums_text']
-                dums_text.configure(state='normal')
-                dums_text.delete('1.0', tk.END)
-                
-                for dum_info in partial_dist['dums']:
-                    dum_num = dum_info['dum_number']
-                    dum_weight = dum_info['weight']
-                    dum_positions = dum_info['positions']
-                    is_split = dum_info['is_split']
-                    split_id = dum_info.get('split_id', '')
+        try:
+            # Validate LTA data
+            if not self.lta_data.get('dums') or self.lta_data.get('total_weight', 0) <= 0:
+                # Show error message in preview
+                for form_data in self.partial_forms:
+                    form_data['positions_var'].set("0")
+                    dums_text = form_data['dums_text']
+                    dums_text.configure(state='normal')
+                    dums_text.delete('1.0', tk.END)
+                    dums_text.insert(tk.END, "⚠️ Données LTA invalides\n(Poids = 0 ou aucun DUM)")
+                    dums_text.configure(state='disabled')
+                return
+            
+            # Collect partial weights
+            partial_weights = []
+            for form_data in self.partial_forms:
+                try:
+                    weight = float(form_data['weight_var'].get().strip())
+                    partial_weights.append(weight)
+                except ValueError:
+                    partial_weights.append(0)
+            
+            # Calculate distribution
+            distribution = self._calculate_dum_distribution(partial_weights)
+            
+            # Update each partial's display
+            for idx, form_data in enumerate(self.partial_forms):
+                if idx < len(distribution):
+                    partial_dist = distribution[idx]
                     
-                    if is_split:
-                        dums_text.insert(tk.END, f"DUM {dum_num} {split_id}: {dum_weight:.1f}kg, {dum_positions}p ⚠️ PARTIEL\n")
+                    # Update positions
+                    form_data['positions_var'].set(str(partial_dist['positions']))
+                    
+                    # Update DUM list
+                    dums_text = form_data['dums_text']
+                    dums_text.configure(state='normal')
+                    dums_text.delete('1.0', tk.END)
+                    
+                    if not partial_dist['dums']:
+                        dums_text.insert(tk.END, "Aucun DUM assigné")
                     else:
-                        dums_text.insert(tk.END, f"DUM {dum_num}: {dum_weight:.1f}kg, {dum_positions}p\n")
-                
-                dums_text.configure(state='disabled')
+                        for dum_info in partial_dist['dums']:
+                            dum_num = dum_info['dum_number']
+                            dum_weight = dum_info['weight']
+                            dum_positions = dum_info['positions']
+                            is_split = dum_info['is_split']
+                            split_id = dum_info.get('split_id', '')
+                            
+                            if is_split:
+                                dums_text.insert(tk.END, f"DUM {dum_num} {split_id}: {dum_weight:.1f}kg, {dum_positions}p ⚠️ PARTIEL\n")
+                            else:
+                                dums_text.insert(tk.END, f"DUM {dum_num}: {dum_weight:.1f}kg, {dum_positions}p\n")
+                    
+                    dums_text.configure(state='disabled')
+        except Exception as e:
+            # Silently handle preview errors to avoid disrupting user input
+            logger.error(f"Error updating distribution preview: {e}", exc_info=True)
     
     def _calculate_dum_distribution(self, partial_weights):
         """
@@ -333,6 +404,13 @@ class PartialConfigDialog:
         total_lta_positions = self.lta_data['total_positions']
         dums = self.lta_data['dums']
         
+        # Validate LTA data
+        if not dums or total_lta_weight <= 0 or total_lta_positions <= 0:
+            # Return empty distribution if LTA data is invalid
+            for _ in partial_weights:
+                distribution.append({'weight': 0, 'positions': 0, 'dums': []})
+            return distribution
+        
         current_dum_idx = 0
         remaining_dum_weight = dums[0]['weight'] if dums else 0
         remaining_dum_positions = dums[0]['positions'] if dums else 0
@@ -343,8 +421,11 @@ class PartialConfigDialog:
                 distribution.append({'weight': 0, 'positions': 0, 'dums': []})
                 continue
             
-            # Calculate positions for this partial
-            partial_positions = round((partial_weight * total_lta_positions) / total_lta_weight)
+            # Calculate positions for this partial (safe division)
+            if total_lta_weight > 0:
+                partial_positions = round((partial_weight * total_lta_positions) / total_lta_weight)
+            else:
+                partial_positions = 0
             
             partial_dums = []
             weight_accumulated = 0
@@ -404,6 +485,18 @@ class PartialConfigDialog:
     def _save_config(self):
         """Validate and save configuration"""
         try:
+            # Validate LTA data first
+            if not self.lta_data.get('dums') or self.lta_data.get('total_weight', 0) <= 0:
+                messagebox.showerror(
+                    "Erreur",
+                    "Données LTA invalides.\n\n"
+                    "Le LTA doit avoir:\n"
+                    "- Un poids total > 0\n"
+                    "- Au moins un DUM\n\n"
+                    "Vérifiez le fichier Excel du LTA."
+                )
+                return
+            
             # Collect data from forms
             partials = []
             total_weight_check = 0
