@@ -548,3 +548,71 @@ def find_lta_pdf(lta_folder_path, folder_name):
     except Exception as e:
         logger.error(f"Error finding PDF for {folder_name}: {e}")
         return None
+
+
+# ===================================================================
+# PARTIAL LTA FUNCTIONS
+# ===================================================================
+
+def get_lta_partial_info(lta_folder_path, folder_name):
+    """
+    Get partial LTA configuration information
+    
+    Args:
+        lta_folder_path: Path to parent folder containing LTA folders
+        folder_name: Name of LTA folder (e.g., "1er LTA", "2eme LTA")
+        
+    Returns:
+        Dict with partial information or None if not configured
+    """
+    try:
+        import json
+        
+        # Check for partial config file in the LTA subfolder
+        lta_subfolder = os.path.join(lta_folder_path, folder_name)
+        config_file = os.path.join(lta_subfolder, f"{folder_name}_partial_config.json")
+        
+        if not os.path.exists(config_file):
+            return None
+        
+        with open(config_file, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        
+        logger.info(f"Loaded partial config for {folder_name}: {len(config.get('partials', []))} partials")
+        return config
+        
+    except Exception as e:
+        logger.error(f"Error reading partial config for {folder_name}: {e}")
+        return None
+
+
+def save_lta_partial_config(lta_folder_path, folder_name, config):
+    """
+    Save partial LTA configuration
+    
+    Args:
+        lta_folder_path: Path to parent folder containing LTA folders
+        folder_name: Name of LTA folder
+        config: Partial configuration dict
+        
+    Returns:
+        bool: Success status
+    """
+    try:
+        import json
+        
+        # Save to LTA subfolder
+        lta_subfolder = os.path.join(lta_folder_path, folder_name)
+        os.makedirs(lta_subfolder, exist_ok=True)
+        
+        config_file = os.path.join(lta_subfolder, f"{folder_name}_partial_config.json")
+        
+        with open(config_file, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"Saved partial config for {folder_name}: {config_file}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error saving partial config for {folder_name}: {e}")
+        return False

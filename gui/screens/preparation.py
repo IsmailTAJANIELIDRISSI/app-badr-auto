@@ -571,6 +571,65 @@ class PreparationScreen:
             blocage_cb.config(command=toggle_blocage_func)
             toggle_blocage_func()
             
+            row_num += 1
+            
+            # === ROW 6: Partial LTA Section ===
+            # Separator
+            ttk.Separator(card, orient='horizontal').grid(
+                row=row_num, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(10, 10)
+            )
+            row_num += 1
+            
+            # Import partial functions
+            from gui.utils.file_utils import get_lta_partial_info
+            
+            # Get partial info
+            partial_info = get_lta_partial_info(folder, lta['name'])
+            
+            partial_var = tk.BooleanVar(value=partial_info is not None)
+            partial_cb = ttk.Checkbutton(
+                card,
+                text="📦 LTA Partiel (Plusieurs vols)",
+                variable=partial_var
+            )
+            partial_cb.grid(row=row_num, column=0, columnspan=2, sticky=tk.W, pady=5)
+            
+            # Configure button
+            configure_btn = ttk.Button(
+                card,
+                text="⚙️ Configurer",
+                command=lambda: self._configure_partial(folder, lta['name'], partial_var)
+            )
+            configure_btn.grid(row=row_num, column=2, sticky=tk.E, pady=5)
+            
+            row_num += 1
+            
+            # Partial info display (shown only if configured)
+            partial_info_frame = ttk.Frame(card)
+            partial_info_frame.grid(row=row_num, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+            
+            if partial_info:
+                num_partials = len(partial_info.get('partials', []))
+                info_text = f"✓ Configuré: {num_partials} partiel(s)"
+                ttk.Label(partial_info_frame, text=info_text, font=('Arial', 9, 'italic'), foreground='green').grid(
+                    row=0, column=0, sticky=tk.W, padx=(20, 0)
+                )
+            
+            # Toggle configure button based on checkbox
+            def make_toggle_partial(pvar, pbtn, pframe):
+                def toggle():
+                    if pvar.get():
+                        pbtn.config(state="normal")
+                        pframe.grid()
+                    else:
+                        pbtn.config(state="disabled")
+                        pframe.grid_remove()
+                return toggle
+            
+            toggle_partial_func = make_toggle_partial(partial_var, configure_btn, partial_info_frame)
+            partial_cb.config(command=toggle_partial_func)
+            toggle_partial_func()
+            
             # Store all variables
             self.lta_inputs.append({
                 'lta': lta,
@@ -583,6 +642,7 @@ class PreparationScreen:
                 'blocage_var': blocage_var,
                 'total_weight_var': total_weight_var,
                 'blocked_weight_var': blocked_weight_var,
+                'partial_var': partial_var,
                 'status_var': ds_status_var,
                 'status_label': ds_status_label
             })
@@ -732,6 +792,23 @@ class PreparationScreen:
         else:
             self.app.log_message(f"Sauvegarde terminée avec {error_count} erreur(s)", "WARNING")
             messagebox.showwarning("Attention", f"Sauvegarde terminée avec {error_count} erreur(s)")
+    
+    def _configure_partial(self, lta_folder_path, folder_name, partial_var):
+        """Open partial LTA configuration dialog"""
+        if not partial_var.get():
+            messagebox.showinfo("Info", "Veuillez cocher la case 'LTA Partiel' d'abord")
+            return
+        
+        # Import the partial configuration dialog
+        from gui.screens.partial_config_dialog import PartialConfigDialog
+        
+        dialog = PartialConfigDialog(self.parent, lta_folder_path, folder_name)
+        self.parent.wait_window(dialog.dialog)
+        
+        # Refresh the display to show updated info
+        if dialog.config_saved:
+            self.populate_lta_table()
+            messagebox.showinfo("Succès", "Configuration partielle sauvegardée!")
     
     def _create_tooltip(self, widget, text):
         """Create a tooltip for a widget"""

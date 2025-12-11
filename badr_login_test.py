@@ -20,6 +20,22 @@ from dotenv import load_dotenv
 import json
 import psutil
 
+# Import file_utils for partial LTA configuration
+try:
+    from gui.utils.file_utils import get_lta_partial_info
+except ImportError:
+    # Fallback if gui module not available
+    def get_lta_partial_info(lta_folder_path, folder_name):
+        try:
+            config_path = os.path.join(lta_folder_path, f"{folder_name}_partial_config.json")
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            return None
+        except Exception as e:
+            print(f"Error loading partial config: {e}")
+            return None
+
 # Load environment variables
 load_dotenv()
 
@@ -2124,6 +2140,113 @@ def return_to_home_after_error(driver):
     except Exception as e:
         print(f"      ❌ Erreur retour accueil: {e}")
 
+def find_partial_by_number(partial_config, partial_number):
+    """
+    Finds a partial configuration by its number.
+    
+    Args:
+        partial_config: Full partial configuration dict
+        partial_number: Partial number to find (1, 2, etc.)
+    
+    Returns:
+        dict: Partial data or None if not found
+    """
+    if not partial_config or 'partials' not in partial_config:
+        return None
+    
+    for partial in partial_config['partials']:
+        if partial.get('partial_number') == partial_number:
+            return partial
+    
+    return None
+
+def get_dum_lots_for_partial(partial_data):
+    """
+    Extracts DUM lot information from partial data for ED creation.
+    
+    Args:
+        partial_data: Partial configuration dict containing DUMs
+    
+    Returns:
+        list: List of dicts with dum_name, p (positions), p_brut (weight)
+    """
+    if not partial_data or 'dums' not in partial_data:
+        return []
+    
+    dum_lots = []
+    for dum in partial_data['dums']:
+        dum_lots.append({
+            'dum_name': f"DUM {dum['dum_number']}",
+            'p': dum['positions'],
+            'p_brut': dum['weight']
+        })
+    
+    return dum_lots
+
+def get_dum_preapurement_lots(dum_number, partial_config, validated_lta_reference):
+    """
+    Determines the Préapurement DS lot structure for a DUM based on partial configuration.
+    
+    Args:
+        dum_number: DUM number (e.g., "1", "2", "3")
+        partial_config: Full partial configuration dict (or None for standard LTA)
+        validated_lta_reference: Validated LTA reference (without /1, /2 suffix)
+    
+    Returns:
+        list: List of lot dicts with 'reference', 'ds_serie', 'ds_cle', 'split_id'
+    """
+    if not partial_config:
+        # Standard LTA - single lot with default format
+        return [{
+            'reference': f"{validated_lta_reference}/{dum_number}",
+            'ds_serie': None,  # Will use shipper data
+            'ds_cle': None,
+            'split_id': None
+        }]
+    
+    dum_str = str(dum_number)
+    
+    # Check if DUM is split
+    if dum_str in partial_config.get('split_dums', {}):
+        # Split DUM - multiple lots
+        split_info = partial_config['split_dums'][dum_str]
+        lots = []
+        
+        for split in split_info['splits']:
+            partial_data = find_partial_by_number(partial_config, split['partial'])
+            if partial_data:
+                lots.append({
+                    'reference': f"{validated_lta_reference}/{split['partial']}",
+                    'ds_serie': partial_data['ds_serie'],
+                    'ds_cle': partial_data['ds_cle'],
+                    'split_id': split['split_id'],
+                    'weight': split['weight'],
+                    'positions': split['positions']
+                })
+        
+        return lots
+    else:
+        # Normal DUM in partial LTA - find which partial it belongs to
+        for partial in partial_config['partials']:
+            for dum in partial['dums']:
+                if dum['dum_number'] == int(dum_number):
+                    return [{
+                        'reference': f"{validated_lta_reference}/{partial['partial_number']}",
+                        'ds_serie': partial['ds_serie'],
+                        'ds_cle': partial['ds_cle'],
+                        'split_id': None,
+                        'weight': dum['weight'],
+                        'positions': dum['positions']
+                    }]
+        
+        # Fallback - shouldn't happen
+        return [{
+            'reference': f"{validated_lta_reference}/{dum_number}",
+            'ds_serie': None,
+            'ds_cle': None,
+            'split_id': None
+        }]
+
 def create_etat_depotage(driver, lta_folder_path, shipper_data):
     """
     Crée un Etat de Dépotage (Unloading Statement) pour une LTA avec référence DS MEAD.
@@ -3870,6 +3993,536 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
             pass
         return False
 
+def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partial_number):
+    """
+    Crée un Etat de Dépotage pour un partiel spécifique d'une LTA.
+    
+    Args:
+        driver: Selenium WebDriver instance
+        lta_folder_path: Path to LTA folder
+        partial_config: Full partial configuration dict
+        partial_number: Which partial to process (1, 2, etc.)
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Extract partial data
+        partial_data = find_partial_by_number(partial_config, partial_number)
+        if not partial_data:
+            print(f"❌ Partiel {partial_number} introuvable dans la configuration")
+            return False
+        
+        print(f"\n📦 CRÉATION ED - PARTIEL {partial_number}")
+        print(f"   Poids: {partial_data['weight']} kg")
+        print(f"   Positions: {partial_data['positions']}")
+        print(f"   DS: {partial_data['ds_serie']} {partial_data['ds_cle']}")
+        print(f"   DUMs: {[d['dum_number'] for d in partial_data['dums']]}")
+        
+        # Create shipper_data structure for partial
+        shipper_data = {
+            'shipper_name': 'Partial LTA',  # Will be updated from shipper file
+            'has_ds_mead': True,
+            'serie': partial_data['ds_serie'],
+            'cle': partial_data['ds_cle'],
+            'loading_location': partial_data['loading_location']
+        }
+        
+        # Read shipper name from file
+        lta_name = os.path.basename(lta_folder_path)
+        parent_dir = os.path.dirname(lta_folder_path)
+        safe_name = lta_name.replace(' ', '_')
+        txt_file_path = os.path.join(parent_dir, f"{safe_name}_shipper_name.txt")
+        
+        if os.path.exists(txt_file_path):
+            shipper_file_data = read_shipper_from_txt(txt_file_path)
+            if shipper_file_data:
+                shipper_data['shipper_name'] = shipper_file_data['shipper_name']
+        
+        wait = WebDriverWait(driver, 15)
+        
+        # ==================================================================
+        # Navigation vers "Etat de Dépotage - Voyage Aérien"
+        # ==================================================================
+        print("\n📂 Navigation: MISE EN DOUANE → Etat de Dépotage → Voyage Aérien...")
+        
+        try:
+            mise_en_douane_link = wait.until(
+                EC.element_to_be_clickable((By.XPATH, "//h3[contains(@class, 'ui-panelmenu-header')]//a[contains(text(), 'MISE EN DOUANE')]"))
+            )
+            driver.execute_script("arguments[0].scrollIntoView(true);", mise_en_douane_link)
+            time.sleep(0.5)
+            mise_en_douane_link.click()
+            print("   ✓ Menu 'MISE EN DOUANE' ouvert")
+            time.sleep(2)
+        except Exception as e:
+            print(f"   ⚠️  Menu 'MISE EN DOUANE' déjà ouvert ou erreur: {e}")
+        
+        try:
+            creer_declaration_link = wait.until(
+                EC.element_to_be_clickable((By.ID, "_151"))
+            )
+            creer_declaration_link.click()
+            print("   ✓ Sous-menu 'Créer une Déclaration' ouvert")
+            time.sleep(1)
+        except Exception as e:
+            print(f"   ❌ Erreur ouverture 'Créer une Déclaration': {e}")
+            return_to_home_after_error(driver)
+            return False
+        
+        try:
+            etat_depotage_link = wait.until(
+                EC.element_to_be_clickable((By.ID, "_236"))
+            )
+            etat_depotage_link.click()
+            print("   ✓ Sous-menu 'Etat de Dépotage' ouvert")
+            time.sleep(1)
+        except Exception as e:
+            print(f"   ❌ Erreur ouverture 'Etat de Dépotage': {e}")
+            return_to_home_after_error(driver)
+            return False
+        
+        try:
+            voyage_aerien_link = wait.until(
+                EC.element_to_be_clickable((By.ID, "_247"))
+            )
+            voyage_aerien_link.click()
+            print("   ✓ Lien 'Voyage Aérien' cliqué")
+            time.sleep(3)
+        except Exception as e:
+            print(f"   ❌ Erreur clic 'Voyage Aérien': {e}")
+            return_to_home_after_error(driver)
+            return False
+        
+        # Switch to iframe
+        try:
+            iframe = wait.until(EC.presence_of_element_located((By.TAG_NAME, "iframe")))
+            driver.switch_to.frame(iframe)
+            print("   ✓ Iframe chargé")
+            time.sleep(2)
+        except Exception as e:
+            print(f"   ❌ Erreur chargement iframe: {e}")
+            return False
+        
+        # ==================================================================
+        # Fill form fields using partial data
+        # ==================================================================
+        print("\n📝 Remplissage du formulaire ED (Partiel)...")
+        
+        # Bureau (301)
+        try:
+            bureau_select = wait.until(
+                EC.element_to_be_clickable((By.XPATH, "//select[contains(@name, 'bureau')]"))
+            )
+            bureau_select.click()
+            time.sleep(0.5)
+            bureau_option = wait.until(
+                EC.element_to_be_clickable((By.XPATH, "//option[@value='301']"))
+            )
+            bureau_option.click()
+            print("   ✓ Bureau 301 sélectionné")
+            time.sleep(1)
+        except Exception as e:
+            print(f"   ❌ Erreur sélection bureau: {e}")
+            driver.switch_to.default_content()
+            return_to_home_after_error(driver)
+            return False
+        
+        # Type DS (DS MEAD Combinée)
+        try:
+            type_ds_select = wait.until(
+                EC.element_to_be_clickable((By.XPATH, "//select[contains(@name, 'typeDocument')]"))
+            )
+            type_ds_select.click()
+            time.sleep(0.5)
+            type_ds_option = wait.until(
+                EC.element_to_be_clickable((By.XPATH, "//option[contains(text(), 'DS MEAD Combin')]"))
+            )
+            type_ds_option.click()
+            print("   ✓ DS MEAD Combinée sélectionné")
+            time.sleep(1)
+        except Exception as e:
+            print(f"   ❌ Erreur sélection type DS: {e}")
+            driver.switch_to.default_content()
+            return_to_home_after_error(driver)
+            return False
+        
+        # Série (from partial data)
+        try:
+            serie_input = wait.until(
+                EC.presence_of_element_located((By.ID, "mainTab:form1:serieID"))
+            )
+            serie_input.clear()
+            serie_input.send_keys(partial_data['ds_serie'])
+            print(f"   ✓ Série: {partial_data['ds_serie']}")
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"   ❌ Erreur saisie série: {e}")
+            driver.switch_to.default_content()
+            return_to_home_after_error(driver)
+            return False
+        
+        # Clé (from partial data)
+        try:
+            cle_input = wait.until(
+                EC.presence_of_element_located((By.ID, "mainTab:form1:cleID"))
+            )
+            cle_input.clear()
+            cle_input.send_keys(partial_data['ds_cle'])
+            print(f"   ✓ Clé: {partial_data['ds_cle']}")
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"   ❌ Erreur saisie clé: {e}")
+            driver.switch_to.default_content()
+            return_to_home_after_error(driver)
+            return False
+        
+        # Référence LTA with partial suffix
+        lta_reference = f"{partial_config['lta_reference']}/{partial_number}"
+        try:
+            reference_input = wait.until(
+                EC.presence_of_element_located((By.ID, "mainTab:form1:referenceLotID"))
+            )
+            reference_input.clear()
+            reference_input.send_keys(lta_reference)
+            print(f"   ✓ Référence LTA: {lta_reference}")
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"   ❌ Erreur saisie référence: {e}")
+            driver.switch_to.default_content()
+            return_to_home_after_error(driver)
+            return False
+        
+        # Click Valider (reference validation)
+        try:
+            valider_ref_btn = wait.until(
+                EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'validerRef')]"))
+            )
+            valider_ref_btn.click()
+            print("   ✓ Bouton 'Valider' cliqué (référence)")
+            time.sleep(3)
+        except Exception as e:
+            print(f"   ❌ Erreur validation référence: {e}")
+            driver.switch_to.default_content()
+            return_to_home_after_error(driver)
+            return False
+        
+        # Navigate to Quantités tab
+        print("\n📊 Navigation vers l'onglet Quantités...")
+        try:
+            quantites_tab = wait.until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab3']"))
+            )
+            quantites_tab.click()
+            print("   ✓ Onglet Quantités ouvert")
+            time.sleep(2)
+        except Exception as e:
+            print(f"   ❌ Erreur navigation onglet Quantités: {e}")
+            driver.switch_to.default_content()
+            return_to_home_after_error(driver)
+            return False
+        
+        # Fill totals (from partial data)
+        total_p = partial_data['positions']
+        total_p_brut = partial_data['weight']
+        
+        print(f"\n📊 Totaux du partiel: P={total_p}, P,BRUT={total_p_brut}")
+        
+        try:
+            poids_brut_total_input = wait.until(
+                EC.presence_of_element_located((By.ID, "mainTab:tab3:poidsBrutTotal"))
+            )
+            poids_brut_total_input.clear()
+            poids_brut_total_input.send_keys(str(total_p_brut))
+            print(f"   ✓ Poids brut total: {total_p_brut}")
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"   ❌ Erreur poids brut total: {e}")
+            driver.switch_to.default_content()
+            return_to_home_after_error(driver)
+            return False
+        
+        try:
+            nombre_contenants_input = wait.until(
+                EC.presence_of_element_located((By.ID, "mainTab:tab3:nbrContenantsTotal"))
+            )
+            nombre_contenants_input.clear()
+            nombre_contenants_input.send_keys(str(total_p))
+            print(f"   ✓ Nombre de contenants: {total_p}")
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"   ❌ Erreur nombre contenants: {e}")
+            driver.switch_to.default_content()
+            return_to_home_after_error(driver)
+            return False
+        
+        # Navigate to LTA tab
+        print("\n📦 Navigation vers l'onglet LTA...")
+        try:
+            lta_tab = wait.until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab4']"))
+            )
+            lta_tab.click()
+            print("   ✓ Onglet LTA ouvert")
+            time.sleep(2)
+        except Exception as e:
+            print(f"   ❌ Erreur navigation onglet LTA: {e}")
+            driver.switch_to.default_content()
+            return_to_home_after_error(driver)
+            return False
+        
+        # Create lots for DUMs in this partial
+        dum_lots_data = get_dum_lots_for_partial(partial_data)
+        print(f"\n📦 Création de {len(dum_lots_data)} lot(s) pour ce partiel...")
+        
+        for dum_index, dum_data in enumerate(dum_lots_data, start=1):
+            print(f"\n   🔹 Création lot {dum_index}/{len(dum_lots_data)} ({dum_data['dum_name']})...")
+            
+            # Click "Nouveau" to create lot
+            try:
+                nouveau_lot_btn = wait.until(
+                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_new_lot')]"))
+                )
+                nouveau_lot_btn.click()
+                print(f"      ✓ Bouton 'Nouveau' cliqué")
+                time.sleep(2)
+            except Exception as e:
+                print(f"      ❌ Erreur clic 'Nouveau': {e}")
+                driver.switch_to.default_content()
+                return_to_home_after_error(driver)
+                return False
+            
+            # Click "Nouveau" ligne (create line)
+            try:
+                nouveau_ligne_btn = wait.until(
+                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_new_ligne')]"))
+                )
+                nouveau_ligne_btn.click()
+                print(f"      ✓ Bouton 'Nouveau' ligne cliqué")
+                time.sleep(2)
+            except Exception as e:
+                print(f"      ❌ Erreur clic 'Nouveau' ligne: {e}")
+                driver.switch_to.default_content()
+                return_to_home_after_error(driver)
+                return False
+            
+            # Fill line form
+            # Type Contenant
+            try:
+                type_contenant_input = wait.until(
+                    EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'typeContenantId_INPUT_input')]"))
+                )
+                type_contenant_input.clear()
+                type_contenant_input.send_keys("colis")
+                time.sleep(2)
+                
+                colis_suggestion = wait.until(
+                    EC.element_to_be_clickable((By.XPATH, "//li[contains(@data-item-label, 'COLIS(216)')]"))
+                )
+                colis_suggestion.click()
+                print(f"      ✓ COLIS(216) sélectionné")
+                time.sleep(1)
+            except Exception as e:
+                print(f"      ❌ Erreur type contenant: {e}")
+                driver.switch_to.default_content()
+                return_to_home_after_error(driver)
+                return False
+            
+            # Nombre contenants
+            try:
+                nbr_contenants_input = wait.until(
+                    EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'nbrContenants')]"))
+                )
+                nbr_contenants_input.clear()
+                nbr_contenants_input.send_keys(str(dum_data['p']))
+                print(f"      ✓ Nombre contenants: {dum_data['p']}")
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"      ❌ Erreur nombre contenants: {e}")
+                driver.switch_to.default_content()
+                return_to_home_after_error(driver)
+                return False
+            
+            # Poids brut
+            try:
+                poids_brut_input = wait.until(
+                    EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'poidBru_input')]"))
+                )
+                poids_brut_input.clear()
+                poids_brut_input.send_keys(str(dum_data['p_brut']))
+                print(f"      ✓ Poids brut: {dum_data['p_brut']}")
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"      ❌ Erreur poids brut: {e}")
+                driver.switch_to.default_content()
+                return_to_home_after_error(driver)
+                return False
+            
+            # Marque (LTA reference with partial suffix)
+            try:
+                marque_textarea = wait.until(
+                    EC.presence_of_element_located((By.XPATH, "//textarea[contains(@name, 'marqueLib')]"))
+                )
+                marque_textarea.clear()
+                marque_textarea.send_keys(lta_reference)
+                print(f"      ✓ Marque: {lta_reference}")
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"      ❌ Erreur marque: {e}")
+                driver.switch_to.default_content()
+                return_to_home_after_error(driver)
+                return False
+            
+            # Nature marchandise
+            try:
+                nature_textarea = wait.until(
+                    EC.presence_of_element_located((By.XPATH, "//textarea[contains(@name, 'marchand')]"))
+                )
+                nature_textarea.clear()
+                nature_textarea.send_keys("courrier e-commerce")
+                print(f"      ✓ Nature marchandise: courrier e-commerce")
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"      ❌ Erreur nature marchandise: {e}")
+                driver.switch_to.default_content()
+                return_to_home_after_error(driver)
+                return False
+            
+            # Code NGP
+            try:
+                ngp_input = wait.until(
+                    EC.presence_of_element_located((By.XPATH, "//input[contains(@name, ':ngp') and @type='text']"))
+                )
+                ngp_input.clear()
+                ngp_input.send_keys("9999")
+                print(f"      ✓ Code NGP: 9999")
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"      ❌ Erreur NGP: {e}")
+                driver.switch_to.default_content()
+                return_to_home_after_error(driver)
+                return False
+            
+            # Add NGP
+            try:
+                add_ngp_btn = wait.until(
+                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_add_ngp')]"))
+                )
+                add_ngp_btn.click()
+                print(f"      ✓ Code NGP ajouté")
+                time.sleep(1)
+            except Exception as e:
+                print(f"      ❌ Erreur ajout NGP: {e}")
+                driver.switch_to.default_content()
+                return_to_home_after_error(driver)
+                return False
+            
+            # Validate line
+            try:
+                valider_ligne_btn = wait.until(
+                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_confirmer_ligne')]"))
+                )
+                valider_ligne_btn.click()
+                print(f"      ✓ Ligne marchandise validée")
+                time.sleep(2)
+            except Exception as e:
+                print(f"      ❌ Erreur validation ligne: {e}")
+                driver.switch_to.default_content()
+                return_to_home_after_error(driver)
+                return False
+            
+            print(f"   ✅ Lot {dum_index} créé avec succès!")
+        
+        print(f"\n   ✅ Tous les lots ({len(dum_lots_data)}) créés avec succès!")
+        
+        # Save ED
+        print("\n💾 Sauvegarde de l'Etat de Dépotage...")
+        try:
+            sauvegarder_link = wait.until(
+                EC.element_to_be_clickable((By.XPATH, "//a[contains(@class, 'ui-menuitem-link')]//span[text()='SAUVEGARDER']/parent::a"))
+            )
+            sauvegarder_link.click()
+            print("   ✓ Bouton 'SAUVEGARDER' cliqué")
+            time.sleep(3)
+        except Exception as e:
+            print(f"   ❌ Erreur sauvegarde: {e}")
+            driver.switch_to.default_content()
+            return_to_home_after_error(driver)
+            return False
+        
+        # Validate ED
+        print("\n✅ Validation de l'Etat de Dépotage...")
+        try:
+            valider_link = wait.until(
+                EC.element_to_be_clickable((By.XPATH, "//a[contains(@class, 'ui-menuitem-link')]//span[text()='VALIDER']/parent::a"))
+            )
+            valider_link.click()
+            print("   ✓ Bouton 'VALIDER' cliqué")
+            time.sleep(4)
+        except Exception as e:
+            print(f"   ❌ Erreur validation: {e}")
+            driver.switch_to.default_content()
+            return_to_home_after_error(driver)
+            return False
+        
+        # Check validation result
+        print("\n🔍 Vérification du résultat de validation...")
+        try:
+            time.sleep(2)
+            error_containers = driver.find_elements(By.CSS_SELECTOR, "div.ui-messages-error")
+            
+            if error_containers and len(error_containers) > 0:
+                error_details = driver.find_elements(By.CSS_SELECTOR, "span.ui-messages-error-detail")
+                if error_details and len(error_details) > 0:
+                    error_message = error_details[0].text.strip()
+                    print(f"   ❌ Erreur validation: {error_message}")
+                    driver.switch_to.default_content()
+                    return_to_home_after_error(driver)
+                    return False
+            
+            print("   ✓ Validation réussie!")
+            
+            # Extract DS reference
+            try:
+                reference_table = wait.until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "table.reference"))
+                )
+                rows = reference_table.find_elements(By.TAG_NAME, "tr")
+                if len(rows) >= 2:
+                    data_row = rows[1]
+                    cells = data_row.find_elements(By.TAG_NAME, "td")
+                    if len(cells) >= 5:
+                        serie_value = cells[3].text.strip()
+                        cle_value = cells[4].text.strip()
+                        serie_clean = str(int(serie_value)) if serie_value.isdigit() else serie_value
+                        ds_reference = f"{serie_clean}{cle_value}"
+                        print(f"   ✓ Référence DS: {ds_reference}")
+            except Exception as e:
+                print(f"   ⚠️  Erreur extraction référence: {e}")
+            
+            print(f"\n✅ Etat de Dépotage PARTIEL {partial_number} créé avec succès!")
+            
+        except Exception as e:
+            print(f"   ❌ Erreur vérification validation: {e}")
+            driver.switch_to.default_content()
+            return_to_home_after_error(driver)
+            return False
+        
+        # Exit iframe
+        driver.switch_to.default_content()
+        print("   ✓ Sorti de l'iframe")
+        
+        return True
+        
+    except Exception as e:
+        print(f"\n❌ Erreur création ED partiel: {e}")
+        traceback.print_exc()
+        try:
+            driver.switch_to.default_content()
+        except:
+            pass
+        return False
+
 def read_shipper_from_txt(txt_file_path):
     """Extract shipper name, LTA reference, and DS MEAD reference data from .txt file
     
@@ -4539,6 +5192,13 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         lta_name = os.path.basename(lta_folder_path)
         parent_dir = os.path.dirname(lta_folder_path)
         
+        # Load partial configuration if exists
+        partial_config = get_lta_partial_info(lta_folder_path, lta_name)
+        if partial_config:
+            print(f"\n📦 Configuration partielle chargée: {len(partial_config['partials'])} partial(s)")
+            if partial_config.get('split_dums'):
+                print(f"   ⚠️  DUMs splits: {list(partial_config['split_dums'].keys())}")
+        
         # Chercher le fichier [X]er LTA.txt dans le répertoire parent
         lta_file_pattern = os.path.join(parent_dir, f"{lta_name}.txt")
         
@@ -4826,16 +5486,38 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 print(f"      ❌ Erreur saisie clé: {e}")
                 return False
             
-            # PDS.3.7: BOUCLE pour ajouter tous les lots (1 ou 2 selon is_single_dum)
-            # Pour single DUM: 2 lots (/1 et /2)
-            # Pour LTA normal: 1 lot
-            num_lots_to_add = len(lot_references)
+            # PDS.3.7: BOUCLE pour ajouter tous les lots
+            # Use helper function to get lot structure (handles split DUMs)
+            preap_lots = get_dum_preapurement_lots(dum_number, partial_config, validated_lta_reference)
+            num_lots_to_add = len(preap_lots)
+            
+            # If not using partial config and is single DUM, use old logic
+            if not partial_config and is_single_dum:
+                # Old behavior for backward compatibility
+                lot_references = [
+                    f"{validated_lta_reference}/1",
+                    f"{validated_lta_reference}/2"
+                ]
+                num_lots_to_add = len(lot_references)
+                preap_lots = [{'reference': ref, 'ds_serie': ds_serie, 'ds_cle': ds_cle, 'split_id': None} for ref in lot_references]
+            
+            print(f"\n   📦 Création de {num_lots_to_add} lot(s) pour DUM {dum_number}")
+            if partial_config and str(dum_number) in partial_config.get('split_dums', {}):
+                print(f"      ⚠️  DUM SPLIT détecté - {num_lots_to_add} lots requis")
             
             for lot_idx in range(num_lots_to_add):
-                current_lot_ref = lot_references[lot_idx]
-                lot_label = f"Lot {lot_idx + 1}/{num_lots_to_add}" if num_lots_to_add > 1 else "Lot unique"
+                current_lot = preap_lots[lot_idx]
+                current_lot_ref = current_lot['reference']
+                current_ds_serie = current_lot['ds_serie'] or ds_serie
+                current_ds_cle = current_lot['ds_cle'] or ds_cle
+                split_id = current_lot.get('split_id')
+                
+                lot_label = f"Lot {lot_idx + 1}/{num_lots_to_add}"
+                if split_id:
+                    lot_label += f" ({split_id})"
                 
                 print(f"\n      📦 Traitement {lot_label}: {current_lot_ref}")
+                print(f"         DS: {current_ds_serie} {current_ds_cle}")
                 
                 # Si ce n'est PAS le premier lot, cliquer sur "Nouveau" pour ajouter un nouveau préapurement
                 if lot_idx > 0:
@@ -4871,16 +5553,16 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                             """)
                             time.sleep(1)
                         
-                        # Bureau, Régime, Année, Série, Clé
+                        # Bureau, Régime, Année, Série, Clé (use current lot's DS values)
                         driver.find_element(By.XPATH, "//input[contains(@id, 'bureauId') or contains(@name, 'bureauId')]").send_keys("301")
                         time.sleep(0.5)
                         driver.find_element(By.XPATH, "//input[contains(@id, 'regimeId') or contains(@name, 'regimeId')]").send_keys("000")
                         time.sleep(0.5)
                         driver.find_element(By.XPATH, "//input[contains(@id, 'anneeId') or contains(@name, 'anneeId')]").send_keys(str(time.strftime("%Y")))
                         time.sleep(0.5)
-                        driver.find_element(By.XPATH, "//input[contains(@id, 'serieId') or contains(@name, 'serieId')]").send_keys(ds_serie)
+                        driver.find_element(By.XPATH, "//input[contains(@id, 'serieId') or contains(@name, 'serieId')]").send_keys(current_ds_serie)
                         time.sleep(0.5)
-                        driver.find_element(By.XPATH, "//input[contains(@id, 'cleId') or contains(@name, 'cleId')]").send_keys(ds_cle)
+                        driver.find_element(By.XPATH, "//input[contains(@id, 'cleId') or contains(@name, 'cleId')]").send_keys(current_ds_cle)
                         time.sleep(0.5)
                         
                         print(f"         ✓ Champs re-remplis pour {lot_label}")
@@ -6807,7 +7489,68 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
             print("   → Pas d'Etat de Dépotage requis pour ce LTA")
             return False
         
-        print(f"\n✅ LTA avec référence DS MEAD détectée")
+        # ========== ÉTAPE PARTIAL: Vérifier si LTA partiel ==========
+        print("\n🔍 Vérification configuration partielle...")
+        partial_config = get_lta_partial_info(lta_folder_path, lta_name)
+        
+        if partial_config:
+            print(f"\n📦 LTA PARTIEL DÉTECTÉ - {len(partial_config['partials'])} vol(s)")
+            print(f"   Référence LTA: {partial_config['lta_reference']}")
+            print(f"   Poids total: {partial_config['lta_total_weight']} kg")
+            print(f"   Positions totales: {partial_config['lta_total_positions']}")
+            
+            # Display split DUMs if any
+            if partial_config.get('split_dums'):
+                print(f"\n   ⚠️  DUMs splits détectés: {list(partial_config['split_dums'].keys())}")
+            
+            # Process each partial
+            all_success = True
+            for partial in partial_config['partials']:
+                partial_num = partial['partial_number']
+                
+                print(f"\n{'='*70}")
+                print(f"📦 TRAITEMENT PARTIEL {partial_num}/{len(partial_config['partials'])}")
+                print(f"{'='*70}")
+                print(f"   Poids: {partial['weight']} kg")
+                print(f"   Positions: {partial['positions']}")
+                print(f"   DS: {partial['ds_serie']} {partial['ds_cle']}")
+                print(f"   DUMs: {[d['dum_number'] for d in partial['dums']]}")
+                
+                # Create ED for this partial
+                if not create_etat_depotage_partial(driver, lta_folder_path, partial_config, partial_num):
+                    print(f"\n❌ Échec création ED partiel {partial_num}")
+                    all_success = False
+                    continue
+                
+                print(f"\n✅ ED Partiel {partial_num} créé avec succès!")
+                
+                # Return to home after each partial
+                print(f"\n🏠 Retour à l'accueil...")
+                try:
+                    driver.switch_to.default_content()
+                    print("      ✓ Sorti de l'iframe")
+                    
+                    driver.get("https://badr.douane.gov.ma:40444/badr/views/hab/hab_index.xhtml")
+                    print("      ✓ Navigation directe vers l'accueil")
+                    time.sleep(3)
+                    print("      ✓ Retour à l'accueil réussi")
+                except Exception as e:
+                    print(f"      ❌ Erreur retour accueil: {e}")
+                    traceback.print_exc()
+            
+            if all_success:
+                print(f"\n{'='*70}")
+                print(f"✅ TOUS LES PARTIELS TRAITÉS AVEC SUCCÈS ({len(partial_config['partials'])} EDs créés)")
+                print(f"{'='*70}")
+                return True
+            else:
+                print(f"\n{'='*70}")
+                print(f"⚠️  TRAITEMENT PARTIEL TERMINÉ AVEC ERREURS")
+                print(f"{'='*70}")
+                return False
+        
+        # ========== Standard LTA processing (no partial) ==========
+        print(f"\n✅ LTA Standard (non partiel)")
         print(f"   - Série: {shipper_data['serie']}")
         print(f"   - Clé: {shipper_data['cle']}")
         print(f"   - Lieu: {shipper_data['loading_location']}")
@@ -7311,15 +8054,15 @@ if __name__ == "__main__":
                         for i, (_, folder_name) in enumerate(lta_folders, 1):
                             print(f"   {i}. {folder_name}")
                         
-                        # Process selection based on mode
+                        # Process selection based on d
                         folders_to_process = []
                         
                         if len(sys.argv) > 1:
                             # GUI mode: use provided selection
                             if selected_lta_indices == "all":
                                 print("\n✓ Mode GUI: Traitement de TOUS les LTAs")
-                                folders_to_process = lta_folders
-                            elif isinstance(selected_lta_indices, list):
+                                s = lta_folders
+                            elif isinstance(selssected_lta_indices, list):
                                 print(f"\n✓ Mode GUI: Traitement de {len(selected_lta_indices)} LTA(s) sélectionné(s)")
                                 folders_to_process = [lta_folders[i] for i in selected_lta_indices if 0 <= i < len(lta_folders)]
                                 if folders_to_process:
