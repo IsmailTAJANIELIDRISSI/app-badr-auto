@@ -75,51 +75,50 @@ class PartialConfigDialog:
             ws = wb['Summary']
             
             # Get total weight and positions from Summary sheet
-            # Try multiple possible locations for totals
+            # Data is in column A (labels) and column B (values)
             total_weight = None
             total_positions = None
             
-            # Method 1: Try cells D5 and D6
-            if ws['D5'].value and isinstance(ws['D5'].value, (int, float)):
-                total_weight = ws['D5'].value
-            if ws['D6'].value and isinstance(ws['D6'].value, (int, float)):
-                total_positions = ws['D6'].value
-            
-            # Method 2: Search for "P,BRUT" and "P" labels in column C
-            if total_weight is None or total_positions is None:
-                for row in range(1, 20):
-                    cell_c = ws[f'C{row}'].value
-                    if cell_c:
-                        cell_c_str = str(cell_c).strip().upper()
-                        if 'P,BRUT' in cell_c_str or 'P.BRUT' in cell_c_str:
-                            val = ws[f'D{row}'].value
-                            if val and isinstance(val, (int, float)):
-                                total_weight = val
-                                logger.info(f"Found total weight at D{row}: {total_weight}")
-                        elif cell_c_str == 'P' and total_weight:  # P usually comes after P,BRUT
-                            val = ws[f'D{row}'].value
-                            if val and isinstance(val, (int, float)):
-                                total_positions = val
-                                logger.info(f"Found total positions at D{row}: {total_positions}")
-                                break
+            # Search for "P,BRUT" and "P" labels in column A (rows 1-10)
+            for row in range(1, 15):
+                cell_a = ws[f'A{row}'].value
+                if cell_a:
+                    cell_a_str = str(cell_a).strip().upper()
+                    if 'P,BRUT' in cell_a_str or 'P.BRUT' in cell_a_str:
+                        val = ws[f'B{row}'].value
+                        if val and isinstance(val, (int, float)):
+                            total_weight = val
+                            logger.info(f"Found total weight at B{row}: {total_weight}")
+                    elif cell_a_str == 'P' and not total_positions:  # P for positions (before P,BRUT in file)
+                        val = ws[f'B{row}'].value
+                        if val and isinstance(val, (int, float)):
+                            total_positions = val
+                            logger.info(f"Found total positions at B{row}: {total_positions}")
             
             logger.info(f"Total weight: {total_weight}, Total positions: {total_positions}")
             
-            # Count DUMs by checking C11, C18, C25, C32, C39...
+            # Count DUMs by checking C11, C18, C25... (DUM labels in column C)
+            # DUM data structure: 
+            # Row N: "DUM X" in column C
+            # Row N+1: P (positions) - label in A, value in B
+            # Row N+2: V (value) - label in A, value in B  
+            # Row N+3: P,NET - label in A, value in B
+            # Row N+4: P,BRUT (weight) - label in A, value in B
             dums = []
             for dum_idx in range(1, 10):
                 row_num = 11 + (dum_idx - 1) * 7
                 cell_value = ws[f'C{row_num}'].value
                 
                 if cell_value and 'DUM' in str(cell_value).upper():
-                    # Get DUM weight (P,BRUT) and positions (P) from the same sheet
-                    dum_weight_row = row_num + 2  # P,BRUT is 2 rows below
-                    dum_positions_row = row_num + 3  # P is 3 rows below
+                    # Get DUM positions and weight from column A (labels) and B (values)
+                    # P is at row_num + 1, P,BRUT is at row_num + 4
+                    dum_positions_row = row_num + 1  # P is 1 row below DUM label
+                    dum_weight_row = row_num + 4     # P,BRUT is 4 rows below DUM label
                     
-                    dum_weight = ws[f'D{dum_weight_row}'].value or 0
-                    dum_positions = ws[f'D{dum_positions_row}'].value or 0
+                    dum_positions = ws[f'B{dum_positions_row}'].value or 0
+                    dum_weight = ws[f'B{dum_weight_row}'].value or 0
                     
-                    logger.info(f"DUM {dum_idx}: weight={dum_weight}, positions={dum_positions}")
+                    logger.info(f"DUM {dum_idx} (row {row_num}): weight={dum_weight}, positions={dum_positions}")
                     
                     dums.append({
                         'number': dum_idx,
@@ -454,29 +453,29 @@ class PartialConfigDialog:
                         remaining_dum_weight = dums[current_dum_idx]['weight']
                         remaining_dum_positions = dums[current_dum_idx]['positions']
                 else:
-                    # Split the DUM
-                    # Calculate split positions proportionally
-                    split_positions = round((weight_needed * remaining_dum_positions) / remaining_dum_weight)
+                    # Split the DUM - this is the last DUM for this partial
+                    # Calculate positions to reach the target partial_positions
+                    positions_needed = partial_positions - positions_accumulated
                     
                     partial_dums.append({
                         'dum_number': dums[current_dum_idx]['number'],
                         'weight': weight_needed,
-                        'positions': split_positions,
+                        'positions': positions_needed,
                         'is_split': True,
                         'split_id': f"{dums[current_dum_idx]['number']}/{partial_idx + 1}"
                     })
                     weight_accumulated += weight_needed
-                    positions_accumulated += split_positions
+                    positions_accumulated += positions_needed
                     
                     # Update remaining DUM
                     remaining_dum_weight -= weight_needed
-                    remaining_dum_positions -= split_positions
+                    remaining_dum_positions -= positions_needed
                     is_continuing_split = True  # Mark that next partial continues this DUM
                     break
             
             distribution.append({
                 'weight': weight_accumulated,
-                'positions': positions_accumulated,
+                'positions': partial_positions,  # Use calculated target positions, not accumulated
                 'dums': partial_dums
             })
         

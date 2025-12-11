@@ -267,9 +267,8 @@ class Phase1EDScreen:
         self.lta_checkboxes = []
         self.checkbox_widgets = []
         
+        current_row = 2
         for idx, lta in enumerate(self.ltas_with_ds):
-            row = idx + 2
-            
             # Checkbox
             cb_var = tk.BooleanVar(value=True)
             self.lta_checkboxes.append(cb_var)
@@ -278,83 +277,147 @@ class Phase1EDScreen:
                 variable=cb_var,
                 state="disabled" if self.selection_mode.get() == "all" else "normal"
             )
-            cb.grid(row=row, column=0, padx=5, pady=3)
+            cb.grid(row=current_row, column=0, padx=5, pady=3, sticky=tk.N)
             self.checkbox_widgets.append(cb)
             
-            # LTA name
-            lta_display = f"{lta['name']} - {lta.get('lta_reference', 'N/A')}"
-            lta_label = ttk.Label(table_content, text=lta_display)
-            lta_label.grid(row=row, column=1, padx=5, pady=3, sticky=tk.W)
-            
-            # DS Série (from preparation)
-            ds_serie = lta.get('ds_series', 'N/A')
-            ds_label = ttk.Label(
-                table_content,
-                text=ds_serie,
-                foreground="blue" if ds_serie != 'N/A' else "gray"
-            )
-            ds_label.grid(row=row, column=2, padx=5, pady=3, sticky=tk.W)
-            
-            # DS Validé (after Phase 1 execution)
-            validated_ds = lta.get('validated_ds', '')
-            if validated_ds:
-                validated_label = ttk.Label(
-                    table_content,
-                    text=validated_ds,
-                    font=('Arial', 9, 'bold'),
-                    foreground="darkgreen"
-                )
-                validated_label.grid(row=row, column=3, padx=5, pady=3, sticky=tk.W)
+            # Check if partial LTA
+            if lta.get('is_partial') and lta.get('partial_config'):
+                # PARTIAL LTA - Create expandable rows for each partial
+                partials = lta['partial_config'].get('partials', [])
                 
-                # Copy button with closure
-                def make_copy_command(text, lta_name):
-                    def copy_to_clipboard():
-                        self.frame.clipboard_clear()
-                        self.frame.clipboard_append(text)
-                        self.app.log_message(f"DS copié: {text} ({lta_name})", "SUCCESS")
-                    return copy_to_clipboard
-                
-                copy_btn = ttk.Button(
-                    table_content,
-                    text="📋 Copier",
-                    width=10,
-                    command=make_copy_command(validated_ds, lta['name'])
+                # Main LTA header row
+                lta_display = f"{lta['name']} - {lta.get('lta_reference', 'N/A')} 📦 ({len(partials)} partiels)"
+                lta_label = ttk.Label(
+                    table_content, 
+                    text=lta_display,
+                    font=('Arial', 9, 'bold')
                 )
-                copy_btn.grid(row=row, column=4, padx=5, pady=3)
+                lta_label.grid(row=current_row, column=1, padx=5, pady=3, sticky=tk.W, rowspan=len(partials))
+                current_row += 1
+                
+                # Create a row for each partial
+                for partial in partials:
+                    partial_num = partial['partial_number']
+                    
+                    # Indent for sub-item
+                    ttk.Label(
+                        table_content,
+                        text=f"  └ Partiel {partial_num}",
+                        foreground="gray"
+                    ).grid(row=current_row, column=1, padx=20, pady=2, sticky=tk.W)
+                    
+                    # DS Série for this partial
+                    ds_serie = f"{partial['ds_serie']}/{partial['ds_cle']}"
+                    ttk.Label(
+                        table_content,
+                        text=ds_serie,
+                        foreground="purple"
+                    ).grid(row=current_row, column=2, padx=5, pady=2, sticky=tk.W)
+                    
+                    # DS Validé placeholder (will be filled after Phase 1)
+                    ttk.Label(
+                        table_content,
+                        text="En attente",
+                        foreground="gray",
+                        font=('Arial', 9, 'italic')
+                    ).grid(row=current_row, column=3, padx=5, pady=2, sticky=tk.W)
+                    
+                    # Signed series input for this partial
+                    signed_var = tk.StringVar(value="")
+                    signed_entry = ttk.Entry(table_content, textvariable=signed_var, width=15)
+                    signed_entry.grid(row=current_row, column=5, padx=5, pady=2, sticky=(tk.W, tk.E))
+                    
+                    # Store input for later saving
+                    self.lta_inputs.append({
+                        'lta': lta,
+                        'partial_number': partial_num,
+                        'signed_var': signed_var,
+                        'is_partial': True
+                    })
+                    
+                    # Status icon
+                    ttk.Label(
+                        table_content,
+                        text="⏸️",
+                        font=('Arial', 11),
+                        foreground="gray"
+                    ).grid(row=current_row, column=6, padx=5, pady=2)
+                    
+                    current_row += 1
+                
             else:
-                ttk.Label(
+                # REGULAR LTA - Single row
+                lta_display = f"{lta['name']} - {lta.get('lta_reference', 'N/A')}"
+                lta_label = ttk.Label(table_content, text=lta_display)
+                lta_label.grid(row=current_row, column=1, padx=5, pady=3, sticky=tk.W)
+                
+                # DS Série
+                ds_serie = lta.get('ds_series', 'N/A')
+                ds_label = ttk.Label(
                     table_content,
-                    text="En attente",
-                    foreground="gray",
-                    font=('Arial', 9, 'italic')
-                ).grid(row=row, column=3, padx=5, pady=3, sticky=tk.W)
-            
-            # Signed series input
-            existing_signed = lta.get('signed_ds', '')
-            signed_var = tk.StringVar(value=existing_signed)
-            signed_entry = ttk.Entry(table_content, textvariable=signed_var, width=15)
-            signed_entry.grid(row=row, column=5, padx=5, pady=3, sticky=(tk.W, tk.E))
-            
-            # Status icon
-            status_var = tk.StringVar(value="✅" if existing_signed else "⏸️")
-            status_label = ttk.Label(
-                table_content,
-                textvariable=status_var,
-                font=('Arial', 11),
-                foreground="green" if existing_signed else "gray"
-            )
-            status_label.grid(row=row, column=6, padx=5, pady=3)
-            
-            self.lta_inputs.append({
-                'lta': lta,
-                'signed_var': signed_var,
-                'status_var': status_var,
-                'status_label': status_label,
-                'checkbox_var': cb_var,
-                'checkbox_widget': cb,
-                'validated_label': validated_label if validated_ds else None,
-                'copy_btn': copy_btn if validated_ds else None
-            })
+                    text=ds_serie,
+                    foreground="blue" if ds_serie != 'N/A' else "gray"
+                )
+                ds_label.grid(row=current_row, column=2, padx=5, pady=3, sticky=tk.W)
+                
+                # DS Validé
+                validated_ds = lta.get('validated_ds', '')
+                if validated_ds:
+                    validated_label = ttk.Label(
+                        table_content,
+                        text=validated_ds,
+                        font=('Arial', 9, 'bold'),
+                        foreground="darkgreen"
+                    )
+                    validated_label.grid(row=current_row, column=3, padx=5, pady=3, sticky=tk.W)
+                    
+                    # Copy button
+                    def make_copy_command(text, lta_name):
+                        def copy_to_clipboard():
+                            self.frame.clipboard_clear()
+                            self.frame.clipboard_append(text)
+                            self.app.log_message(f"DS copié: {text} ({lta_name})", "SUCCESS")
+                        return copy_to_clipboard
+                    
+                    copy_btn = ttk.Button(
+                        table_content,
+                        text="📋 Copier",
+                        width=10,
+                        command=make_copy_command(validated_ds, lta['name'])
+                    )
+                    copy_btn.grid(row=current_row, column=4, padx=5, pady=3)
+                else:
+                    ttk.Label(
+                        table_content,
+                        text="En attente",
+                        foreground="gray",
+                        font=('Arial', 9, 'italic')
+                    ).grid(row=current_row, column=3, padx=5, pady=3, sticky=tk.W)
+                
+                # Signed series input
+                existing_signed = lta.get('signed_ds', '')
+                signed_var = tk.StringVar(value=existing_signed)
+                signed_entry = ttk.Entry(table_content, textvariable=signed_var, width=15)
+                signed_entry.grid(row=current_row, column=5, padx=5, pady=3, sticky=(tk.W, tk.E))
+                
+                # Store input
+                self.lta_inputs.append({
+                    'lta': lta,
+                    'signed_var': signed_var,
+                    'is_partial': False
+                })
+                
+                # Status icon
+                status_var = tk.StringVar(value="✅" if existing_signed else "⏸️")
+                status_label = ttk.Label(
+                    table_content,
+                    textvariable=status_var,
+                    font=('Arial', 11),
+                    foreground="green" if existing_signed else "gray"
+                )
+                status_label.grid(row=current_row, column=6, padx=5, pady=3)
+                
+                current_row += 1
         
         # Configure scrolling
         def configure_scroll_region(event=None):
@@ -469,6 +532,8 @@ class Phase1EDScreen:
     
     def save_signed_series(self):
         """Save signed series to LTA files"""
+        from gui.utils.file_utils import update_partial_signed_series
+        
         logger.info("Saving signed series...")
         self.app.log_message("Sauvegarde des séries signées...", "INFO")
         
@@ -478,10 +543,9 @@ class Phase1EDScreen:
         for input_data in self.lta_inputs:
             lta = input_data['lta']
             signed_series = input_data['signed_var'].get().strip()
+            is_partial = input_data.get('is_partial', False)
             
             if not signed_series:
-                input_data['status_var'].set("⏸️")
-                input_data['status_label'].config(foreground="gray")
                 continue
             
             # Normalize format
@@ -495,22 +559,39 @@ class Phase1EDScreen:
                     "Erreur de Validation",
                     f"{lta['name']}: {error_msg}"
                 )
-                input_data['status_var'].set("❌")
-                input_data['status_label'].config(foreground="red")
                 error_count += 1
                 continue
             
-            # Save to file
-            if lta['lta_file']:
-                success = write_lta_signed_series(lta['lta_file'], signed_series)
+            # Save based on LTA type
+            if is_partial:
+                # Save to partial config JSON
+                partial_number = input_data['partial_number']
+                success = update_partial_signed_series(
+                    self.app.current_folder,
+                    lta['name'],
+                    partial_number,
+                    signed_series
+                )
                 if success:
                     saved_count += 1
-                    input_data['status_var'].set("✓")
-                    input_data['status_label'].config(foreground="green")
+                    self.app.log_message(
+                        f"✓ Série signée sauvegardée: {lta['name']} Partiel {partial_number} → {signed_series}",
+                        "SUCCESS"
+                    )
                 else:
                     error_count += 1
-                    input_data['status_var'].set("❌")
-                    input_data['status_label'].config(foreground="red")
+            else:
+                # Save to regular LTA file (line 8)
+                if lta['lta_file']:
+                    success = write_lta_signed_series(lta['lta_file'], signed_series)
+                    if success:
+                        saved_count += 1
+                        self.app.log_message(
+                            f"✓ Série signée sauvegardée: {lta['name']} → {signed_series}",
+                            "SUCCESS"
+                        )
+                    else:
+                        error_count += 1
         
         # Results
         if error_count == 0:

@@ -92,6 +92,15 @@ def detect_ltas(folder_path):
                     lta_info['validated_ds'] = shipper_data.get('ds_reference')  # Line 4
                     lta_info['location'] = shipper_data.get('location')
             
+            # Check if LTA has partial configuration (multiple DS series)
+            partial_config = get_lta_partial_info(folder_path, folder_name)
+            if partial_config:
+                lta_info['has_ds'] = True  # Mark as having DS (multiple)
+                lta_info['is_partial'] = True
+                lta_info['partial_config'] = partial_config
+            else:
+                lta_info['is_partial'] = False
+            
             # Read LTA file if exists to get signed series and reference
             if lta_info['lta_file'] and os.path.exists(lta_info['lta_file']):
                 try:
@@ -615,4 +624,41 @@ def save_lta_partial_config(lta_folder_path, folder_name, config):
         
     except Exception as e:
         logger.error(f"Error saving partial config for {folder_name}: {e}")
+        return False
+
+
+def update_partial_signed_series(lta_folder_path, folder_name, partial_number, signed_series):
+    """
+    Update signed series for a specific partial in the partial config
+    
+    Args:
+        lta_folder_path: Path to parent folder containing LTA folders
+        folder_name: Name of LTA folder
+        partial_number: Partial number (1, 2, etc.)
+        signed_series: Signed series string
+        
+    Returns:
+        bool: Success status
+    """
+    try:
+        import json
+        
+        # Load existing config
+        config = get_lta_partial_info(lta_folder_path, folder_name)
+        if not config:
+            logger.error(f"No partial config found for {folder_name}")
+            return False
+        
+        # Update the specific partial
+        for partial in config.get('partials', []):
+            if partial['partial_number'] == partial_number:
+                partial['signed_series'] = signed_series
+                logger.info(f"Updated signed series for {folder_name} Partial {partial_number}: {signed_series}")
+                break
+        
+        # Save updated config
+        return save_lta_partial_config(lta_folder_path, folder_name, config)
+        
+    except Exception as e:
+        logger.error(f"Error updating partial signed series: {e}")
         return False
