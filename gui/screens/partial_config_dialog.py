@@ -230,6 +230,12 @@ class PartialConfigDialog:
         weight_entry = ttk.Entry(frame, textvariable=weight_var, width=15)
         weight_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
         
+        # Calculated positions (read-only, will be auto-calculated)
+        ttk.Label(frame, text="Positions (auto):").grid(row=0, column=2, sticky=tk.W, padx=5, pady=2)
+        positions_var = tk.StringVar(value="")
+        positions_label = ttk.Label(frame, textvariable=positions_var, foreground="blue")
+        positions_label.grid(row=0, column=3, sticky=tk.W, padx=5, pady=2)
+        
         # DS Serie
         ttk.Label(frame, text="DS Série:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
         ds_serie_var = tk.StringVar(value=existing_data['ds_serie'] if existing_data else "")
@@ -246,44 +252,154 @@ class PartialConfigDialog:
         ttk.Label(frame, text="Lieu de Chargement:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
         location_var = tk.StringVar(value=existing_data['loading_location'] if existing_data else "")
         location_entry = ttk.Entry(frame, textvariable=location_var, width=30)
-        location_entry.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+        location_entry.grid(row=3, column=1, columnspan=3, sticky=tk.W, padx=5, pady=2)
         
-        # DUM Selection
-        ttk.Label(frame, text="DUMs:").grid(row=4, column=0, sticky=tk.W, padx=5, pady=2)
+        # DUM Distribution Preview (read-only text widget)
+        ttk.Label(frame, text="Distribution DUMs (auto):").grid(row=4, column=0, sticky=tk.NW, padx=5, pady=2)
         
-        dums_frame = ttk.Frame(frame)
-        dums_frame.grid(row=4, column=1, sticky=(tk.W, tk.E), padx=5, pady=2)
+        dums_text = tk.Text(frame, height=6, width=50, state='disabled', wrap=tk.WORD)
+        dums_text.grid(row=4, column=1, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=2)
         
-        dum_vars = {}
-        for dum in self.lta_data['dums']:
-            dum_num = dum['number']
-            is_selected = False
-            
-            if existing_data:
-                for d in existing_data.get('dums', []):
-                    if d['dum_number'] == dum_num:
-                        is_selected = True
-                        break
-            
-            var = tk.BooleanVar(value=is_selected)
-            cb = ttk.Checkbutton(
-                dums_frame,
-                text=f"DUM {dum_num} ({dum['weight']}kg, {dum['positions']}p)",
-                variable=var
-            )
-            cb.pack(anchor=tk.W)
-            dum_vars[dum_num] = var
+        # Scrollbar for DUM distribution
+        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=dums_text.yview)
+        scrollbar.grid(row=4, column=4, sticky=(tk.N, tk.S))
+        dums_text.configure(yscrollcommand=scrollbar.set)
         
         self.partial_forms.append({
             'partial_number': partial_num,
             'weight_var': weight_var,
+            'positions_var': positions_var,
             'ds_serie_var': ds_serie_var,
             'ds_cle_var': ds_cle_var,
             'location_var': location_var,
-            'dum_vars': dum_vars
+            'dums_text': dums_text
         })
         
+        # Trace weight changes to auto-calculate and update display
+        weight_var.trace('w', lambda *args: self._update_distribution_preview())
+        
         return frame
+    
+    def _update_distribution_preview(self):
+        """Update the DUM distribution preview for all partials"""
+        # Collect partial weights
+        partial_weights = []
+        for form_data in self.partial_forms:
+            try:
+                weight = float(form_data['weight_var'].get().strip())
+                partial_weights.append(weight)
+            except ValueError:
+                partial_weights.append(0)
+        
+        # Calculate distribution
+        distribution = self._calculate_dum_distribution(partial_weights)
+        
+        # Update each partial's display
+        for idx, form_data in enumerate(self.partial_forms):
+            if idx < len(distribution):
+                partial_dist = distribution[idx]
+                
+                # Update positions
+                form_data['positions_var'].set(str(partial_dist['positions']))
+                
+                # Update DUM list
+                dums_text = form_data['dums_text']
+                dums_text.configure(state='normal')
+                dums_text.delete('1.0', tk.END)
+                
+                for dum_info in partial_dist['dums']:
+                    dum_num = dum_info['dum_number']
+                    dum_weight = dum_info['weight']
+                    dum_positions = dum_info['positions']
+                    is_split = dum_info['is_split']
+                    split_id = dum_info.get('split_id', '')
+                    
+                    if is_split:
+                        dums_text.insert(tk.END, f"DUM {dum_num} {split_id}: {dum_weight:.1f}kg, {dum_positions}p ⚠️ PARTIEL\n")
+                    else:
+                        dums_text.insert(tk.END, f"DUM {dum_num}: {dum_weight:.1f}kg, {dum_positions}p\n")
+                
+                dums_text.configure(state='disabled')
+    
+    def _calculate_dum_distribution(self, partial_weights):
+        """
+        Automatically distribute DUMs across partials based on weights.
+        Sequential distribution: Fill partials in order until weight is reached.
+        Last DUM may be split if needed.
+        """
+        distribution = []
+        
+        total_lta_weight = self.lta_data['total_weight']
+        total_lta_positions = self.lta_data['total_positions']
+        dums = self.lta_data['dums']
+        
+        current_dum_idx = 0
+        remaining_dum_weight = dums[0]['weight'] if dums else 0
+        remaining_dum_positions = dums[0]['positions'] if dums else 0
+        is_continuing_split = False  # Track if we're continuing a split DUM
+        
+        for partial_idx, partial_weight in enumerate(partial_weights):
+            if partial_weight <= 0:
+                distribution.append({'weight': 0, 'positions': 0, 'dums': []})
+                continue
+            
+            # Calculate positions for this partial
+            partial_positions = round((partial_weight * total_lta_positions) / total_lta_weight)
+            
+            partial_dums = []
+            weight_accumulated = 0
+            positions_accumulated = 0
+            
+            # Fill DUMs until we reach the target weight
+            while weight_accumulated < partial_weight and current_dum_idx < len(dums):
+                weight_needed = partial_weight - weight_accumulated
+                
+                if remaining_dum_weight <= weight_needed:
+                    # Take entire remaining DUM (or remaining part of split DUM)
+                    partial_dums.append({
+                        'dum_number': dums[current_dum_idx]['number'],
+                        'weight': remaining_dum_weight,
+                        'positions': remaining_dum_positions,
+                        'is_split': is_continuing_split,
+                        'split_id': f"{dums[current_dum_idx]['number']}/{partial_idx + 1}" if is_continuing_split else ''
+                    })
+                    weight_accumulated += remaining_dum_weight
+                    positions_accumulated += remaining_dum_positions
+                    
+                    # Move to next DUM
+                    current_dum_idx += 1
+                    is_continuing_split = False
+                    if current_dum_idx < len(dums):
+                        remaining_dum_weight = dums[current_dum_idx]['weight']
+                        remaining_dum_positions = dums[current_dum_idx]['positions']
+                else:
+                    # Split the DUM
+                    # Calculate split positions proportionally
+                    split_positions = round((weight_needed * remaining_dum_positions) / remaining_dum_weight)
+                    
+                    partial_dums.append({
+                        'dum_number': dums[current_dum_idx]['number'],
+                        'weight': weight_needed,
+                        'positions': split_positions,
+                        'is_split': True,
+                        'split_id': f"{dums[current_dum_idx]['number']}/{partial_idx + 1}"
+                    })
+                    weight_accumulated += weight_needed
+                    positions_accumulated += split_positions
+                    
+                    # Update remaining DUM
+                    remaining_dum_weight -= weight_needed
+                    remaining_dum_positions -= split_positions
+                    is_continuing_split = True  # Mark that next partial continues this DUM
+                    break
+            
+            distribution.append({
+                'weight': weight_accumulated,
+                'positions': positions_accumulated,
+                'dums': partial_dums
+            })
+        
+        return distribution
     
     def _save_config(self):
         """Validate and save configuration"""
@@ -291,9 +407,22 @@ class PartialConfigDialog:
             # Collect data from forms
             partials = []
             total_weight_check = 0
-            all_dums_assigned = set()
             
+            # First collect partial weights to calculate distribution
+            partial_weights = []
             for form_data in self.partial_forms:
+                try:
+                    weight = float(form_data['weight_var'].get().strip())
+                    partial_weights.append(weight)
+                except ValueError:
+                    messagebox.showerror("Erreur", f"Poids invalide pour Partiel {form_data['partial_number']}")
+                    return
+            
+            # Calculate DUM distribution automatically
+            distribution = self._calculate_dum_distribution(partial_weights)
+            
+            # Build partials configuration using calculated distribution
+            for idx, form_data in enumerate(self.partial_forms):
                 partial_num = form_data['partial_number']
                 
                 # Validate required fields
@@ -320,49 +449,36 @@ class PartialConfigDialog:
                     )
                     return
                 
-                # Get selected DUMs
+                # Get DUMs from calculated distribution
+                partial_dist = distribution[idx]
                 selected_dums = []
-                for dum_num, var in form_data['dum_vars'].items():
-                    if var.get():
-                        # Find DUM data
-                        dum_data = next((d for d in self.lta_data['dums'] if d['number'] == dum_num), None)
-                        if dum_data:
-                            selected_dums.append({
-                                'dum_number': dum_num,
-                                'weight': dum_data['weight'],
-                                'positions': dum_data['positions'],
-                                'is_split': dum_num in all_dums_assigned  # Will be split if already assigned
-                            })
-                            all_dums_assigned.add(dum_num)
                 
+                for dum_info in partial_dist['dums']:
+                    selected_dums.append({
+                        'dum_number': dum_info['dum_number'],
+                        'weight': dum_info['weight'],
+                        'positions': dum_info['positions'],
+                        'is_split': dum_info['is_split'],
+                        'split_id': dum_info.get('split_id', '')
+                    })
+                
+                # Validate distribution has DUMs
                 if not selected_dums:
                     messagebox.showerror(
                         "Validation",
-                        f"Partiel {partial_num}: Au moins un DUM doit être sélectionné"
+                        f"Partiel {partial_num}: Aucun DUM assigné par distribution automatique"
                     )
                     return
-                
-                # Calculate positions proportionally
-                positions = int(round((weight_float / self.lta_data['total_weight']) * self.lta_data['total_positions']))
                 
                 partials.append({
                     'partial_number': partial_num,
                     'weight': weight_float,
-                    'positions': positions,
+                    'positions': partial_dist['positions'],
                     'ds_serie': ds_serie,
                     'ds_cle': ds_cle,
                     'loading_location': location,
                     'dums': selected_dums
                 })
-            
-            # Validate all DUMs assigned
-            if len(all_dums_assigned) != len(self.lta_data['dums']):
-                missing = set(d['number'] for d in self.lta_data['dums']) - all_dums_assigned
-                messagebox.showerror(
-                    "Validation",
-                    f"DUMs non assignés: {', '.join(map(str, missing))}"
-                )
-                return
             
             # Validate weight tolerance (allow 1% difference)
             weight_diff = abs(total_weight_check - self.lta_data['total_weight'])
@@ -378,25 +494,25 @@ class PartialConfigDialog:
                 if not response:
                     return
             
-            # Detect split DUMs
+            # Detect split DUMs from distribution
             split_dums = {}
-            for dum_num in all_dums_assigned:
-                appearances = []
-                for partial in partials:
-                    for dum in partial['dums']:
-                        if dum['dum_number'] == dum_num:
-                            appearances.append({
-                                'partial': partial['partial_number'],
-                                'split_id': f"{dum_num}/{partial['partial_number']}",
-                                'weight': dum['weight'],
-                                'positions': dum['positions']
-                            })
-                
-                if len(appearances) > 1:
-                    split_dums[str(dum_num)] = {
-                        'total_weight': sum(a['weight'] for a in appearances),
-                        'splits': appearances
-                    }
+            for partial in partials:
+                for dum in partial['dums']:
+                    if dum['is_split']:
+                        dum_num = str(dum['dum_number'])
+                        if dum_num not in split_dums:
+                            split_dums[dum_num] = {
+                                'total_weight': 0,
+                                'splits': []
+                            }
+                        
+                        split_dums[dum_num]['total_weight'] += dum['weight']
+                        split_dums[dum_num]['splits'].append({
+                            'partial': partial['partial_number'],
+                            'split_id': dum['split_id'],
+                            'weight': dum['weight'],
+                            'positions': dum['positions']
+                        })
             
             # Build config
             config = {
