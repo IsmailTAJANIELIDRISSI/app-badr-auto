@@ -4002,6 +4002,7 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
 def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partial_number):
     """
     Crée un Etat de Dépotage pour un partiel spécifique d'une LTA.
+    Uses EXACT same selectors as create_etat_depotage for compatibility.
     
     Args:
         driver: Selenium WebDriver instance
@@ -4027,23 +4028,28 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
         
         # Create shipper_data structure for partial
         shipper_data = {
-            'shipper_name': 'Partial LTA',  # Will be updated from shipper file
+            'shipper_name': 'MARCHANDISES DIVERSES',  # Default fallback
             'has_ds_mead': True,
             'serie': partial_data['ds_serie'],
             'cle': partial_data['ds_cle'],
             'loading_location': partial_data['loading_location']
         }
         
-        # Read shipper name from file
-        lta_name = os.path.basename(lta_folder_path)
-        parent_dir = os.path.dirname(lta_folder_path)
-        safe_name = lta_name.replace(' ', '_')
-        txt_file_path = os.path.join(parent_dir, f"{safe_name}_shipper_name.txt")
-        
-        if os.path.exists(txt_file_path):
-            shipper_file_data = read_shipper_from_txt(txt_file_path)
-            if shipper_file_data:
-                shipper_data['shipper_name'] = shipper_file_data['shipper_name']
+        # Try to read shipper name from file (optional for partial)
+        try:
+            lta_name = os.path.basename(lta_folder_path)
+            parent_dir = os.path.dirname(lta_folder_path)
+            safe_name = lta_name.replace(' ', '_')
+            txt_file_path = os.path.join(parent_dir, f"{safe_name}_shipper_name.txt")
+            
+            if os.path.exists(txt_file_path):
+                with open(txt_file_path, 'r', encoding='utf-8') as f:
+                    first_line = f.readline().strip()
+                    if first_line:
+                        shipper_data['shipper_name'] = first_line
+                        print(f"   ✓ Expéditeur: {first_line}")
+        except Exception as e:
+            print(f"   ⚠️  Lecture shipper file ignorée: {e}")
         
         wait = WebDriverWait(driver, 15)
         
@@ -4111,153 +4117,259 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
             return False
         
         # ==================================================================
-        # Fill form fields using partial data
+        # ÉTAPE ED.1: Sélection du Bureau "301" (EXACT COPY from create_etat_depotage)
         # ==================================================================
-        print("\n📝 Remplissage du formulaire ED (Partiel)...")
+        print("\n   🏢 Sélection du Bureau 301...")
         
-        # Bureau (301)
+        # ED.1.1: Entrer "301" dans l'autocomplete
         try:
-            bureau_select = wait.until(
-                EC.element_to_be_clickable((By.XPATH, "//select[contains(@name, 'bureau')]"))
+            bureau_input = wait.until(
+                EC.presence_of_element_located((By.ID, "rootForm:bureauCmbId_INPUT_input"))
             )
-            bureau_select.click()
-            time.sleep(0.5)
-            bureau_option = wait.until(
-                EC.element_to_be_clickable((By.XPATH, "//option[@value='301']"))
-            )
-            bureau_option.click()
-            print("   ✓ Bureau 301 sélectionné")
+            bureau_input.clear()
+            bureau_input.send_keys("301")
+            print("      ✓ Bureau '301' saisi")
             time.sleep(1)
         except Exception as e:
-            print(f"   ❌ Erreur sélection bureau: {e}")
-            driver.switch_to.default_content()
+            print(f"      ❌ Erreur saisie bureau: {e}")
             return_to_home_after_error(driver)
             return False
         
-        # Type DS (DS MEAD Combinée)
+        # ED.1.2: Sélectionner la première suggestion
         try:
-            type_ds_select = wait.until(
-                EC.element_to_be_clickable((By.XPATH, "//select[contains(@name, 'typeDocument')]"))
+            bureau_suggestion = wait.until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, "div#rootForm\\:bureauCmbId_INPUT_panel li.ui-autocomplete-item"))
             )
-            type_ds_select.click()
-            time.sleep(0.5)
-            type_ds_option = wait.until(
-                EC.element_to_be_clickable((By.XPATH, "//option[contains(text(), 'DS MEAD Combin')]"))
-            )
-            type_ds_option.click()
-            print("   ✓ DS MEAD Combinée sélectionné")
+            bureau_suggestion.click()
+            print("      ✓ Suggestion bureau sélectionnée")
             time.sleep(1)
         except Exception as e:
-            print(f"   ❌ Erreur sélection type DS: {e}")
-            driver.switch_to.default_content()
+            print(f"      ❌ Erreur sélection suggestion: {e}")
+            return False
+        
+        # ED.1.3: Valider la sélection du bureau
+        try:
+            valider_bureau_btn = wait.until(
+                EC.element_to_be_clickable((By.ID, "rootForm:btnConfirmer"))
+            )
+            valider_bureau_btn.click()
+            print("      ✓ Bureau validé")
+            time.sleep(4)  # Attendre le chargement du formulaire suivant
+        except Exception as e:
+            print(f"      ❌ Erreur validation bureau: {e}")
+            return False
+        
+        # ==================================================================
+        # ÉTAPE ED.2: Configuration Type de Déclaration (EXACT COPY)
+        # ==================================================================
+        print("\n   📋 Configuration de la déclaration...")
+        
+        # ED.2.1: Sélectionner "DS MEAD Combinée" (radio button index 3, value "08")
+        try:
+            time.sleep(1)
+            ds_radios = driver.find_elements(By.CSS_SELECTOR, "table#mainTab\\:form1\\:radioTypeDS div.ui-radiobutton-box")
+            if len(ds_radios) >= 4:
+                ds_radios[3].click()  # Le 4ème = DS MEAD Combinée
+                print("      ✓ 'DS MEAD Combinée' sélectionné")
+                time.sleep(0.5)
+            else:
+                print(f"      ⚠️  Radios DS MEAD insuffisants (trouvé: {len(ds_radios)})")
+                print("      🔄 Tentative avec JavaScript...")
+                js_code = """
+                var radio = document.getElementById('mainTab:form1:radioTypeDS:3');
+                radio.checked = true;
+                var event = new Event('change', { bubbles: true });
+                radio.dispatchEvent(event);
+                """
+                driver.execute_script(js_code)
+                time.sleep(0.5)
+                print("      ✓ 'DS MEAD Combinée' sélectionné via JavaScript")
+        except Exception as e:
+            print(f"      ❌ Impossible de sélectionner DS MEAD: {e}")
             return_to_home_after_error(driver)
             return False
         
-        # Série (from partial data)
+        # ED.2.2: Entrer l'année actuelle
+        try:
+            annee_input = wait.until(
+                EC.presence_of_element_located((By.ID, "mainTab:form1:anneeId"))
+            )
+            annee_input.clear()
+            current_year = str(time.strftime("%Y"))
+            annee_input.send_keys(current_year)
+            print(f"      ✓ Année: {current_year}")
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"      ❌ Erreur saisie année: {e}")
+            return_to_home_after_error(driver)
+            return False
+        
+        # ED.2.3: Entrer le numéro de série (from partial)
         try:
             serie_input = wait.until(
-                EC.presence_of_element_located((By.ID, "mainTab:form1:serieID"))
+                EC.presence_of_element_located((By.ID, "mainTab:form1:serieId"))
             )
             serie_input.clear()
-            serie_input.send_keys(partial_data['ds_serie'])
-            print(f"   ✓ Série: {partial_data['ds_serie']}")
+            serie_input.send_keys(shipper_data['serie'])
+            print(f"      ✓ Série: {shipper_data['serie']}")
             time.sleep(0.5)
         except Exception as e:
-            print(f"   ❌ Erreur saisie série: {e}")
-            driver.switch_to.default_content()
+            print(f"      ❌ Erreur saisie série: {e}")
             return_to_home_after_error(driver)
             return False
         
-        # Clé (from partial data)
+        # ED.2.4: Entrer la clé (from partial)
         try:
             cle_input = wait.until(
-                EC.presence_of_element_located((By.ID, "mainTab:form1:cleID"))
+                EC.presence_of_element_located((By.ID, "mainTab:form1:cleId"))
             )
             cle_input.clear()
-            cle_input.send_keys(partial_data['ds_cle'])
-            print(f"   ✓ Clé: {partial_data['ds_cle']}")
+            cle_input.send_keys(shipper_data['cle'])
+            print(f"      ✓ Clé: {shipper_data['cle']}")
             time.sleep(0.5)
         except Exception as e:
-            print(f"   ❌ Erreur saisie clé: {e}")
-            driver.switch_to.default_content()
+            print(f"      ❌ Erreur saisie clé: {e}")
             return_to_home_after_error(driver)
             return False
         
-        # Référence LTA with partial suffix
-        lta_reference = f"{partial_config['lta_reference']}/{partial_number}"
+        # ED.2.5: Référence LTA avec suffixe partiel /N
+        lta_reference_raw = partial_config['lta_reference']
+        ref_parts = lta_reference_raw.split("-")
+        ref_parts[0] = str(int(ref_parts[0]))  # Enlever zéros initiaux
+        lta_reference_clean = "-".join(ref_parts)
+        lta_reference_partial = f"{lta_reference_clean}/{partial_number}"
+        
+        print(f"      📄 Référence LTA Partiel: {lta_reference_partial}")
+        
         try:
             reference_input = wait.until(
                 EC.presence_of_element_located((By.ID, "mainTab:form1:referenceLotID"))
             )
             reference_input.clear()
-            reference_input.send_keys(lta_reference)
-            print(f"   ✓ Référence LTA: {lta_reference}")
+            reference_input.send_keys(lta_reference_partial)
+            print(f"      ✓ Référence saisie: {lta_reference_partial}")
             time.sleep(0.5)
         except Exception as e:
-            print(f"   ❌ Erreur saisie référence: {e}")
-            driver.switch_to.default_content()
+            print(f"      ❌ Erreur saisie référence: {e}")
             return_to_home_after_error(driver)
             return False
         
-        # Click Valider (reference validation)
+        # ED.2.6: Entrer le lieu de chargement (with autocomplete)
+        if shipper_data.get('loading_location'):
+            try:
+                lieu_input = wait.until(
+                    EC.presence_of_element_located((By.ID, "mainTab:form1:lieuChargementCmbId_INPUT_input"))
+                )
+                lieu_input.clear()
+                lieu_input.send_keys(shipper_data['loading_location'])
+                print(f"      ✓ Lieu de chargement: {shipper_data['loading_location']}")
+                time.sleep(1)
+                
+                # Sélectionner la première suggestion
+                lieu_suggestion = wait.until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, "div#mainTab\\:form1\\:lieuChargementCmbId_INPUT_panel li.ui-autocomplete-item"))
+                )
+                lieu_suggestion.click()
+                print("      ✓ Suggestion lieu sélectionnée")
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"      ⚠️  Erreur saisie lieu de chargement: {e}")
+        
+        # ==================================================================
+        # ÉTAPE ED.3: Validation de la référence
+        # ==================================================================
+        print("\n   ✅ Validation de la référence...")
+        
+        # Attendre que le blocker disparaisse
         try:
-            valider_ref_btn = wait.until(
-                EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'validerRef')]"))
+            wait.until(
+                EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
             )
-            valider_ref_btn.click()
-            print("   ✓ Bouton 'Valider' cliqué (référence)")
-            time.sleep(3)
-        except Exception as e:
-            print(f"   ❌ Erreur validation référence: {e}")
-            driver.switch_to.default_content()
-            return_to_home_after_error(driver)
-            return False
+            time.sleep(1)
+        except:
+            pass
         
-        # Navigate to Quantités tab
-        print("\n📊 Navigation vers l'onglet Quantités...")
+        # Cliquer sur Valider
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                valider_ref_btn = wait.until(
+                    EC.element_to_be_clickable((By.ID, "mainTab:form1:confirmerRef"))
+                )
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", valider_ref_btn)
+                time.sleep(0.5)
+                
+                blockers = driver.find_elements(By.CSS_SELECTOR, "div.ui-blockui[style*='display: block']")
+                if blockers:
+                    print(f"      ⏳ Blocker UI encore visible, attente... (tentative {attempt + 1}/{max_retries})")
+                    time.sleep(2)
+                    continue
+                
+                valider_ref_btn.click()
+                print("      ✓ Bouton 'Valider' cliqué")
+                time.sleep(3)
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"      ⏳ Erreur clic (tentative {attempt + 1}/{max_retries})")
+                    time.sleep(2)
+                else:
+                    print(f"      ❌ Erreur validation après {max_retries} tentatives: {e}")
+                    return_to_home_after_error(driver)
+                    return False
+        
+        # ==================================================================
+        # ÉTAPE ED.4: Naviguer vers l'onglet "Quantités"
+        # ==================================================================
+        print("\n   📊 Navigation vers l'onglet Quantités...")
+        
         try:
             quantites_tab = wait.until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab3']"))
             )
             quantites_tab.click()
-            print("   ✓ Onglet Quantités ouvert")
+            print("      ✓ Onglet Quantités ouvert")
             time.sleep(2)
         except Exception as e:
-            print(f"   ❌ Erreur navigation onglet Quantités: {e}")
+            print(f"      ❌ Erreur navigation onglet Quantités: {e}")
             driver.switch_to.default_content()
             return_to_home_after_error(driver)
             return False
         
-        # Fill totals (from partial data)
+        # ==================================================================
+        # ÉTAPE ED.6: Entrer les totaux (from partial data)
+        # ==================================================================
         total_p = partial_data['positions']
         total_p_brut = partial_data['weight']
         
-        print(f"\n📊 Totaux du partiel: P={total_p}, P,BRUT={total_p_brut}")
+        print(f"\n   ⚖️  Totaux du partiel: P={total_p}, P,BRUT={total_p_brut}")
         
+        # Poids brut total (CORRECT ID from create_etat_depotage)
         try:
-            poids_brut_total_input = wait.until(
-                EC.presence_of_element_located((By.ID, "mainTab:tab3:poidsBrutTotal"))
+            poids_brut_input = wait.until(
+                EC.presence_of_element_located((By.ID, "mainTab:form3:poidsBrutTotal_IT_id_input"))
             )
-            poids_brut_total_input.clear()
-            poids_brut_total_input.send_keys(str(total_p_brut))
-            print(f"   ✓ Poids brut total: {total_p_brut}")
+            poids_brut_input.clear()
+            poids_brut_input.send_keys(str(total_p_brut))
+            print(f"      ✓ Poids brut total saisi: {total_p_brut}")
             time.sleep(0.5)
         except Exception as e:
-            print(f"   ❌ Erreur poids brut total: {e}")
+            print(f"      ❌ Erreur saisie poids brut: {e}")
             driver.switch_to.default_content()
             return_to_home_after_error(driver)
             return False
         
+        # Nombre total de contenants (CORRECT ID from create_etat_depotage)
         try:
             nombre_contenants_input = wait.until(
-                EC.presence_of_element_located((By.ID, "mainTab:tab3:nbrContenantsTotal"))
+                EC.presence_of_element_located((By.ID, "mainTab:form3:nombreContenantTotal_IT_id"))
             )
             nombre_contenants_input.clear()
             nombre_contenants_input.send_keys(str(total_p))
-            print(f"   ✓ Nombre de contenants: {total_p}")
+            print(f"      ✓ Nombre de contenants saisi: {total_p}")
             time.sleep(0.5)
         except Exception as e:
-            print(f"   ❌ Erreur nombre contenants: {e}")
+            print(f"      ❌ Erreur saisie nombre contenants: {e}")
             driver.switch_to.default_content()
             return_to_home_after_error(driver)
             return False
