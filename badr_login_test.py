@@ -7467,29 +7467,7 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
         
         # ========== Traitement NORMAL (pas de blocage) ==========
         
-        # Read shipper data
-        parent_dir = os.path.dirname(lta_folder_path)
-        safe_name = lta_name.replace(' ', '_')
-        txt_file_path = os.path.join(parent_dir, f"{safe_name}_shipper_name.txt")
-        
-        if not os.path.exists(txt_file_path):
-            print(f"❌ Fichier shipper introuvable: {safe_name}_shipper_name.txt")
-            return False
-        
-        shipper_data = read_shipper_from_txt(txt_file_path)
-        if not shipper_data:
-            print(f"❌ Impossible de lire les données depuis {txt_file_path}")
-            return False
-        
-        print(f"✓ Expéditeur: {shipper_data['shipper_name']}")
-        
-        # Check if has DS MEAD reference
-        if not shipper_data['has_ds_mead']:
-            print("\n⏭️  LTA sans référence DS MEAD (ligne 2 absente)")
-            print("   → Pas d'Etat de Dépotage requis pour ce LTA")
-            return False
-        
-        # ========== ÉTAPE PARTIAL: Vérifier si LTA partiel ==========
+        # ========== ÉTAPE PARTIAL: Vérifier si LTA partiel D'ABORD ==========
         print("\n🔍 Vérification configuration partielle...")
         partial_config = get_lta_partial_info(lta_folder_path, lta_name)
         
@@ -7498,6 +7476,7 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
             print(f"   Référence LTA: {partial_config['lta_reference']}")
             print(f"   Poids total: {partial_config['lta_total_weight']} kg")
             print(f"   Positions totales: {partial_config['lta_total_positions']}")
+            print(f"   ℹ️  Fichier shipper non requis (données DS dans partial config)")
             
             # Display split DUMs if any
             if partial_config.get('split_dums'):
@@ -7550,7 +7529,30 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
                 return False
         
         # ========== Standard LTA processing (no partial) ==========
-        print(f"\n✅ LTA Standard (non partiel)")
+        print(f"\n✅ LTA Standard (non partiel) - Lecture fichier shipper...")
+        
+        # Read shipper data (only for non-partial LTAs)
+        parent_dir = os.path.dirname(lta_folder_path)
+        safe_name = lta_name.replace(' ', '_')
+        txt_file_path = os.path.join(parent_dir, f"{safe_name}_shipper_name.txt")
+        
+        if not os.path.exists(txt_file_path):
+            print(f"❌ Fichier shipper introuvable: {safe_name}_shipper_name.txt")
+            return False
+        
+        shipper_data = read_shipper_from_txt(txt_file_path)
+        if not shipper_data:
+            print(f"❌ Impossible de lire les données depuis {txt_file_path}")
+            return False
+        
+        print(f"✓ Expéditeur: {shipper_data['shipper_name']}")
+        
+        # Check if has DS MEAD reference
+        if not shipper_data['has_ds_mead']:
+            print("\n⏭️  LTA sans référence DS MEAD (ligne 2 absente)")
+            print("   → Pas d'Etat de Dépotage requis pour ce LTA")
+            return False
+        
         print(f"   - Série: {shipper_data['serie']}")
         print(f"   - Clé: {shipper_data['cle']}")
         print(f"   - Lieu: {shipper_data['loading_location']}")
