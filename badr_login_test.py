@@ -26,14 +26,20 @@ try:
 except ImportError:
     # Fallback if gui module not available
     def get_lta_partial_info(lta_folder_path, folder_name):
+        """
+        Get partial LTA configuration information
+        Note: lta_folder_path should be the LTA folder itself (e.g., './4eme LTA'), not parent
+        This fallback implementation expects the full path, unlike file_utils version
+        """
         try:
+            # Construct path: lta_folder_path already contains the full folder path
             config_path = os.path.join(lta_folder_path, f"{folder_name}_partial_config.json")
             if os.path.exists(config_path):
                 with open(config_path, 'r', encoding='utf-8') as f:
                     return json.load(f)
             return None
         except Exception as e:
-            print(f"Error loading partial config: {e}")
+            print(f"⚠️  Error loading partial config: {e}")
             return None
 
 # Load environment variables
@@ -7469,7 +7475,10 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
         
         # ========== ÉTAPE PARTIAL: Vérifier si LTA partiel D'ABORD ==========
         print("\n🔍 Vérification configuration partielle...")
-        partial_config = get_lta_partial_info(lta_folder_path, lta_name)
+        # get_lta_partial_info expects parent directory + folder name
+        # lta_folder_path is "./4eme LTA", so parent is dirname
+        parent_dir = os.path.dirname(lta_folder_path) or "."
+        partial_config = get_lta_partial_info(parent_dir, lta_name)
         
         if partial_config:
             print(f"\n📦 LTA PARTIEL DÉTECTÉ - {len(partial_config['partials'])} vol(s)")
