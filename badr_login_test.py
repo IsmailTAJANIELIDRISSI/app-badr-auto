@@ -4232,22 +4232,35 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
             return_to_home_after_error(driver)
             return False
         
-        # ED.2.5: Référence LTA avec suffixe partiel /N
+        # ED.2.5: Référence LTA Partiel avec 3 formats (EXACT COPY from create_etat_depotage)
         lta_reference_raw = partial_config['lta_reference']
+        
+        # Préparer 3 formats à essayer (MÊME référence pour tous les partiels):
+        # Format 1: Avec tirets (ex: "72-73797496")
         ref_parts = lta_reference_raw.split("-")
         ref_parts[0] = str(int(ref_parts[0]))  # Enlever zéros initiaux
-        lta_reference_clean = "-".join(ref_parts)
-        lta_reference_partial = f"{lta_reference_clean}/{partial_number}"
+        lta_reference_format1 = "-".join(ref_parts)
         
-        print(f"      📄 Référence LTA Partiel: {lta_reference_partial}")
+        # Format 2: Sans tirets (ex: "7273797496")
+        lta_reference_format2 = lta_reference_raw.replace("-", "")
+        lta_reference_format2 = str(int(lta_reference_format2))  # Enlever zéros initiaux
         
+        # Format 3: Avec tirets, première partie sans zéro (ex: "72-73797496")
+        lta_reference_format3 = "-".join(ref_parts)  # Identique à Format 1
+        
+        print(f"      📄 Référence LTA brute: {lta_reference_raw}")
+        print(f"      📄 Format 1 (avec tirets): {lta_reference_format1}")
+        print(f"      📄 Format 2 (sans tirets): {lta_reference_format2}")
+        print(f"      📄 Format 3 (avec tirets): {lta_reference_format3}")
+        
+        # Essayer d'abord le Format 1
         try:
             reference_input = wait.until(
                 EC.presence_of_element_located((By.ID, "mainTab:form1:referenceLotID"))
             )
             reference_input.clear()
-            reference_input.send_keys(lta_reference_partial)
-            print(f"      ✓ Référence saisie: {lta_reference_partial}")
+            reference_input.send_keys(lta_reference_format1)
+            print(f"      ✓ Référence saisie (Format 1): {lta_reference_format1}")
             time.sleep(0.5)
         except Exception as e:
             print(f"      ❌ Erreur saisie référence: {e}")
@@ -4276,11 +4289,11 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                 print(f"      ⚠️  Erreur saisie lieu de chargement: {e}")
         
         # ==================================================================
-        # ÉTAPE ED.3: Validation de la référence
+        # ÉTAPE ED.3: Validation et Gestion des Erreurs (EXACT COPY from create_etat_depotage)
         # ==================================================================
-        print("\n   ✅ Validation de la référence...")
+        print("\n   ✅ Validation de l'Etat de Dépotage...")
         
-        # Attendre que le blocker disparaisse
+        # ED.3.1: Attendre que le blocker overlay disparaisse complètement
         try:
             wait.until(
                 EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
@@ -4289,7 +4302,7 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
         except:
             pass
         
-        # Cliquer sur Valider
+        # ED.3.2: Cliquer sur Valider avec retry en cas d'interception
         max_retries = 3
         for attempt in range(max_retries):
             try:
@@ -4311,18 +4324,151 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                 break
             except Exception as e:
                 if attempt < max_retries - 1:
-                    print(f"      ⏳ Erreur clic (tentative {attempt + 1}/{max_retries})")
+                    print(f"      ⏳ Erreur clic (tentative {attempt + 1}/{max_retries}): {str(e)[:100]}")
                     time.sleep(2)
                 else:
-                    print(f"      ❌ Erreur validation après {max_retries} tentatives: {e}")
+                    print(f"      ❌ Erreur clic validation après {max_retries} tentatives: {e}")
                     return_to_home_after_error(driver)
                     return False
+        
+        # ED.3.3: Vérifier messages d'erreur ou de succès
+        error_detected = False
+        try:
+            time.sleep(2)
+            
+            error_msg = driver.find_elements(By.CSS_SELECTOR, "div.ui-messages-error-detail")
+            if not error_msg or len(error_msg) == 0:
+                error_msg = driver.find_elements(By.CSS_SELECTOR, "span.ui-messages-error-detail")
+            
+            if error_msg and len(error_msg) > 0:
+                error_text = error_msg[0].text.strip()
+                print(f"      ⚠️  Erreur de validation détectée: {error_text}")
+                error_detected = True
+                
+                # Essayer les autres formats si erreur de référence
+                if "n'existe pas" in error_text.lower() or "référence" in error_text.lower():
+                    print(f"      ⚠️  Format 1 rejeté, tentative Format 2...")
+                    
+                    try:
+                        close_btn = driver.find_element(By.CSS_SELECTOR, "a.ui-messages-close")
+                        close_btn.click()
+                        time.sleep(0.5)
+                    except:
+                        pass
+                    
+                    reference_input = wait.until(
+                        EC.presence_of_element_located((By.ID, "mainTab:form1:referenceLotID"))
+                    )
+                    reference_input.clear()
+                    time.sleep(0.3)
+                    reference_input.send_keys(lta_reference_format2)
+                    print(f"      ✓ Référence Format 2 saisie: {lta_reference_format2}")
+                    time.sleep(0.5)
+                    
+                    # Re-valider
+                    for attempt in range(3):
+                        try:
+                            wait.until(EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui")))
+                            time.sleep(0.5)
+                            valider_ref_btn = wait.until(EC.element_to_be_clickable((By.ID, "mainTab:form1:confirmerRef")))
+                            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", valider_ref_btn)
+                            time.sleep(0.5)
+                            valider_ref_btn.click()
+                            print("      ✓ Bouton 'Valider' re-cliqué")
+                            time.sleep(3)
+                            break
+                        except Exception as retry_e:
+                            if attempt < 2:
+                                time.sleep(2)
+                            else:
+                                raise retry_e
+                    
+                    # Vérifier résultat Format 2
+                    time.sleep(1)
+                    error_msg_retry2 = driver.find_elements(By.CSS_SELECTOR, "div.ui-messages-error-detail")
+                    if not error_msg_retry2:
+                        error_msg_retry2 = driver.find_elements(By.CSS_SELECTOR, "span.ui-messages-error-detail")
+                    
+                    if error_msg_retry2 and len(error_msg_retry2) > 0:
+                        print(f"      ⚠️  Format 2 rejeté, tentative Format 3...")
+                        
+                        try:
+                            close_btn = driver.find_element(By.CSS_SELECTOR, "a.ui-messages-close")
+                            close_btn.click()
+                            time.sleep(0.5)
+                        except:
+                            pass
+                        
+                        reference_input.clear()
+                        time.sleep(0.3)
+                        reference_input.send_keys(lta_reference_format3)
+                        print(f"      ✓ Référence Format 3 saisie: {lta_reference_format3}")
+                        time.sleep(0.5)
+                        
+                        # Re-valider
+                        for attempt in range(3):
+                            try:
+                                wait.until(EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui")))
+                                time.sleep(0.5)
+                                valider_ref_btn = wait.until(EC.element_to_be_clickable((By.ID, "mainTab:form1:confirmerRef")))
+                                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", valider_ref_btn)
+                                time.sleep(0.5)
+                                valider_ref_btn.click()
+                                time.sleep(3)
+                                break
+                            except:
+                                if attempt < 2:
+                                    time.sleep(2)
+                        
+                        # Vérifier résultat Format 3
+                        time.sleep(1)
+                        error_msg_retry3 = driver.find_elements(By.CSS_SELECTOR, "div.ui-messages-error-detail")
+                        if not error_msg_retry3:
+                            error_msg_retry3 = driver.find_elements(By.CSS_SELECTOR, "span.ui-messages-error-detail")
+                        
+                        if error_msg_retry3 and len(error_msg_retry3) > 0:
+                            print(f"      ❌ Tous les formats rejetés - abandon")
+                            return_to_home_after_error(driver)
+                            return False
+                        else:
+                            print("      ✅ Format 3 accepté!")
+                            error_detected = False
+                    else:
+                        print("      ✅ Format 2 accepté!")
+                        error_detected = False
+                else:
+                    print(f"      ❌ Erreur non liée à la référence: {error_text}")
+                    return_to_home_after_error(driver)
+                    return False
+            
+            if not error_detected:
+                print("      ✓ Validation terminée avec succès")
+            else:
+                return_to_home_after_error(driver)
+                return False
+                
+        except Exception as e:
+            print(f"      ⚠️  Erreur lors de la vérification: {e}")
         
         # ==================================================================
         # ÉTAPE ED.4: Naviguer vers l'onglet "Quantités"
         # ==================================================================
         print("\n   📊 Navigation vers l'onglet Quantités...")
         
+        # ED.4.1: Fermer tous les messages d'erreur avant navigation (éviter "element click intercepted")
+        try:
+            close_btns = driver.find_elements(By.CSS_SELECTOR, "a.ui-messages-close")
+            for btn in close_btns:
+                try:
+                    btn.click()
+                    time.sleep(0.3)
+                    print("      ✓ Message d'erreur fermé")
+                except:
+                    pass
+        except:
+            pass
+        
+        # ED.4.2: Cliquer sur l'onglet Quantités
         try:
             quantites_tab = wait.until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab3']"))
