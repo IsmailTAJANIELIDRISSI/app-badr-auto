@@ -178,7 +178,16 @@ class Phase2DUMScreen:
         self.app.log_message(f"Phase 2: {len(self.all_ltas)} LTA(s) détecté(s)", "INFO")
     
     def _has_signed_series(self, lta):
-        """Check if LTA has signed series in Line 8"""
+        """Check if LTA has signed series (from file or partial config)"""
+        # Check if partial LTA
+        if lta.get('is_partial') and lta.get('partial_config'):
+            # Check if at least one partial has signed series
+            for partial in lta['partial_config'].get('partials', []):
+                if partial.get('ds_signed_series'):
+                    return True
+            return False
+        
+        # Standard LTA: check line 8 of LTA file
         if not lta.get('lta_file'):
             return False
         
@@ -206,19 +215,32 @@ class Phase2DUMScreen:
             # Get DUM count
             dum_count = get_dum_count(lta['folder_path']) if lta.get('folder_path') else 0
             
-            # Check if has signed ED (from LTA file line 8)
-            has_ed = bool(lta.get('signed_ds'))
+            # Check if has signed ED
+            has_ed = self._has_signed_series(lta)
             
-            # Display signed DS if available, otherwise show "Pas d'ED"
-            if has_ed:
-                ed_status = f"ED: {lta.get('signed_ds')}"
+            # Build ED status string
+            if lta.get('is_partial') and lta.get('partial_config'):
+                # Partial LTA: show DS validated and signed series for each partial
+                partial_statuses = []
+                for partial in lta['partial_config'].get('partials', []):
+                    p_num = partial.get('partial_number')
+                    ds_val = partial.get('ds_validated', '?')
+                    ds_sig = partial.get('ds_signed_series', 'Non signé')
+                    partial_statuses.append(f"P{p_num}: {ds_val} ({ds_sig})")
+                
+                ed_status = f"📦 PARTIEL: {' | '.join(partial_statuses)}"
             else:
-                ed_status = "Pas d'ED"
+                # Standard LTA: show single signed DS
+                if has_ed:
+                    ed_status = f"ED: {lta.get('signed_ds')}"
+                else:
+                    ed_status = "Pas d'ED"
             
             # Create checkbox with LTA name, reference, and status
             lta_ref = lta.get('lta_reference', 'N/A')
             cb_text = f"{lta['name']} - {lta_ref} - {dum_count} DUMs - {ed_status}"
-            cb = ttk.Checkbutton(self.scrollable_frame, text=cb_text, variable=var)
+            cb = ttk.Checkbutton(self.scrollable_frame, text=cb_text, variable=var, 
+                               wraplength=800)  # Allow text wrapping for long partial info
             cb.pack(anchor=tk.W, padx=5, pady=2)
             
             self.lta_checkboxes.append({

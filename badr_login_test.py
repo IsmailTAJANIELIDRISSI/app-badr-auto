@@ -2192,6 +2192,100 @@ def get_dum_lots_for_partial(partial_data):
     
     return dum_lots
 
+def save_ds_validated_to_partial_config(lta_folder_path, folder_name, partial_number, ds_validated):
+    """
+    Sauvegarde le DS validé dans le fichier de configuration partielle.
+    
+    Args:
+        lta_folder_path: Chemin du dossier LTA parent
+        folder_name: Nom du dossier LTA (ex: "2eme LTA")
+        partial_number: Numéro du partiel (1, 2, etc.)
+        ds_validated: Référence DS validée (ex: "7732E")
+    
+    Returns:
+        bool: True si succès, False sinon
+    """
+    try:
+        # Construire le chemin du fichier config
+        lta_subfolder = os.path.join(lta_folder_path, folder_name)
+        config_file = os.path.join(lta_subfolder, f"{folder_name}_partial_config.json")
+        
+        if not os.path.exists(config_file):
+            print(f"      ⚠️  Fichier config partiel introuvable: {config_file}")
+            return False
+        
+        # Charger le config existant
+        with open(config_file, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        
+        # Trouver le partiel et mettre à jour ds_validated
+        for partial in config.get('partials', []):
+            if partial['partial_number'] == partial_number:
+                partial['ds_validated'] = ds_validated
+                if 'ds_signed_series' not in partial:
+                    partial['ds_signed_series'] = None  # Placeholder pour série signée
+                break
+        
+        # Sauvegarder
+        with open(config_file, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        
+        print(f"      ✓ DS validé sauvegardé: {ds_validated}")
+        return True
+        
+    except Exception as e:
+        print(f"      ⚠️  Erreur sauvegarde DS validé: {e}")
+        return False
+
+def update_signed_series_for_partial(lta_folder_path, folder_name, partial_number, signed_series):
+    """
+    Met à jour la série signée pour un partiel (à appeler manuellement après signature).
+    
+    Args:
+        lta_folder_path: Chemin du dossier LTA parent
+        folder_name: Nom du dossier LTA (ex: "2eme LTA")
+        partial_number: Numéro du partiel (1, 2, etc.)
+        signed_series: Série signée (ex: "9913 G")
+    
+    Returns:
+        bool: True si succès, False sinon
+    """
+    try:
+        # Construire le chemin du fichier config
+        lta_subfolder = os.path.join(lta_folder_path, folder_name)
+        config_file = os.path.join(lta_subfolder, f"{folder_name}_partial_config.json")
+        
+        if not os.path.exists(config_file):
+            print(f"⚠️  Fichier config partiel introuvable: {config_file}")
+            return False
+        
+        # Charger le config existant
+        with open(config_file, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        
+        # Trouver le partiel et mettre à jour ds_signed_series
+        found = False
+        for partial in config.get('partials', []):
+            if partial['partial_number'] == partial_number:
+                partial['ds_signed_series'] = signed_series
+                found = True
+                break
+        
+        if not found:
+            print(f"⚠️  Partiel {partial_number} introuvable dans le config")
+            return False
+        
+        # Sauvegarder
+        with open(config_file, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        
+        print(f"✓ Série signée sauvegardée pour partiel {partial_number}: {signed_series}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Erreur sauvegarde série signée: {e}")
+        return False
+
 def get_dum_preapurement_lots(dum_number, partial_config, validated_lta_reference):
     """
     Determines the Préapurement DS lot structure for a DUM based on partial configuration.
@@ -4904,7 +4998,7 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
             
             print("   ✓ Validation réussie!")
             
-            # Extract DS reference
+            # Extract DS reference and save to config
             try:
                 reference_table = wait.until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, "table.reference"))
@@ -4919,6 +5013,11 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                         serie_clean = str(int(serie_value)) if serie_value.isdigit() else serie_value
                         ds_reference = f"{serie_clean}{cle_value}"
                         print(f"   ✓ Référence DS: {ds_reference}")
+                        
+                        # Sauvegarder le DS validé dans le config partiel
+                        lta_name = os.path.basename(lta_folder_path)
+                        parent_dir = os.path.dirname(lta_folder_path) or "."
+                        save_ds_validated_to_partial_config(parent_dir, lta_name, partial_number, ds_reference)
             except Exception as e:
                 print(f"   ⚠️  Erreur extraction référence: {e}")
             
