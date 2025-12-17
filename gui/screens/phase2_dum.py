@@ -146,14 +146,20 @@ class Phase2DUMScreen:
     
     def refresh_lta_list(self):
         """Refresh the list of LTAs"""
+        self.app.log_message("Phase 2: Actualisation de la liste des LTAs...", "INFO")
+        
         if not self.app.current_folder:
+            self.app.log_message("Phase 2: Aucun dossier sélectionné", "WARNING")
             messagebox.showwarning("Attention", "Aucun dossier sélectionné.\nVeuillez d'abord exécuter la préparation.")
             return
         
         # Detect all LTAs
+        self.app.log_message(f"Phase 2: Détection des LTAs dans {self.app.current_folder}", "INFO")
         self.all_ltas = detect_ltas(self.app.current_folder)
+        self.app.log_message(f"Phase 2: {len(self.all_ltas)} LTA(s) trouvé(s) après detect_ltas()", "INFO")
         
         if not self.all_ltas:
+            self.app.log_message("Phase 2: Aucun LTA détecté - affichage du message", "WARNING")
             messagebox.showwarning("Attention", "Aucun LTA détecté dans ce dossier")
             return
         
@@ -178,16 +184,17 @@ class Phase2DUMScreen:
         self.app.log_message(f"Phase 2: {len(self.all_ltas)} LTA(s) détecté(s)", "INFO")
     
     def _has_signed_series(self, lta):
-        """Check if LTA has signed series (from file or partial config)"""
+        """Check if LTA has signed series or DS validated (ready for Phase 2)"""
         # Check if partial LTA
         if lta.get('is_partial') and lta.get('partial_config'):
-            # Check if at least one partial has signed series
+            # For partials: check if at least one partial has DS validated OR signed series
             for partial in lta['partial_config'].get('partials', []):
-                if partial.get('ds_signed_series'):
+                # Phase 2 can proceed if DS is validated (even if not yet signed)
+                if partial.get('ds_validated') or partial.get('signed_series'):
                     return True
             return False
         
-        # Standard LTA: check line 8 of LTA file
+        # Standard LTA: check line 8 of LTA file (signed series)
         if not lta.get('lta_file'):
             return False
         
@@ -225,7 +232,7 @@ class Phase2DUMScreen:
                 for partial in lta['partial_config'].get('partials', []):
                     p_num = partial.get('partial_number')
                     ds_val = partial.get('ds_validated', '?')
-                    ds_sig = partial.get('ds_signed_series', 'Non signé')
+                    ds_sig = partial.get('signed_series', 'Non signé')
                     partial_statuses.append(f"P{p_num}: {ds_val} ({ds_sig})")
                 
                 ed_status = f"📦 PARTIEL: {' | '.join(partial_statuses)}"
@@ -239,8 +246,7 @@ class Phase2DUMScreen:
             # Create checkbox with LTA name, reference, and status
             lta_ref = lta.get('lta_reference', 'N/A')
             cb_text = f"{lta['name']} - {lta_ref} - {dum_count} DUMs - {ed_status}"
-            cb = ttk.Checkbutton(self.scrollable_frame, text=cb_text, variable=var, 
-                               wraplength=800)  # Allow text wrapping for long partial info
+            cb = ttk.Checkbutton(self.scrollable_frame, text=cb_text, variable=var)
             cb.pack(anchor=tk.W, padx=5, pady=2)
             
             self.lta_checkboxes.append({

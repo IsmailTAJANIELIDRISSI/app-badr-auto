@@ -86,16 +86,24 @@ class BADRApp:
     def _on_tab_changed(self, event):
         """Handle tab change event - auto-refresh LTAs"""
         current_tab = self.notebook.index(self.notebook.select())
+        tab_names = ["Préparation", "Phase ED", "Phase Déd.", "Logs"]
+        self.log_message(f"Changement vers onglet {current_tab}: {tab_names[current_tab] if current_tab < len(tab_names) else 'Inconnu'}", "INFO")
         
         # Tab 1: Phase 1 ED - auto-refresh LTA list
         if current_tab == 1:
             if self.current_folder:
+                self.log_message("Tab Phase 1: Auto-refresh des LTAs", "INFO")
                 self.phase1_screen.refresh_lta_list()
+            else:
+                self.log_message("Tab Phase 1: current_folder non défini, pas d'auto-refresh", "WARNING")
         
         # Tab 2: Phase 2 DUM - auto-refresh LTA list
         elif current_tab == 2:
             if self.current_folder:
+                self.log_message(f"Tab Phase 2: Auto-refresh des LTAs (dossier: {self.current_folder})", "INFO")
                 self.phase2_screen.refresh_lta_list()
+            else:
+                self.log_message("Tab Phase 2: current_folder non défini, pas d'auto-refresh", "WARNING")
     
     def enable_phase1_tab(self):
         """Enable Phase 1 tab after preparation"""

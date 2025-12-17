@@ -2222,8 +2222,8 @@ def save_ds_validated_to_partial_config(lta_folder_path, folder_name, partial_nu
         for partial in config.get('partials', []):
             if partial['partial_number'] == partial_number:
                 partial['ds_validated'] = ds_validated
-                if 'ds_signed_series' not in partial:
-                    partial['ds_signed_series'] = None  # Placeholder pour série signée
+                if 'signed_series' not in partial:
+                    partial['signed_series'] = None  # Placeholder pour série signée
                 break
         
         # Sauvegarder
@@ -2263,11 +2263,11 @@ def update_signed_series_for_partial(lta_folder_path, folder_name, partial_numbe
         with open(config_file, 'r', encoding='utf-8') as f:
             config = json.load(f)
         
-        # Trouver le partiel et mettre à jour ds_signed_series
+        # Trouver le partiel et mettre à jour signed_series
         found = False
         for partial in config.get('partials', []):
             if partial['partial_number'] == partial_number:
-                partial['ds_signed_series'] = signed_series
+                partial['signed_series'] = signed_series
                 found = True
                 break
         

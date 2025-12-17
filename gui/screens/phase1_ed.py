@@ -349,7 +349,7 @@ class Phase1EDScreen:
                         ).grid(row=current_row, column=3, padx=5, pady=2, sticky=tk.W)
                     
                     # Signed series input for this partial (load existing if available)
-                    existing_signed = partial.get('ds_signed_series', '')
+                    existing_signed = partial.get('signed_series', '')
                     signed_var = tk.StringVar(value=existing_signed if existing_signed else "")
                     signed_entry = ttk.Entry(table_content, textvariable=signed_var, width=15)
                     signed_entry.grid(row=current_row, column=5, padx=5, pady=2, sticky=(tk.W, tk.E))
