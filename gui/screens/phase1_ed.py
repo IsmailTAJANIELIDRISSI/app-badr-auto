@@ -314,16 +314,43 @@ class Phase1EDScreen:
                         foreground="purple"
                     ).grid(row=current_row, column=2, padx=5, pady=2, sticky=tk.W)
                     
-                    # DS Validé placeholder (will be filled after Phase 1)
-                    ttk.Label(
-                        table_content,
-                        text="En attente",
-                        foreground="gray",
-                        font=('Arial', 9, 'italic')
-                    ).grid(row=current_row, column=3, padx=5, pady=2, sticky=tk.W)
+                    # DS Validé (read from partial config)
+                    validated_ds = partial.get('ds_validated', '')
+                    if validated_ds:
+                        validated_label = ttk.Label(
+                            table_content,
+                            text=validated_ds,
+                            font=('Arial', 9, 'bold'),
+                            foreground="darkgreen"
+                        )
+                        validated_label.grid(row=current_row, column=3, padx=5, pady=2, sticky=tk.W)
+                        
+                        # Copy button for partial DS
+                        def make_copy_command_partial(text, lta_name, p_num):
+                            def copy_to_clipboard():
+                                self.frame.clipboard_clear()
+                                self.frame.clipboard_append(text)
+                                self.app.log_message(f"DS copié: {text} ({lta_name} Partiel {p_num})", "SUCCESS")
+                            return copy_to_clipboard
+                        
+                        copy_btn = ttk.Button(
+                            table_content,
+                            text="📋",
+                            width=5,
+                            command=make_copy_command_partial(validated_ds, lta['name'], partial_num)
+                        )
+                        copy_btn.grid(row=current_row, column=4, padx=2, pady=2)
+                    else:
+                        ttk.Label(
+                            table_content,
+                            text="En attente",
+                            foreground="gray",
+                            font=('Arial', 9, 'italic')
+                        ).grid(row=current_row, column=3, padx=5, pady=2, sticky=tk.W)
                     
-                    # Signed series input for this partial
-                    signed_var = tk.StringVar(value="")
+                    # Signed series input for this partial (load existing if available)
+                    existing_signed = partial.get('ds_signed_series', '')
+                    signed_var = tk.StringVar(value=existing_signed if existing_signed else "")
                     signed_entry = ttk.Entry(table_content, textvariable=signed_var, width=15)
                     signed_entry.grid(row=current_row, column=5, padx=5, pady=2, sticky=(tk.W, tk.E))
                     
