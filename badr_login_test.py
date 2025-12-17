@@ -4164,26 +4164,26 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
         # ==================================================================
         print("\n   📋 Configuration de la déclaration...")
         
-        # ED.2.1: Sélectionner "DS MEAD Combinée" (radio button index 3, value "08")
+        # ED.2.1: Sélectionner "DS MEAD" (radio button index 2, value "03")
         try:
             time.sleep(1)
             ds_radios = driver.find_elements(By.CSS_SELECTOR, "table#mainTab\\:form1\\:radioTypeDS div.ui-radiobutton-box")
-            if len(ds_radios) >= 4:
-                ds_radios[3].click()  # Le 4ème = DS MEAD Combinée
-                print("      ✓ 'DS MEAD Combinée' sélectionné")
+            if len(ds_radios) >= 3:
+                ds_radios[2].click()  # Le 3ème = DS MEAD
+                print("      ✓ 'DS MEAD' sélectionné")
                 time.sleep(0.5)
             else:
                 print(f"      ⚠️  Radios DS MEAD insuffisants (trouvé: {len(ds_radios)})")
                 print("      🔄 Tentative avec JavaScript...")
                 js_code = """
-                var radio = document.getElementById('mainTab:form1:radioTypeDS:3');
+                var radio = document.getElementById('mainTab:form1:radioTypeDS:2');
                 radio.checked = true;
                 var event = new Event('change', { bubbles: true });
                 radio.dispatchEvent(event);
                 """
                 driver.execute_script(js_code)
                 time.sleep(0.5)
-                print("      ✓ 'DS MEAD Combinée' sélectionné via JavaScript")
+                print("      ✓ 'DS MEAD' sélectionné via JavaScript")
         except Exception as e:
             print(f"      ❌ Impossible de sélectionner DS MEAD: {e}")
             return_to_home_after_error(driver)
@@ -4542,22 +4542,160 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
         for dum_index, dum_data in enumerate(dum_lots_data, start=1):
             print(f"\n   🔹 Création lot {dum_index}/{len(dum_lots_data)} ({dum_data['dum_name']})...")
             
-            # Click "Nouveau" to create lot
+            # ==================================================================
+            # ÉTAPE LOT.1: Cliquer "Nouveau" pour créer un lot
+            # ==================================================================
             try:
                 nouveau_lot_btn = wait.until(
                     EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_new_lot')]"))
                 )
                 nouveau_lot_btn.click()
-                print(f"      ✓ Bouton 'Nouveau' cliqué")
+                print(f"      ✓ Bouton 'Nouveau' lot cliqué")
                 time.sleep(2)
             except Exception as e:
-                print(f"      ❌ Erreur clic 'Nouveau': {e}")
+                print(f"      ❌ Erreur clic 'Nouveau' lot: {e}")
                 driver.switch_to.default_content()
                 return_to_home_after_error(driver)
                 return False
             
-            # Click "Nouveau" ligne (create line)
+            # ==================================================================
+            # ÉTAPE LOT.2: Remplir l'en-tête du lot
+            # ==================================================================
+            
+            # LOT.2a: Référence du lot (LTA ref + /N)
             try:
+                lot_reference = f"{lta_reference_format1}/{dum_index}"
+                ref_lot_input = wait.until(
+                    EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'referenceLot_IT_id')]"))
+                )
+                ref_lot_input.clear()
+                ref_lot_input.send_keys(lot_reference)
+                print(f"      ✓ Référence lot: {lot_reference}")
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"      ❌ Erreur saisie référence lot: {e}")
+                driver.switch_to.default_content()
+                return_to_home_after_error(driver)
+                return False
+            
+            # LOT.2b: Ligne dépotée (toujours 1)
+            try:
+                ligne_input = wait.until(
+                    EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'ligneDepotee_IT_id')]"))
+                )
+                ligne_input.clear()
+                ligne_input.send_keys("1")
+                print(f"      ✓ Ligne dépotée: 1")
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"      ❌ Erreur saisie ligne dépotée: {e}")
+                driver.switch_to.default_content()
+                return_to_home_after_error(driver)
+                return False
+            
+            # LOT.2c: Sélectionner le radio button ICE (valeur 02)
+            try:
+                ice_radio = wait.until(
+                    EC.presence_of_element_located((By.ID, "mainTab:detailLot:entete_section_form:radioChoixDestinataire:1"))
+                )
+                radio_box = driver.find_element(By.XPATH, "//input[@id='mainTab:detailLot:entete_section_form:radioChoixDestinataire:1']/parent::div/following-sibling::div[@class='ui-radiobutton-box ui-widget ui-corner-all ui-state-default']")
+                radio_box.click()
+                print(f"      ✓ Option ICE sélectionnée")
+                time.sleep(2)
+            except Exception as e:
+                print(f"      ⚠️  Erreur sélection radio ICE (méthode 1): {e}")
+                try:
+                    print(f"      🔄 Tentative avec JavaScript...")
+                    js_code = """
+                    var radio = document.getElementById('mainTab:detailLot:entete_section_form:radioChoixDestinataire:1');
+                    if (radio) {
+                        radio.checked = true;
+                        var event = new Event('change', { bubbles: true });
+                        radio.dispatchEvent(event);
+                    }
+                    """
+                    driver.execute_script(js_code)
+                    time.sleep(2)
+                    print(f"      ✓ Option ICE sélectionnée via JavaScript")
+                except Exception as e2:
+                    print(f"      ❌ Erreur sélection radio ICE: {e2}")
+                    driver.switch_to.default_content()
+                    return_to_home_after_error(driver)
+                    return False
+            
+            # Attendre que le blocker UI disparaisse
+            try:
+                WebDriverWait(driver, 5).until(
+                    EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
+                )
+                print(f"      ✓ Page stabilisée après sélection ICE")
+            except:
+                pass
+            
+            # LOT.2d: Numéro ICE (constant)
+            try:
+                ice_input = wait.until(
+                    EC.presence_of_element_located((By.ID, "mainTab:detailLot:entete_section_form:id_ice"))
+                )
+                wait.until(EC.element_to_be_clickable((By.ID, "mainTab:detailLot:entete_section_form:id_ice")))
+                
+                ice_input.clear()
+                ice_input.send_keys("000230731000088")
+                print(f"      ✓ ICE: 000230731000088")
+                
+                from selenium.webdriver.common.keys import Keys
+                ice_input.send_keys(Keys.TAB)
+                time.sleep(1)
+                
+                print(f"      ⏳ Attente du chargement des informations ICE...")
+                time.sleep(3)
+                
+                try:
+                    WebDriverWait(driver, 5).until(
+                        EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
+                    )
+                    print(f"      ✓ Informations ICE chargées")
+                except:
+                    pass
+                    
+            except Exception as e:
+                print(f"      ❌ Erreur saisie ICE: {e}")
+                driver.switch_to.default_content()
+                return_to_home_after_error(driver)
+                return False
+            
+            # ==================================================================
+            # ÉTAPE LOT.3: Valider l'en-tête du lot
+            # ==================================================================
+            try:
+                valider_lot_btn = wait.until(
+                    EC.element_to_be_clickable((By.ID, "mainTab:detailLot:entete_section_form:btn_confirmer_lot"))
+                )
+                valider_lot_btn.click()
+                print(f"      ✓ En-tête lot validé")
+                
+                print(f"      ⏳ Attente du traitement de la validation...")
+                time.sleep(4)
+                
+                try:
+                    WebDriverWait(driver, 5).until(
+                        EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
+                    )
+                    print(f"      ✓ Validation traitée")
+                except:
+                    pass
+                
+            except Exception as e:
+                print(f"      ❌ Erreur validation en-tête lot: {e}")
+                driver.switch_to.default_content()
+                return_to_home_after_error(driver)
+                return False
+            
+            # ==================================================================
+            # ÉTAPE LOT.4: Cliquer "Nouveau" pour créer une ligne
+            # ==================================================================
+            try:
+                print(f"      🔍 Recherche du bouton 'Nouveau' ligne...")
                 nouveau_ligne_btn = wait.until(
                     EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_new_ligne')]"))
                 )
@@ -4566,9 +4704,19 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                 time.sleep(2)
             except Exception as e:
                 print(f"      ❌ Erreur clic 'Nouveau' ligne: {e}")
-                driver.switch_to.default_content()
-                return_to_home_after_error(driver)
-                return False
+                print(f"      🔍 Tentative de recherche alternative...")
+                try:
+                    nouveau_ligne_btn_alt = wait.until(
+                        EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Nouveau') or contains(@value, 'Nouveau')]"))
+                    )
+                    driver.execute_script("arguments[0].click();", nouveau_ligne_btn_alt)
+                    print(f"      ✓ Bouton 'Nouveau' ligne cliqué (méthode alternative)")
+                    time.sleep(2)
+                except Exception as e2:
+                    print(f"      ❌ Erreur clic 'Nouveau' ligne (alternative): {e2}")
+                    driver.switch_to.default_content()
+                    return_to_home_after_error(driver)
+                    return False
             
             # Fill line form
             # Type Contenant
@@ -4622,14 +4770,14 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                 return_to_home_after_error(driver)
                 return False
             
-            # Marque (LTA reference with partial suffix)
+            # Marque (référence LTA validée)
             try:
                 marque_textarea = wait.until(
                     EC.presence_of_element_located((By.XPATH, "//textarea[contains(@name, 'marqueLib')]"))
                 )
                 marque_textarea.clear()
-                marque_textarea.send_keys(lta_reference)
-                print(f"      ✓ Marque: {lta_reference}")
+                marque_textarea.send_keys(lta_reference_format1)
+                print(f"      ✓ Marque: {lta_reference_format1}")
                 time.sleep(0.5)
             except Exception as e:
                 print(f"      ❌ Erreur marque: {e}")
