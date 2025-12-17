@@ -2174,7 +2174,7 @@ def get_dum_lots_for_partial(partial_data):
         partial_data: Partial configuration dict containing DUMs
     
     Returns:
-        list: List of dicts with dum_name, p (positions), p_brut (weight)
+        list: List of dicts with dum_name, dum_number, split_id, p (positions), p_brut (weight)
     """
     if not partial_data or 'dums' not in partial_data:
         return []
@@ -2183,8 +2183,11 @@ def get_dum_lots_for_partial(partial_data):
     for dum in partial_data['dums']:
         dum_lots.append({
             'dum_name': f"DUM {dum['dum_number']}",
-            'p': dum['positions'],
-            'p_brut': dum['weight']
+            'dum_number': dum['dum_number'],
+            'split_id': dum.get('split_id', ''),
+            'is_split': dum.get('is_split', False),
+            'p': int(dum['positions']),
+            'p_brut': round(float(dum['weight']), 1)  # Arrondir à 1 décimale
         })
     
     return dum_lots
@@ -4562,9 +4565,16 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
             # ÉTAPE LOT.2: Remplir l'en-tête du lot
             # ==================================================================
             
-            # LOT.2a: Référence du lot (LTA ref + /N)
+            # LOT.2a: Référence du lot (LTA ref + /DUM_NUMBER ou /DUM_NUMBER/SPLIT_ID)
             try:
-                lot_reference = f"{lta_reference_format1}/{dum_index}"
+                # Construire référence selon si DUM est split ou non
+                if dum_data.get('is_split', False) and dum_data.get('split_id'):
+                    # DUM split: 157-54326451/2/1 ou 157-54326451/2/2
+                    lot_reference = f"{lta_reference_format1}/{dum_data['split_id']}"
+                else:
+                    # DUM normal: 157-54326451/1 ou 157-54326451/3
+                    lot_reference = f"{lta_reference_format1}/{dum_data['dum_number']}"
+                
                 ref_lot_input = wait.until(
                     EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'referenceLot_IT_id')]"))
                 )
