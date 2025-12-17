@@ -5706,9 +5706,8 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 return False
         
         # ==================================================================
-        # ÉTAPE PDS: Préapurement DS (CONDITIONNEL - seulement si LTA signé)
+        # ÉTAPE PDS: Préapurement DS (CONDITIONNEL - seulement si LTA signé ou partiel validé)
         # ==================================================================
-        # Vérifier si le fichier [X]er LTA.txt existe et contient une série signée (Line 8)
         
         lta_name = os.path.basename(lta_folder_path)
         parent_dir = os.path.dirname(lta_folder_path)
@@ -5720,70 +5719,101 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             if partial_config.get('split_dums'):
                 print(f"   ⚠️  DUMs splits: {list(partial_config['split_dums'].keys())}")
         
-        # Chercher le fichier [X]er LTA.txt dans le répertoire parent
-        lta_file_pattern = os.path.join(parent_dir, f"{lta_name}.txt")
-        
         preapurement_required = False
         ds_serie = None
         ds_cle = None
         validated_lta_reference = None
         loading_location = None
         
-        if os.path.exists(lta_file_pattern):
-            print(f"\n   📄 Fichier LTA trouvé: {lta_name}.txt")
+        # FOR PARTIAL LTAs: Check if any partial has ds_validated
+        if partial_config:
+            print(f"\n   📦 LTA partiel détecté - vérification des DS validés...")
+            # Check if at least one partial has ds_validated
+            has_validated_ds = any(p.get('ds_validated') for p in partial_config.get('partials', []))
             
-            # Parser le fichier LTA
-            lta_data = parse_lta_file(lta_file_pattern)
-            
-            if lta_data and lta_data['signed']:
-                # Ligne 8 contient une série signée valide
+            if has_validated_ds:
                 preapurement_required = True
-                ds_serie = lta_data['serie']
-                ds_cle = lta_data['cle']
+                # For partials, we'll use the first partial's DS info (will be overridden per lot)
+                first_partial = partial_config['partials'][0]
+                ds_serie = first_partial.get('ds_serie')
+                ds_cle = first_partial.get('ds_cle')
+                loading_location = first_partial.get('loading_location')
+                validated_lta_reference = partial_config.get('lta_reference')
                 
-                # IMPORTANT: Lire la référence LTA validée depuis le fichier shipper (ligne 5)
-                # Cette référence a été sauvegardée lors de la Phase 1 (Etat de Dépotage)
-                lta_name_with_underscore = lta_name.replace(" ", "_")
-                shipper_pattern = f"{lta_name_with_underscore}_*.txt"
-                shipper_files = glob.glob(os.path.join(parent_dir, shipper_pattern))
+                print(f"      ✅ Préapurement DS requis (partiels avec DS validés)")
+                print(f"      Référence LTA: {validated_lta_reference}")
+                print(f"      Lieu de chargement: {loading_location}")
+                for p in partial_config['partials']:
+                    print(f"      Partiel {p['partial_number']}: DS {p['ds_serie']} {p['ds_cle']} - Validé: {p.get('ds_validated', 'N/A')}")
+            else:
+                print(f"      ⏭️ Aucun DS validé trouvé pour les partiels")
+                print(f"      ℹ️  Assurez-vous d'avoir exécuté Phase 1 (Etat de Dépotage) pour tous les partiels")
+        else:
+            # FOR STANDARD LTAs: Check LTA file for signed series (line 8)
+            lta_file_pattern = os.path.join(parent_dir, f"{lta_name}.txt")
+            
+            if os.path.exists(lta_file_pattern):
+                print(f"\n   📄 Fichier LTA trouvé: {lta_name}.txt")
                 
-                if shipper_files:
-                    try:
-                        with open(shipper_files[0], 'r', encoding='utf-8') as f:
-                            shipper_lines = [line.strip() for line in f.readlines()]
-                        
-                        # Line 3 du shipper file contient le lieu de chargement
-                        if len(shipper_lines) >= 3:
-                            loading_location = shipper_lines[2]
-                        
-                        # Line 5 du shipper file contient la référence LTA validée (sauvegardée en Phase 1)
-                        if len(shipper_lines) >= 5 and shipper_lines[4]:
-                            validated_lta_reference = shipper_lines[4]
-                            print(f"\n   ✅ Préapurement DS requis (LTA signé)")
-                            print(f"      Série signée: {lta_data['signed_series']}")
-                            print(f"      Série: {ds_serie}")
-                            print(f"      Clé: {ds_cle}")
-                            print(f"      Référence LTA (depuis Phase 1): {validated_lta_reference}")
-                            print(f"      Lieu de chargement: {loading_location}")
-                        else:
-                            print(f"      ⚠️  Référence LTA non trouvée dans {os.path.basename(shipper_files[0])} (ligne 5)")
-                            print(f"      ℹ️  Assurez-vous d'avoir exécuté Phase 1 (Etat de Dépotage) d'abord")
-                            # Ne pas continuer sans référence validée
+                # Parser le fichier LTA
+                lta_data = parse_lta_file(lta_file_pattern)
+                
+                if lta_data and lta_data['signed']:
+                    # Ligne 8 contient une série signée valide
+                    preapurement_required = True
+                    ds_serie = lta_data['serie']
+                    ds_cle = lta_data['cle']
+                    
+                    # IMPORTANT: Lire la référence LTA validée depuis le fichier shipper (ligne 5)
+                    # Cette référence a été sauvegardée lors de la Phase 1 (Etat de Dépotage)
+                    lta_name_with_underscore = lta_name.replace(" ", "_")
+                    shipper_pattern = f"{lta_name_with_underscore}_*.txt"
+                    shipper_files = glob.glob(os.path.join(parent_dir, shipper_pattern))
+                    
+                    if shipper_files:
+                        try:
+                            with open(shipper_files[0], 'r', encoding='utf-8') as f:
+                                shipper_lines = [line.strip() for line in f.readlines()]
+                            
+                            # Line 3 du shipper file contient le lieu de chargement
+                            if len(shipper_lines) >= 3:
+                                loading_location = shipper_lines[2]
+                            
+                            # Line 5 du shipper file contient la référence LTA validée (sauvegardée en Phase 1)
+                            if len(shipper_lines) >= 5 and shipper_lines[4]:
+                                validated_lta_reference = shipper_lines[4]
+                                print(f"\n   ✅ Préapurement DS requis (LTA signé)")
+                                print(f"      Série signée: {lta_data['signed_series']}")
+                                print(f"      Série: {ds_serie}")
+                                print(f"      Clé: {ds_cle}")
+                                print(f"      Référence LTA (depuis Phase 1): {validated_lta_reference}")
+                                print(f"      Lieu de chargement: {loading_location}")
+                            else:
+                                print(f"      ⚠️  Référence LTA non trouvée dans {os.path.basename(shipper_files[0])} (ligne 5)")
+                                print(f"      ℹ️  Assurez-vous d'avoir exécuté Phase 1 (Etat de Dépotage) d'abord")
+                                # Ne pas continuer sans référence validée
+                                preapurement_required = False
+                        except Exception as e:
+                            print(f"      ⚠️  Erreur lecture fichier shipper: {e}")
                             preapurement_required = False
-                    except Exception as e:
-                        print(f"      ⚠️  Erreur lecture fichier shipper: {e}")
+                    else:
+                        print(f"      ⚠️  Fichier shipper introuvable: {shipper_pattern}")
                         preapurement_required = False
                 else:
-                    print(f"      ⚠️  Fichier shipper introuvable: {shipper_pattern}")
-                    preapurement_required = False
+                    print(f"\n   ⏭️  Préapurement DS non requis (LTA non signé - Line 8 vide ou invalide)")
+                    print(f"      ℹ️  Continuons avec la déclaration sans Préapurement DS")
             else:
-                print(f"\n   ⏭️  Préapurement DS non requis (LTA non signé - Line 8 vide ou invalide)")
+                print(f"\n   ⏭️  Préapurement DS non requis (fichier LTA introuvable: {lta_file_pattern})")
                 print(f"      ℹ️  Continuons avec la déclaration sans Préapurement DS")
-        else:
-            print(f"\n   ⏭️  Préapurement DS non requis (fichier LTA introuvable: {lta_file_pattern})")
-            print(f"      ℹ️  Continuons avec la déclaration sans Préapurement DS")
         
-        if preapurement_required and ds_serie and ds_cle and validated_lta_reference:
+        # Check if we have all required data (partial or standard)
+        if preapurement_required and validated_lta_reference:
+            # For partials, ds_serie/ds_cle will be set per lot, so we don't require them here
+            if not partial_config and (not ds_serie or not ds_cle):
+                print(f"\n   ⚠️  Préapurement DS ignoré - DS série/clé manquants")
+                preapurement_required = False
+        
+        if preapurement_required and validated_lta_reference:
             print("\n" + "="*70)
             print("🔗 PRÉAPUREMENT DS")
             print("="*70)
