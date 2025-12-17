@@ -5710,10 +5710,10 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         # ==================================================================
         
         lta_name = os.path.basename(lta_folder_path)
-        parent_dir = os.path.dirname(lta_folder_path)
+        parent_dir = os.path.dirname(lta_folder_path) or "."
         
         # Load partial configuration if exists
-        partial_config = get_lta_partial_info(lta_folder_path, lta_name)
+        partial_config = get_lta_partial_info(parent_dir, lta_name)
         if partial_config:
             print(f"\n📦 Configuration partielle chargée: {len(partial_config['partials'])} partial(s)")
             if partial_config.get('split_dums'):
