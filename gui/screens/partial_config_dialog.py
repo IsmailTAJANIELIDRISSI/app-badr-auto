@@ -191,6 +191,40 @@ class PartialConfigDialog:
         )
         generate_btn.grid(row=0, column=2, padx=10)
         
+        # Exception case warning frame (initially hidden)
+        self.exception_frame = ttk.LabelFrame(main_frame, text="⚠️ CAS D'EXCEPTION DÉTECTÉ", padding="10")
+        self.exception_frame.pack(fill=tk.X, pady=5)
+        self.exception_frame.pack_forget()  # Hide initially
+        
+        exception_info = ttk.Label(
+            self.exception_frame,
+            text="Un partiel a un poids inférieur au plus petit DUM.\n"
+                 "Veuillez renseigner les informations de référence ci-dessous:",
+            foreground="red",
+            font=('Arial', 9, 'bold')
+        )
+        exception_info.grid(row=0, column=0, columnspan=4, sticky=tk.W, pady=(0, 10))
+        
+        ttk.Label(self.exception_frame, text="Référence créée à l'aéroport:", font=('Arial', 9, 'bold')).grid(
+            row=1, column=0, sticky=tk.W, padx=5, pady=2
+        )
+        self.airport_reference_var = tk.StringVar(value="")
+        airport_ref_entry = ttk.Entry(self.exception_frame, textvariable=self.airport_reference_var, width=25)
+        airport_ref_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(self.exception_frame, text="(ex: 157-41680645)", font=('Arial', 8, 'italic')).grid(
+            row=1, column=2, sticky=tk.W, padx=5, pady=2
+        )
+        
+        ttk.Label(self.exception_frame, text="Positions du plus petit partiel:", font=('Arial', 9, 'bold')).grid(
+            row=2, column=0, sticky=tk.W, padx=5, pady=2
+        )
+        self.smallest_partial_positions_var = tk.StringVar(value="")
+        positions_entry = ttk.Entry(self.exception_frame, textvariable=self.smallest_partial_positions_var, width=10)
+        positions_entry.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(self.exception_frame, text="(nombre de positions)", font=('Arial', 8, 'italic')).grid(
+            row=2, column=2, sticky=tk.W, padx=5, pady=2
+        )
+        
         # Partials container (scrollable)
         self.partials_container = ttk.Frame(main_frame)
         self.partials_container.pack(fill=tk.BOTH, expand=True, pady=10)
@@ -231,6 +265,10 @@ class PartialConfigDialog:
         # Load existing config if available
         if self.existing_config:
             self.num_partials_var.set(len(self.existing_config['partials']))
+            # Load exception case data if exists
+            if self.existing_config.get('partial_type') == 'exception':
+                self.airport_reference_var.set(self.existing_config.get('smallest_partial_airport_reference', ''))
+                self.smallest_partial_positions_var.set(str(self.existing_config.get('smallest_partial_positions', '')))
             self._generate_partial_forms(load_existing=True)
     
     def _generate_partial_forms(self, load_existing=False):
@@ -354,6 +392,19 @@ class PartialConfigDialog:
                     partial_weights.append(weight)
                 except ValueError:
                     partial_weights.append(0)
+            
+            # Detect exception case: check if any partial weight < smallest DUM weight
+            smallest_dum_weight = min(dum['weight'] for dum in self.lta_data['dums'])
+            is_exception_case = any(w > 0 and w < smallest_dum_weight for w in partial_weights)
+            
+            if is_exception_case:
+                # Show exception frame if hidden
+                if not self.exception_frame.winfo_manager():
+                    self.exception_frame.pack(fill=tk.X, pady=5, before=self.partials_container)
+            else:
+                # Hide exception frame
+                if self.exception_frame.winfo_manager():
+                    self.exception_frame.pack_forget()
             
             # Calculate distribution
             distribution = self._calculate_dum_distribution(partial_weights)
@@ -606,14 +657,67 @@ class PartialConfigDialog:
                             'positions': dum['positions']
                         })
             
+            # Detect exception case
+            smallest_dum_weight = min(dum['weight'] for dum in self.lta_data['dums'])
+            smallest_partial_weight = min(partial_weights)
+            is_exception_case = smallest_partial_weight < smallest_dum_weight
+            
+            # For exception case, validate additional fields
+            smallest_partial_number = None
+            smallest_partial_positions = None
+            airport_reference = None
+            
+            if is_exception_case:
+                # Find which partial is the smallest
+                for idx, weight in enumerate(partial_weights):
+                    if weight == smallest_partial_weight:
+                        smallest_partial_number = idx + 1
+                        break
+                
+                # Validate exception case fields
+                airport_reference = self.airport_reference_var.get().strip()
+                smallest_partial_positions_str = self.smallest_partial_positions_var.get().strip()
+                
+                if not airport_reference:
+                    messagebox.showerror(
+                        "Validation",
+                        "Cas d'exception détecté: Veuillez renseigner la référence créée à l'aéroport"
+                    )
+                    return
+                
+                if not smallest_partial_positions_str:
+                    messagebox.showerror(
+                        "Validation",
+                        "Cas d'exception détecté: Veuillez renseigner les positions du plus petit partiel"
+                    )
+                    return
+                
+                try:
+                    smallest_partial_positions = int(smallest_partial_positions_str)
+                    if smallest_partial_positions <= 0:
+                        raise ValueError("Positions must be positive")
+                except ValueError:
+                    messagebox.showerror(
+                        "Validation",
+                        "Positions du plus petit partiel: valeur invalide (doit être un nombre > 0)"
+                    )
+                    return
+            
             # Build config
             config = {
                 'lta_reference': self._get_lta_reference(),
                 'lta_total_weight': self.lta_data['total_weight'],
                 'lta_total_positions': self.lta_data['total_positions'],
+                'partial_type': 'exception' if is_exception_case else 'normal',
                 'partials': partials,
                 'split_dums': split_dums
             }
+            
+            # Add exception case fields if applicable
+            if is_exception_case:
+                config['smallest_partial_number'] = smallest_partial_number
+                config['smallest_partial_positions'] = smallest_partial_positions
+                config['smallest_partial_airport_reference'] = airport_reference
             
             # Save config
             success = save_lta_partial_config(

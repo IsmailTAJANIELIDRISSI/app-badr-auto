@@ -2166,12 +2166,14 @@ def find_partial_by_number(partial_config, partial_number):
     
     return None
 
-def get_dum_lots_for_partial(partial_data):
+def get_dum_lots_for_partial(partial_data, partial_config=None):
     """
     Extracts DUM lot information from partial data for ED creation.
+    For exception case, adjusts DUM 1 by subtracting smallest partial values.
     
     Args:
         partial_data: Partial configuration dict containing DUMs
+        partial_config: Full partial configuration (optional, for exception handling)
     
     Returns:
         list: List of dicts with dum_name, dum_number, split_id, p (positions), p_brut (weight)
@@ -2180,14 +2182,44 @@ def get_dum_lots_for_partial(partial_data):
         return []
     
     dum_lots = []
-    for dum in partial_data['dums']:
+    
+    # Check if exception case
+    is_exception = False
+    smallest_partial_number = None
+    smallest_partial_positions = 0
+    smallest_partial_weight = 0
+    
+    if partial_config:
+        is_exception = partial_config.get('partial_type') == 'exception'
+        smallest_partial_number = partial_config.get('smallest_partial_number')
+        smallest_partial_positions = partial_config.get('smallest_partial_positions', 0)
+        
+        # Get smallest partial weight
+        if smallest_partial_number:
+            for p in partial_config.get('partials', []):
+                if p['partial_number'] == smallest_partial_number:
+                    smallest_partial_weight = p['weight']
+                    break
+    
+    for idx, dum in enumerate(partial_data['dums']):
+        dum_number = dum['dum_number']
+        dum_weight = float(dum['weight'])
+        dum_positions = int(dum['positions'])
+        
+        # Exception case: Adjust DUM 1 by subtracting smallest partial
+        if is_exception and idx == 0 and dum_number == 1:
+            # First DUM is DUM 1 - subtract smallest partial
+            dum_weight -= smallest_partial_weight
+            dum_positions -= smallest_partial_positions
+            print(f"      ⚠️  Exception: DUM 1 ajusté - Poids: {dum_weight}, Positions: {dum_positions}")
+        
         dum_lots.append({
-            'dum_name': f"DUM {dum['dum_number']}",
-            'dum_number': dum['dum_number'],
+            'dum_name': f"DUM {dum_number}",
+            'dum_number': dum_number,
             'split_id': dum.get('split_id', ''),
             'is_split': dum.get('is_split', False),
-            'p': int(dum['positions']),
-            'p_brut': round(float(dum['weight']), 1)  # Arrondir à 1 décimale
+            'p': dum_positions,
+            'p_brut': round(dum_weight, 1)  # Arrondir à 1 décimale
         })
     
     return dum_lots
@@ -2308,6 +2340,57 @@ def get_dum_preapurement_lots(dum_number, partial_config, validated_lta_referenc
         }]
     
     dum_str = str(dum_number)
+    
+    # Check for exception case
+    is_exception = partial_config.get('partial_type') == 'exception'
+    smallest_partial_num = partial_config.get('smallest_partial_number')
+    airport_reference = partial_config.get('smallest_partial_airport_reference')
+    smallest_partial_positions = partial_config.get('smallest_partial_positions', 0)
+    
+    # Exception case: DUM 1 has 2 lots
+    if is_exception and dum_str == '1':
+        lots = []
+        
+        # Lot 1: Smallest partial (already cleared at airport)
+        smallest_partial = find_partial_by_number(partial_config, smallest_partial_num)
+        if smallest_partial:
+            lots.append({
+                'reference': airport_reference,  # Exact airport reference (no suffix)
+                'ds_serie': smallest_partial['ds_serie'],
+                'ds_cle': smallest_partial['ds_cle'],
+                'split_id': None,
+                'weight': smallest_partial['weight'],
+                'positions': smallest_partial_positions,
+                'is_exception_smallest': True  # Flag for special handling
+            })
+        
+        # Lot 2: Largest partial (from état de dépotage)
+        # Find which partial DUM 1 belongs to (should be the largest one)
+        for partial in partial_config['partials']:
+            if partial['partial_number'] != smallest_partial_num:
+                for dum in partial['dums']:
+                    if dum['dum_number'] == 1:
+                        signed_series = partial.get('signed_series', '')
+                        if signed_series and ' ' in signed_series:
+                            parts = signed_series.split()
+                            ds_serie = parts[0]
+                            ds_cle = parts[1]
+                        else:
+                            ds_serie = partial['ds_serie']
+                            ds_cle = partial['ds_cle']
+                        
+                        lots.append({
+                            'reference': f"{airport_reference}/1",  # Airport reference + /1
+                            'ds_serie': ds_serie,
+                            'ds_cle': ds_cle,
+                            'split_id': None,
+                            'weight': dum['weight'],
+                            'positions': dum['positions'],
+                            'is_exception_largest': True  # Flag for special handling
+                        })
+                        break
+        
+        return lots
     
     # Check if DUM is split
     if dum_str in partial_config.get('split_dums', {}):
@@ -4655,7 +4738,7 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
             return False
         
         # Create lots for DUMs in this partial
-        dum_lots_data = get_dum_lots_for_partial(partial_data)
+        dum_lots_data = get_dum_lots_for_partial(partial_data, partial_config)
         print(f"\n📦 Création de {len(dum_lots_data)} lot(s) pour ce partiel...")
         
         for dum_index, dum_data in enumerate(dum_lots_data, start=1):
@@ -8162,10 +8245,32 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
             if partial_config.get('split_dums'):
                 print(f"\n   ⚠️  DUMs splits détectés: {list(partial_config['split_dums'].keys())}")
             
+            # Check if exception case
+            partial_type = partial_config.get('partial_type', 'normal')
+            smallest_partial_num = partial_config.get('smallest_partial_number')
+            
+            if partial_type == 'exception':
+                print(f"\n⚠️  CAS D'EXCEPTION DÉTECTÉ")
+                print(f"   Plus petit partiel: {smallest_partial_num}")
+                print(f"   Référence aéroport: {partial_config.get('smallest_partial_airport_reference')}")
+                print(f"   Positions plus petit partiel: {partial_config.get('smallest_partial_positions')}")
+                print(f"   ℹ️  Un seul état de dépotage sera créé (plus grand partiel)")
+            
             # Process each partial
             all_success = True
             for partial in partial_config['partials']:
                 partial_num = partial['partial_number']
+                
+                # Skip smallest partial in exception case (already cleared at airport)
+                if partial_type == 'exception' and partial_num == smallest_partial_num:
+                    print(f"\n{'='*70}")
+                    print(f"⏭️  PARTIEL {partial_num} IGNORÉ (cas d'exception)")
+                    print(f"{'='*70}")
+                    print(f"   Poids: {partial['weight']} kg")
+                    print(f"   Positions: {partial_config.get('smallest_partial_positions')}")
+                    print(f"   DS: {partial['ds_serie']} {partial['ds_cle']}")
+                    print(f"   ℹ️  Déjà dédouané à l'aéroport - Pas d'état de dépotage requis")
+                    continue
                 
                 print(f"\n{'='*70}")
                 print(f"📦 TRAITEMENT PARTIEL {partial_num}/{len(partial_config['partials'])}")
@@ -8174,6 +8279,10 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
                 print(f"   Positions: {partial['positions']}")
                 print(f"   DS: {partial['ds_serie']} {partial['ds_cle']}")
                 print(f"   DUMs: {[d['dum_number'] for d in partial['dums']]}")
+                
+                # For exception case, adjust DUM 1 to exclude smallest partial
+                if partial_type == 'exception':
+                    print(f"   ⚠️  Cas d'exception: DUM 1 ajusté (partiel {smallest_partial_num} déduit)")
                 
                 # Create ED for this partial
                 if not create_etat_depotage_partial(driver, lta_folder_path, partial_config, partial_num):
