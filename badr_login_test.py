@@ -5941,6 +5941,15 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             # PDS.3: Remplir le formulaire
             print("\n   📝 Remplissage du formulaire Préapurement DS...")
             
+            # PDS.3.0: CALCULATE LOTS FIRST to get signed series for partial LTAs
+            preap_lots = get_dum_preapurement_lots(dum_number, partial_config, validated_lta_reference)
+            
+            # For partial LTA: Use signed series from FIRST lot for the main form
+            if partial_config and preap_lots and preap_lots[0].get('ds_serie'):
+                ds_serie = preap_lots[0]['ds_serie']
+                ds_cle = preap_lots[0]['ds_cle']
+                print(f"      ℹ️  Utilisation série signée du premier lot: {ds_serie} {ds_cle}")
+            
             # PDS.3.1: Sélectionner type DS "Depotage(05)"
             try:
                 # Attendre que le formulaire soit complètement chargé
@@ -6060,8 +6069,7 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 return False
             
             # PDS.3.7: BOUCLE pour ajouter tous les lots
-            # Use helper function to get lot structure (handles split DUMs)
-            preap_lots = get_dum_preapurement_lots(dum_number, partial_config, validated_lta_reference)
+            # Lots already calculated above (PDS.3.0), just get count
             num_lots_to_add = len(preap_lots)
             
             # If not using partial config and is single DUM, use old logic
