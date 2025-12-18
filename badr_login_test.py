@@ -6083,8 +6083,14 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 preap_lots = [{'reference': ref, 'ds_serie': ds_serie, 'ds_cle': ds_cle, 'split_id': None} for ref in lot_references]
             
             print(f"\n   📦 Création de {num_lots_to_add} lot(s) pour DUM {dum_number}")
-            if partial_config and str(dum_number) in partial_config.get('split_dums', {}):
+            
+            # Check if this is a split DUM (for validation logic)
+            is_split_dum = partial_config and str(dum_number) in partial_config.get('split_dums', {})
+            if is_split_dum:
                 print(f"      ⚠️  DUM SPLIT détecté - {num_lots_to_add} lots requis")
+                # Initialize accumulators for split DUM validation
+                split_accumulated_weight = 0.0
+                split_accumulated_containers = 0.0
             
             for lot_idx in range(num_lots_to_add):
                 current_lot = preap_lots[lot_idx]
@@ -6206,9 +6212,9 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                     print(f"         ❌ Erreur clic 'OK': {e}")
                     return False
                 
-                # Validation des données (SEULEMENT pour LTA normal, PAS pour single DUM division)
+                # Validation des données
                 if not is_single_dum:
-                    print(f"\n         ✅ Validation des données récupérées...")
+                    # Read retrieved values from system
                     try:
                         # Lire poids brut
                         poids_brut_span = wait.until(
@@ -6224,49 +6230,115 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                         nbr_contenants_text = nbr_contenants_span.text.strip().replace(',', '.')
                         retrieved_containers = float(nbr_contenants_text)
                         
-                        # Valeurs attendues
-                        expected_weight = float(dum_data.get('total_gross_weight', 0))
-                        expected_containers = float(dum_data.get('total_positions', 0))
+                        # For split DUMs: accumulate values instead of validating immediately
+                        if is_split_dum:
+                            split_accumulated_weight += retrieved_weight
+                            split_accumulated_containers += retrieved_containers
+                            
+                            is_last_lot = (lot_idx == num_lots_to_add - 1)
+                            
+                            if not is_last_lot:
+                                # Not the last lot - just accumulate and continue
+                                print(f"\n         📊 Lot {lot_idx + 1}/{num_lots_to_add} - Accumulation:")
+                                print(f"            Poids: {retrieved_weight} (Total accumulé: {split_accumulated_weight})")
+                                print(f"            Contenants: {retrieved_containers} (Total accumulé: {split_accumulated_containers})")
+                                print(f"         ⏭️  Validation reportée au dernier lot")
+                            else:
+                                # Last lot - validate accumulated total against DUM expected values
+                                print(f"\n         ✅ Validation des données accumulées (tous les lots)...")
+                                
+                                # Valeurs attendues du DUM complet
+                                expected_weight = float(dum_data.get('total_gross_weight', 0))
+                                expected_containers = float(dum_data.get('total_positions', 0))
+                                
+                                print(f"         📊 TOTAL - Poids brut: {split_accumulated_weight} (attendu: {expected_weight})")
+                                print(f"         📦 TOTAL - Contenants: {split_accumulated_containers} (attendu: {expected_containers})")
+                                
+                                # Vérifier correspondance avec tolérance pour les arrondis
+                                weight_match = abs(split_accumulated_weight - expected_weight) < 0.1
+                                containers_match = abs(split_accumulated_containers - expected_containers) < 0.1
+                                
+                                if not weight_match or not containers_match:
+                                    print(f"         ❌ DIVERGENCE DÉTECTÉE!")
+                                    
+                                    # Créer fichier d'erreur
+                                    error_filename = f"-------------error-entering-ds-mead-on-declaration-{lta_name}-DUM{dum_number}.txt"
+                                    error_filepath = os.path.join(parent_dir, error_filename)
+                                    
+                                    from datetime import datetime
+                                    current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    
+                                    with open(error_filepath, 'w', encoding='utf-8') as f:
+                                        f.write(f"ERREUR - Préapurement DS - Données Incohérentes (DUM Split)\n\n")
+                                        f.write(f"LTA: {lta_name} - {validated_lta_reference}\n")
+                                        f.write(f"DUM: {dum_number} (SPLIT en {num_lots_to_add} lots)\n")
+                                        f.write(f"Date: {current_datetime}\n")
+                                        f.write(f"Étape: Préapurement DS - Validation après tous les lots\n\n")
+                                        f.write(f"VALEURS ATTENDUES (DUM {dum_number} complet):\n")
+                                        f.write(f"- Poids brut (P,BRUT): {expected_weight}\n")
+                                        f.write(f"- Nombre contenants (P): {expected_containers}\n\n")
+                                        f.write(f"VALEURS RÉCUPÉRÉES (Total de {num_lots_to_add} lots):\n")
+                                        f.write(f"- Poids brut: {split_accumulated_weight}\n")
+                                        f.write(f"- Nombre contenants: {split_accumulated_containers}\n\n")
+                                        f.write(f"ÉCART DÉTECTÉ:\n")
+                                        f.write(f"- Poids brut: {expected_weight} ≠ {split_accumulated_weight} (Différence: {expected_weight - split_accumulated_weight})\n")
+                                        f.write(f"- Contenants: {expected_containers} ≠ {split_accumulated_containers} (Différence: {expected_containers - split_accumulated_containers})\n\n")
+                                        f.write(f"MESSAGE: La somme des données des lots ne correspond pas aux\n")
+                                        f.write(f"données du DUM complet. Vérification manuelle requise.\n")
+                                    
+                                    print(f"         ✓ Fichier d'erreur créé: {error_filename}")
+                                    print(f"         ⚠️  Arrêt du traitement de ce DUM")
+                                    return False
+                                
+                                print(f"         ✅ VALIDATION OK - Totaux correspondent")
                         
-                        print(f"         📊 Poids brut: {retrieved_weight} (attendu: {expected_weight})")
-                        print(f"         📦 Contenants: {retrieved_containers} (attendu: {expected_containers})")
-                        
-                        # Vérifier correspondance
-                        if retrieved_weight != expected_weight or retrieved_containers != expected_containers:
-                            print(f"         ❌ DIVERGENCE DÉTECTÉE!")
+                        else:
+                            # Normal DUM (not split) - validate immediately
+                            print(f"\n         ✅ Validation des données récupérées...")
                             
-                            # Créer fichier d'erreur
-                            error_filename = f"-------------error-entering-ds-mead-on-declaration-{lta_name}-DUM{dum_number}.txt"
-                            error_filepath = os.path.join(parent_dir, error_filename)
+                            # Valeurs attendues
+                            expected_weight = float(dum_data.get('total_gross_weight', 0))
+                            expected_containers = float(dum_data.get('total_positions', 0))
                             
-                            from datetime import datetime
-                            current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            print(f"         📊 Poids brut: {retrieved_weight} (attendu: {expected_weight})")
+                            print(f"         📦 Contenants: {retrieved_containers} (attendu: {expected_containers})")
                             
-                            with open(error_filepath, 'w', encoding='utf-8') as f:
-                                f.write(f"ERREUR - Préapurement DS - Données Incohérentes\n\n")
-                                f.write(f"LTA: {lta_name} - {validated_lta_reference}\n")
-                                f.write(f"DUM: {dum_number}\n")
-                                f.write(f"Date: {current_datetime}\n")
-                                f.write(f"Étape: Préapurement DS - Validation après click OK\n\n")
-                                f.write(f"VALEURS ATTENDUES (DUM {dum_number}):\n")
-                                f.write(f"- Poids brut (P,BRUT): {expected_weight}\n")
-                                f.write(f"- Nombre contenants (P): {expected_containers}\n\n")
-                                f.write(f"VALEURS RÉCUPÉRÉES (Système):\n")
-                                f.write(f"- Poids brut: {retrieved_weight}\n")
-                                f.write(f"- Nombre contenants: {retrieved_containers}\n\n")
-                                f.write(f"ÉCART DÉTECTÉ:\n")
-                                f.write(f"- Poids brut: {expected_weight} ≠ {retrieved_weight} (Différence: {expected_weight - retrieved_weight})\n")
-                                f.write(f"- Contenants: {expected_containers} ≠ {retrieved_containers} (Différence: {expected_containers - retrieved_containers})\n\n")
-                                f.write(f"MESSAGE: Les données du lot de dédouanement ne correspondent pas aux\n")
-                                f.write(f"données du DUM actuel. Vérification manuelle requise.\n\n")
-                                f.write(f"RÉFÉRENCE LOT UTILISÉE: {current_lot_ref}\n")
-                                f.write(f"RÉFÉRENCE DS MEAD: {ds_serie} {ds_cle}\n")
+                            # Vérifier correspondance
+                            if retrieved_weight != expected_weight or retrieved_containers != expected_containers:
+                                print(f"         ❌ DIVERGENCE DÉTECTÉE!")
+                                
+                                # Créer fichier d'erreur
+                                error_filename = f"-------------error-entering-ds-mead-on-declaration-{lta_name}-DUM{dum_number}.txt"
+                                error_filepath = os.path.join(parent_dir, error_filename)
+                                
+                                from datetime import datetime
+                                current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                
+                                with open(error_filepath, 'w', encoding='utf-8') as f:
+                                    f.write(f"ERREUR - Préapurement DS - Données Incohérentes\n\n")
+                                    f.write(f"LTA: {lta_name} - {validated_lta_reference}\n")
+                                    f.write(f"DUM: {dum_number}\n")
+                                    f.write(f"Date: {current_datetime}\n")
+                                    f.write(f"Étape: Préapurement DS - Validation après click OK\n\n")
+                                    f.write(f"VALEURS ATTENDUES (DUM {dum_number}):\n")
+                                    f.write(f"- Poids brut (P,BRUT): {expected_weight}\n")
+                                    f.write(f"- Nombre contenants (P): {expected_containers}\n\n")
+                                    f.write(f"VALEURS RÉCUPÉRÉES (Système):\n")
+                                    f.write(f"- Poids brut: {retrieved_weight}\n")
+                                    f.write(f"- Nombre contenants: {retrieved_containers}\n\n")
+                                    f.write(f"ÉCART DÉTECTÉ:\n")
+                                    f.write(f"- Poids brut: {expected_weight} ≠ {retrieved_weight} (Différence: {expected_weight - retrieved_weight})\n")
+                                    f.write(f"- Contenants: {expected_containers} ≠ {retrieved_containers} (Différence: {expected_containers - retrieved_containers})\n\n")
+                                    f.write(f"MESSAGE: Les données du lot de dédouanement ne correspondent pas aux\n")
+                                    f.write(f"données du DUM actuel. Vérification manuelle requise.\n\n")
+                                    f.write(f"RÉFÉRENCE LOT UTILISÉE: {current_lot_ref}\n")
+                                    f.write(f"RÉFÉRENCE DS MEAD: {ds_serie} {ds_cle}\n")
+                                
+                                print(f"         ✓ Fichier d'erreur créé: {error_filename}")
+                                print(f"         ⚠️  Arrêt du traitement de ce DUM")
+                                return False
                             
-                            print(f"         ✓ Fichier d'erreur créé: {error_filename}")
-                            print(f"         ⚠️  Arrêt du traitement de ce DUM")
-                            return False
-                        
-                        print(f"         ✅ VALIDATION OK - Données correspondent")
+                            print(f"         ✅ VALIDATION OK - Données correspondent")
                         
                     except Exception as e:
                         print(f"         ❌ Erreur validation données: {e}")
