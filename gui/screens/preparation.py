@@ -598,7 +598,7 @@ class PreparationScreen:
             configure_btn = ttk.Button(
                 card,
                 text="⚙️ Configurer",
-                command=lambda: self._configure_partial(folder, lta['name'], partial_var)
+                command=lambda f=folder, l=lta['name'], p=partial_var: self._configure_partial(f, l, p)
             )
             configure_btn.grid(row=row_num, column=2, sticky=tk.E, pady=5)
             
