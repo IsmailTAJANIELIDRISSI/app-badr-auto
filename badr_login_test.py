@@ -6154,11 +6154,35 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                         
                         print(f"         ✓ Champs re-remplis pour {lot_label}")
                         
+                        # For subsequent lots, also fill loading location
+                        if loading_location:
+                            try:
+                                lieu_input = wait.until(
+                                    EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'lieuChargCmb') or contains(@name, 'lieuChargCmb')]"))
+                                )
+                                lieu_input.clear()
+                                lieu_input.send_keys(loading_location)
+                                print(f"         ✓ Lieu chargement: {loading_location}")
+                                time.sleep(2)
+                                
+                                # Sélectionner la première suggestion
+                                try:
+                                    lieu_suggestion = wait.until(
+                                        EC.element_to_be_clickable((By.CSS_SELECTOR, "li.ui-autocomplete-item"))
+                                    )
+                                    lieu_suggestion.click()
+                                    print("         ✓ Suggestion lieu sélectionnée")
+                                    time.sleep(1)
+                                except:
+                                    print("         ⚠️  Aucune suggestion trouvée, on continue...")
+                            except Exception as e:
+                                print(f"         ⚠️  Erreur saisie lieu chargement: {e}")
+                        
                     except Exception as e:
                         print(f"         ❌ Erreur ajout nouveau préapurement: {e}")
                         return False
                 
-                # Lieu de chargement (seulement pour le premier lot)
+                # Lieu de chargement (pour le premier lot seulement)
                 if lot_idx == 0 and loading_location:
                     try:
                         lieu_input = wait.until(
