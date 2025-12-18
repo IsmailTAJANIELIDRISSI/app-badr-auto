@@ -2311,17 +2311,28 @@ def get_dum_preapurement_lots(dum_number, partial_config, validated_lta_referenc
     
     # Check if DUM is split
     if dum_str in partial_config.get('split_dums', {}):
-        # Split DUM - multiple lots
+        # Split DUM - multiple lots (one for each split)
         split_info = partial_config['split_dums'][dum_str]
         lots = []
         
         for split in split_info['splits']:
             partial_data = find_partial_by_number(partial_config, split['partial'])
             if partial_data:
+                # Use signed_series if available (format: "6987 D")
+                signed_series = partial_data.get('signed_series', '')
+                if signed_series and ' ' in signed_series:
+                    parts = signed_series.split()
+                    ds_serie = parts[0]
+                    ds_cle = parts[1]
+                else:
+                    # Fallback to original DS if signed not available
+                    ds_serie = partial_data['ds_serie']
+                    ds_cle = partial_data['ds_cle']
+                
                 lots.append({
-                    'reference': f"{validated_lta_reference}/{split['partial']}",
-                    'ds_serie': partial_data['ds_serie'],
-                    'ds_cle': partial_data['ds_cle'],
+                    'reference': f"{validated_lta_reference}/{split['split_id']}",  # Use split_id for reference
+                    'ds_serie': ds_serie,
+                    'ds_cle': ds_cle,
                     'split_id': split['split_id'],
                     'weight': split['weight'],
                     'positions': split['positions']
@@ -2333,10 +2344,21 @@ def get_dum_preapurement_lots(dum_number, partial_config, validated_lta_referenc
         for partial in partial_config['partials']:
             for dum in partial['dums']:
                 if dum['dum_number'] == int(dum_number):
+                    # Use signed_series if available (format: "6987 D")
+                    signed_series = partial.get('signed_series', '')
+                    if signed_series and ' ' in signed_series:
+                        parts = signed_series.split()
+                        ds_serie = parts[0]
+                        ds_cle = parts[1]
+                    else:
+                        # Fallback to original DS if signed not available
+                        ds_serie = partial['ds_serie']
+                        ds_cle = partial['ds_cle']
+                    
                     return [{
-                        'reference': f"{validated_lta_reference}/{partial['partial_number']}",
-                        'ds_serie': partial['ds_serie'],
-                        'ds_cle': partial['ds_cle'],
+                        'reference': f"{validated_lta_reference}/{dum['dum_number']}",
+                        'ds_serie': ds_serie,
+                        'ds_cle': ds_cle,
                         'split_id': None,
                         'weight': dum['weight'],
                         'positions': dum['positions']
