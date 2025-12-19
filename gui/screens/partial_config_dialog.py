@@ -37,7 +37,8 @@ class PartialConfigDialog:
         # Create dialog
         self.dialog = tk.Toplevel(parent)
         self.dialog.title(f"Configuration Partielle - {folder_name}")
-        self.dialog.geometry("800x600")
+        self.dialog.geometry("850x750")  # Increased height to accommodate exception section + buttons
+        self.dialog.minsize(800, 650)  # Set minimum size to ensure buttons are always visible
         self.dialog.transient(parent)
         self.dialog.grab_set()
         
@@ -225,6 +226,23 @@ class PartialConfigDialog:
             row=2, column=2, sticky=tk.W, padx=5, pady=2
         )
         
+        # Exception confirmation button
+        self.exception_confirmed = False
+        self.exception_status_label = ttk.Label(
+            self.exception_frame,
+            text="",
+            font=('Arial', 9),
+            foreground="green"
+        )
+        self.exception_status_label.grid(row=3, column=0, columnspan=3, sticky=tk.W, padx=5, pady=(5, 0))
+        
+        confirm_exception_btn = ttk.Button(
+            self.exception_frame,
+            text="✅ Confirmer Informations Exception",
+            command=self._confirm_exception_fields
+        )
+        confirm_exception_btn.grid(row=4, column=0, columnspan=2, padx=5, pady=10, sticky=tk.W)
+        
         # Partials container (scrollable)
         self.partials_container = ttk.Frame(main_frame)
         self.partials_container.pack(fill=tk.BOTH, expand=True, pady=10)
@@ -267,8 +285,17 @@ class PartialConfigDialog:
             self.num_partials_var.set(len(self.existing_config['partials']))
             # Load exception case data if exists
             if self.existing_config.get('partial_type') == 'exception':
-                self.airport_reference_var.set(self.existing_config.get('smallest_partial_airport_reference', ''))
-                self.smallest_partial_positions_var.set(str(self.existing_config.get('smallest_partial_positions', '')))
+                airport_ref = self.existing_config.get('smallest_partial_airport_reference', '')
+                positions = str(self.existing_config.get('smallest_partial_positions', ''))
+                self.airport_reference_var.set(airport_ref)
+                self.smallest_partial_positions_var.set(positions)
+                # If both fields are filled, mark as confirmed
+                if airport_ref and positions:
+                    self.exception_confirmed = True
+                    self.exception_status_label.config(
+                        text="✅ Informations exception confirmées (config existante)",
+                        foreground="green"
+                    )
             self._generate_partial_forms(load_existing=True)
     
     def _generate_partial_forms(self, load_existing=False):
@@ -369,6 +396,88 @@ class PartialConfigDialog:
         
         return frame
     
+    def _confirm_exception_fields(self):
+        """Validate and confirm exception case fields"""
+        try:
+            airport_reference = self.airport_reference_var.get().strip()
+            smallest_partial_positions_str = self.smallest_partial_positions_var.get().strip()
+            
+            if not airport_reference:
+                messagebox.showerror(
+                    "Validation",
+                    "Veuillez renseigner la référence créée à l'aéroport"
+                )
+                return
+            
+            if not smallest_partial_positions_str:
+                messagebox.showerror(
+                    "Validation",
+                    "Veuillez renseigner les positions du plus petit partiel"
+                )
+                return
+            
+            try:
+                positions = int(smallest_partial_positions_str)
+                if positions <= 0:
+                    raise ValueError("Positions must be positive")
+            except ValueError:
+                messagebox.showerror(
+                    "Validation",
+                    "Positions invalides: doit être un nombre > 0"
+                )
+                return
+            
+            # Mark as confirmed
+            self.exception_confirmed = True
+            self.exception_status_label.config(
+                text="✅ Informations exception confirmées - Faites défiler vers le bas pour voir le bouton 'Sauvegarder'",
+                foreground="green",
+                wraplength=600
+            )
+            
+            # CRITICAL FIX: Update preview to reflect user-provided positions!
+            self._update_distribution_preview()
+            
+            # Update layout to ensure everything is rendered
+            self.dialog.update_idletasks()
+            
+            # Ensure dialog is large enough to show all content including buttons
+            current_width = self.dialog.winfo_width()
+            current_height = self.dialog.winfo_height()
+            
+            # Calculate required height
+            self.dialog.update_idletasks()
+            required_height = self.dialog.winfo_reqheight()
+            
+            # Resize dialog if needed (ensure buttons at bottom are visible)
+            # Buttons are at the bottom of main_frame, so we need enough height
+            if required_height > current_height:
+                new_height = max(required_height + 80, 750)  # Add extra padding for buttons
+                self.dialog.geometry(f"{current_width}x{new_height}")
+            
+            # Force another update to ensure layout is complete
+            self.dialog.update_idletasks()
+            
+            # Scroll canvas to bottom to show all partial forms (buttons are outside canvas)
+            self.dialog.after(100, lambda: self._scroll_to_bottom())
+            
+            
+        except Exception as e:
+            logger.error(f"Error confirming exception fields: {e}", exc_info=True)
+            messagebox.showerror("Erreur", f"Erreur lors de la validation: {e}")
+    
+    def _scroll_to_bottom(self):
+        """Scroll canvas to bottom to show all content"""
+        try:
+            if hasattr(self, 'canvas'):
+                self.canvas.update_idletasks()
+                # Scroll to bottom of canvas
+                self.canvas.yview_moveto(1.0)
+                # Ensure buttons frame is visible (it's outside canvas, so we just ensure dialog size is correct)
+                self.dialog.update_idletasks()
+        except Exception as e:
+            logger.debug(f"Could not scroll to bottom: {e}")
+    
     def _update_distribution_preview(self):
         """Update the DUM distribution preview for all partials"""
         try:
@@ -401,10 +510,16 @@ class PartialConfigDialog:
                 # Show exception frame if hidden
                 if not self.exception_frame.winfo_manager():
                     self.exception_frame.pack(fill=tk.X, pady=5, before=self.partials_container)
+                # Reset confirmation flag when weights change (user needs to reconfirm)
+                if self.exception_confirmed:
+                    self.exception_confirmed = False
+                    self.exception_status_label.config(text="", foreground="green")
             else:
                 # Hide exception frame
                 if self.exception_frame.winfo_manager():
                     self.exception_frame.pack_forget()
+                # Reset confirmation flag when exception is no longer detected
+                self.exception_confirmed = False
             
             # Calculate distribution
             distribution = self._calculate_dum_distribution(partial_weights)
@@ -422,6 +537,15 @@ class PartialConfigDialog:
                     dums_text.configure(state='normal')
                     dums_text.delete('1.0', tk.END)
                     
+                    # Check if this is a smallest/largest partial in exception case
+                    is_smallest = partial_dist.get('is_smallest_partial', False)
+                    is_largest = partial_dist.get('is_largest_partial', False)
+                    
+                    if is_smallest:
+                        dums_text.insert(tk.END, "⚠️ EXCEPTION: Déjà dégagé à l'aéroport (pas d'état de dépotage)\n\n", 'red')
+                    elif is_largest:
+                        dums_text.insert(tk.END, "✓ État de dépotage sera créé pour ce partiel\n\n", 'green')
+                    
                     if not partial_dist['dums']:
                         dums_text.insert(tk.END, "Aucun DUM assigné")
                     else:
@@ -431,8 +555,14 @@ class PartialConfigDialog:
                             dum_positions = dum_info['positions']
                             is_split = dum_info['is_split']
                             split_id = dum_info.get('split_id', '')
+                            is_exception_portion = dum_info.get('is_exception_portion', False)
+                            adjusted_for_exception = dum_info.get('adjusted_for_exception', False)
                             
-                            if is_split:
+                            if is_exception_portion:
+                                dums_text.insert(tk.END, f"DUM {dum_num} (portion aéroport): {dum_weight:.1f}kg, {dum_positions}p 🔴 EXCEPTION\n")
+                            elif adjusted_for_exception:
+                                dums_text.insert(tk.END, f"DUM {dum_num} (ajusté): {dum_weight:.1f}kg, {dum_positions}p ⚙️ AJUSTÉ\n")
+                            elif is_split:
                                 dums_text.insert(tk.END, f"DUM {dum_num} {split_id}: {dum_weight:.1f}kg, {dum_positions}p ⚠️ PARTIEL\n")
                             else:
                                 dums_text.insert(tk.END, f"DUM {dum_num}: {dum_weight:.1f}kg, {dum_positions}p\n")
@@ -445,11 +575,8 @@ class PartialConfigDialog:
     def _calculate_dum_distribution(self, partial_weights):
         """
         Automatically distribute DUMs across partials based on weights.
-        Sequential distribution: Fill partials in order until weight is reached.
-        Last DUM may be split if needed.
+        Detects and handles exception cases differently from normal cases.
         """
-        distribution = []
-        
         total_lta_weight = self.lta_data['total_weight']
         total_lta_positions = self.lta_data['total_positions']
         dums = self.lta_data['dums']
@@ -457,9 +584,151 @@ class PartialConfigDialog:
         # Validate LTA data
         if not dums or total_lta_weight <= 0 or total_lta_positions <= 0:
             # Return empty distribution if LTA data is invalid
+            distribution = []
             for _ in partial_weights:
                 distribution.append({'weight': 0, 'positions': 0, 'dums': []})
             return distribution
+        
+        # Detect exception case: any partial weight < smallest DUM weight
+        smallest_dum_weight = min(dum['weight'] for dum in dums)
+        is_exception_case = any(w > 0 and w < smallest_dum_weight for w in partial_weights)
+        
+        if is_exception_case:
+            # Use exception-specific distribution
+            return self._calculate_exception_distribution(partial_weights)
+        else:
+            # Use normal sequential distribution
+            return self._calculate_normal_distribution(partial_weights)
+    
+    def _calculate_exception_distribution(self, partial_weights):
+        """
+        Exception case distribution: when smallest partial < smallest DUM.
+        Logic: Subtract smallest partial from DUM 1, then distribute remaining DUMs to largest partial.
+        """
+        total_lta_weight = self.lta_data['total_weight']
+        total_lta_positions = self.lta_data['total_positions']
+        dums = self.lta_data['dums'].copy()  # Make a copy to avoid modifying original
+        
+        distribution = []
+        
+        # Find smallest and largest partial indices
+        smallest_weight = min(w for w in partial_weights if w > 0)
+        smallest_idx = partial_weights.index(smallest_weight)
+        
+        # Largest is the other one (works for 2 partials)
+        largest_idx = 1 - smallest_idx if len(partial_weights) == 2 else max(
+            range(len(partial_weights)),
+            key=lambda i: partial_weights[i]
+        )
+        
+        smallest_weight_val = partial_weights[smallest_idx]
+        largest_weight_val = partial_weights[largest_idx]
+        
+        # DEBUG: Log weight values
+        logger.info(f"Exception distribution - Smallest partial weight from form: {smallest_weight_val}kg")
+        logger.info(f"Exception distribution - Largest partial weight from form: {largest_weight_val}kg")
+        
+        # Get user-provided positions for smallest partial from exception fields
+        # This is the CRITICAL FIX: use user-entered value, not auto-calculated!
+        try:
+            smallest_positions_str = self.smallest_partial_positions_var.get().strip()
+            if smallest_positions_str:
+                smallest_positions = int(smallest_positions_str)
+                logger.info(f"Exception distribution - Using USER-PROVIDED positions: {smallest_positions}p")
+            else:
+                # Fallback to proportional calculation if not entered yet
+                smallest_positions = round((smallest_weight_val * total_lta_positions) / total_lta_weight)
+                logger.warning(f"Exception distribution - Fallback to auto-calculated positions: {smallest_positions}p")
+        except (ValueError, AttributeError) as e:
+            # Fallback to proportional calculation if invalid or not available
+            smallest_positions = round((smallest_weight_val * total_lta_positions) / total_lta_weight)
+            logger.error(f"Exception distribution - Error reading positions, using auto-calc: {smallest_positions}p. Error: {e}")
+        
+        # DEBUG: Log DUM 1 original values
+        logger.info(f"DUM 1 original: weight={dums[0]['weight']}kg, positions={dums[0]['positions']}p")
+        
+        # Calculate adjusted DUM 1 values
+        adjusted_dum1_weight = dums[0]['weight'] - smallest_weight_val
+        adjusted_dum1_positions = dums[0]['positions'] - smallest_positions
+        
+        # DEBUG: Log adjusted values
+        logger.info(f"DUM 1 adjusted (calculation): {dums[0]['weight']} - {smallest_weight_val} = {adjusted_dum1_weight}kg")
+        logger.info(f"DUM 1 adjusted (calculation): {dums[0]['positions']} - {smallest_positions} = {adjusted_dum1_positions}p")
+        
+        # Create distribution for each partial
+        for idx, partial_weight in enumerate(partial_weights):
+            if idx == smallest_idx:
+                # Smallest partial - gets portion of DUM 1 only
+                distribution.append({
+                    'weight': smallest_weight_val,
+                    'positions': smallest_positions,  # USER-PROVIDED VALUE!
+                    'dums': [{
+                        'dum_number': 1,
+                        'weight': smallest_weight_val,
+                        'positions': smallest_positions,  # USER-PROVIDED VALUE!
+                        'is_split': False,
+                        'split_id': '',
+                        'is_exception_portion': True  # Mark as exception portion
+                    }],
+                    'is_smallest_partial': True  # Flag for no état de dépotage
+                })
+            elif idx == largest_idx:
+                # Largest partial - gets DUM 1 (adjusted) + all other DUMs
+                # Positions = TOTAL - USER-PROVIDED smallest positions
+                largest_positions = total_lta_positions - smallest_positions
+                
+                # Subtract smallest partial from DUM 1
+                adjusted_dum1_weight = dums[0]['weight'] - smallest_weight_val
+                adjusted_dum1_positions = dums[0]['positions'] - smallest_positions  # Subtract USER-PROVIDED!
+                
+                partial_dums = []
+                
+                # Add adjusted DUM 1
+                if adjusted_dum1_weight > 0:
+                    partial_dums.append({
+                        'dum_number': 1,
+                        'weight': adjusted_dum1_weight,
+                        'positions': adjusted_dum1_positions,  # ADJUSTED by user value!
+                        'is_split': False,
+                        'split_id': '',
+                        'adjusted_for_exception': True 
+
+ # Mark as adjusted
+                    })
+                
+                # Add all remaining DUMs (2, 3, 4, etc.)
+                for dum_idx in range(1, len(dums)):
+                    partial_dums.append({
+                        'dum_number': dums[dum_idx]['number'],
+                        'weight': dums[dum_idx]['weight'],
+                        'positions': dums[dum_idx]['positions'],
+                        'is_split': False,
+                        'split_id': ''
+                    })
+                
+                distribution.append({
+                    'weight': largest_weight_val,
+                    'positions': largest_positions,  # TOTAL - user positions!
+                    'dums': partial_dums,
+                    'is_largest_partial': True  # Flag for état de dépotage creation
+                })
+            else:
+                # Other partials (shouldn't happen in exception case with 2 partials)
+                distribution.append({'weight': 0, 'positions': 0, 'dums': []})
+        
+        
+        return distribution
+    
+    def _calculate_normal_distribution(self, partial_weights):
+        """
+        Normal case: Sequential distribution where partials are filled in order.
+        Last DUM may be split if needed.
+        """
+        distribution = []
+        
+        total_lta_weight = self.lta_data['total_weight']
+        total_lta_positions = self.lta_data['total_positions']
+        dums = self.lta_data['dums']
         
         current_dum_idx = 0
         remaining_dum_weight = dums[0]['weight'] if dums else 0
@@ -597,13 +866,21 @@ class PartialConfigDialog:
                 selected_dums = []
                 
                 for dum_info in partial_dist['dums']:
-                    selected_dums.append({
+                    dum_config = {
                         'dum_number': dum_info['dum_number'],
                         'weight': dum_info['weight'],
                         'positions': dum_info['positions'],
                         'is_split': dum_info['is_split'],
                         'split_id': dum_info.get('split_id', '')
-                    })
+                    }
+                    
+                    # Add exception-specific flags
+                    if dum_info.get('is_exception_portion', False):
+                        dum_config['is_exception_portion'] = True
+                    if dum_info.get('adjusted_for_exception', False):
+                        dum_config['adjusted_for_exception'] = True
+                    
+                    selected_dums.append(dum_config)
                 
                 # Validate distribution has DUMs
                 if not selected_dums:
@@ -613,7 +890,8 @@ class PartialConfigDialog:
                     )
                     return
                 
-                partials.append({
+                # Build partial configuration
+                partial_config = {
                     'partial_number': partial_num,
                     'weight': weight_float,
                     'positions': partial_dist['positions'],
@@ -621,7 +899,22 @@ class PartialConfigDialog:
                     'ds_cle': ds_cle,
                     'loading_location': location,
                     'dums': selected_dums
-                })
+                }
+                
+                # Add exception-specific flags
+                # For smallest partial: no état de dépotage needed (already cleared at airport)
+                if partial_dist.get('is_smallest_partial', False):
+                    partial_config['create_etat_depotage'] = False
+                    partial_config['is_smallest_partial'] = True
+                # For largest partial in exception case: état de dépotage with adjusted DUMs
+                elif partial_dist.get('is_largest_partial', False):
+                    partial_config['create_etat_depotage'] = True
+                    partial_config['is_largest_partial'] = True
+                else:
+                    # Normal case: all partials get état de dépotage
+                    partial_config['create_etat_depotage'] = True
+                
+                partials.append(partial_config)
             
             # Validate weight tolerance (allow 1% difference)
             weight_diff = abs(total_weight_check - self.lta_data['total_weight'])
@@ -668,13 +961,27 @@ class PartialConfigDialog:
             airport_reference = None
             
             if is_exception_case:
+                # Check if exception fields have been confirmed
+                if not self.exception_confirmed:
+                    messagebox.showwarning(
+                        "Validation Requise",
+                        "Cas d'exception détecté: Veuillez d'abord cliquer sur '✅ Confirmer Informations Exception'\n"
+                        "et remplir tous les champs dans la section d'exception avant de sauvegarder."
+                    )
+                    # Scroll to exception frame
+                    if hasattr(self, 'canvas'):
+                        self.canvas.update_idletasks()
+                        # Try to scroll to show exception frame
+                        self.canvas.yview_moveto(0.1)
+                    return
+                
                 # Find which partial is the smallest
                 for idx, weight in enumerate(partial_weights):
                     if weight == smallest_partial_weight:
                         smallest_partial_number = idx + 1
                         break
                 
-                # Validate exception case fields
+                # Validate exception case fields (should already be validated by confirmation)
                 airport_reference = self.airport_reference_var.get().strip()
                 smallest_partial_positions_str = self.smallest_partial_positions_var.get().strip()
                 
