@@ -6026,54 +6026,48 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 ds_cle = preap_lots[0]['ds_cle']
                 print(f"      ℹ️  Utilisation série signée du premier lot: {ds_serie} {ds_cle}")
             
-            # PDS.3.1: Sélectionner type DS "Depotage(05)"
+            # PDS.3.1: Sélectionner type DS
             try:
-                # Attendre que le formulaire soit complètement chargé
                 print("      ⏳ Attente du chargement du formulaire...")
                 time.sleep(2)
-                
-                # Méthode 1: Cliquer sur le trigger pour ouvrir la liste déroulante
-                try:
-                    type_ds_trigger = wait.until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, "div#mainTab\\:form3\\:typeDsId div.ui-selectonemenu-trigger"))
-                    )
-                    type_ds_trigger.click()
-                    print("      ✓ Menu Type DS ouvert")
-                    time.sleep(1)
-                    
-                    # Cliquer sur l'option "Depotage(05)"
+                # Determine if this is the first lot of DUM 1 in exception partial
+                is_exception_partial = False
+                is_first_lot_dum1 = False
+                if partial_config and partial_config.get('partial_type') == 'exception':
+                    is_exception_partial = True
+                    if dum_number == '1' and lot_idx == 0:
+                        is_first_lot_dum1 = True
+                # Open dropdown
+                type_ds_trigger = wait.until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, "div#mainTab\\:form3\\:typeDsId div.ui-selectonemenu-trigger"))
+                )
+                type_ds_trigger.click()
+                print("      ✓ Menu Type DS ouvert")
+                time.sleep(1)
+                # Select correct DS type
+                if is_exception_partial and dum_number == '1':
+                    if lot_idx == 0:
+                        # First lot of DUM 1: DS MEAD(03)
+                        ds_mead_option = wait.until(
+                            EC.element_to_be_clickable((By.XPATH, "//li[@data-label='DS MEAD(03)']"))
+                        )
+                        ds_mead_option.click()
+                        print("      ✓ Type DS: DS MEAD(03)")
+                    else:
+                        # Second (and subsequent) lot(s) of DUM 1: Depotage(05)
+                        depotage_option = wait.until(
+                            EC.element_to_be_clickable((By.XPATH, "//li[@data-label='Depotage(05)']"))
+                        )
+                        depotage_option.click()
+                        print("      ✓ Type DS: Depotage(05)")
+                else:
+                    # Default: Depotage(05)
                     depotage_option = wait.until(
                         EC.element_to_be_clickable((By.XPATH, "//li[@data-label='Depotage(05)']"))
                     )
                     depotage_option.click()
                     print("      ✓ Type DS: Depotage(05)")
-                    time.sleep(1)
-                    
-                except Exception as click_err:
-                    print(f"      ⚠️  Méthode clic échouée: {click_err}")
-                    print("      🔄 Tentative avec JavaScript...")
-                    
-                    # Méthode 2: JavaScript (fallback)
-                    js_code = """
-                    var select = document.getElementById('mainTab:form3:typeDsId_input');
-                    if (select) {
-                        select.value = '05'; // Valeur pour "Depotage(05)"
-                        var event = new Event('change', { bubbles: true });
-                        select.dispatchEvent(event);
-                        
-                        // Mettre à jour le label visible
-                        var label = document.getElementById('mainTab:form3:typeDsId_label');
-                        if (label) {
-                            label.textContent = 'Depotage(05)';
-                        }
-                    } else {
-                        throw new Error('Select element not found');
-                    }
-                    """
-                    driver.execute_script(js_code)
-                    time.sleep(1)
-                    print("      ✓ Type DS: Depotage(05) (via JavaScript)")
-                    
+                time.sleep(1)
             except Exception as e:
                 print(f"      ❌ Impossible de sélectionner Type DS: {e}")
                 return False
