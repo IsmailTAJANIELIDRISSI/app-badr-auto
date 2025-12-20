@@ -2203,25 +2203,18 @@ def get_dum_lots_for_partial(partial_data, partial_config=None):
     
     for idx, dum in enumerate(partial_data['dums']):
         dum_number = dum['dum_number']
+        # For exception partials, use the DUM values from JSON directly (already adjusted)
         dum_weight = float(dum['weight'])
         dum_positions = int(dum['positions'])
-        
-        # Exception case: Adjust DUM 1 by subtracting smallest partial
-        if is_exception and idx == 0 and dum_number == 1:
-            # First DUM is DUM 1 - subtract smallest partial
-            dum_weight -= smallest_partial_weight
-            dum_positions -= smallest_partial_positions
-            print(f"      ⚠️  Exception: DUM 1 ajusté - Poids: {dum_weight}, Positions: {dum_positions}")
-        
+        # No further adjustment needed in exception case
         dum_lots.append({
             'dum_name': f"DUM {dum_number}",
             'dum_number': dum_number,
             'split_id': dum.get('split_id', ''),
             'is_split': dum.get('is_split', False),
             'p': dum_positions,
-            'p_brut': round(dum_weight, 1)  # Arrondir à 1 décimale
+            'p_brut': round(dum_weight, 1)
         })
-    
     return dum_lots
 
 def save_ds_validated_to_partial_config(lta_folder_path, folder_name, partial_number, ds_validated):
