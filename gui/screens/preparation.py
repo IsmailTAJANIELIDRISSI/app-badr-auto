@@ -598,7 +598,7 @@ class PreparationScreen:
             configure_btn = ttk.Button(
                 card,
                 text="⚙️ Configurer",
-                command=lambda f=folder, l=lta['name'], p=partial_var: self._configure_partial(f, l, p)
+                command=lambda f=folder, l=lta['name'], p=partial_var, lf=lta['lta_file']: self._configure_partial(f, l, p, lf)
             )
             configure_btn.grid(row=row_num, column=2, sticky=tk.E, pady=5)
             
@@ -793,7 +793,7 @@ class PreparationScreen:
             self.app.log_message(f"Sauvegarde terminée avec {error_count} erreur(s)", "WARNING")
             messagebox.showwarning("Attention", f"Sauvegarde terminée avec {error_count} erreur(s)")
     
-    def _configure_partial(self, lta_folder_path, folder_name, partial_var):
+    def _configure_partial(self, lta_folder_path, folder_name, partial_var, lta_file_path=None):
         """Open partial LTA configuration dialog"""
         if not partial_var.get():
             messagebox.showinfo("Info", "Veuillez cocher la case 'LTA Partiel' d'abord")
@@ -802,7 +802,7 @@ class PreparationScreen:
         # Import the partial configuration dialog
         from gui.screens.partial_config_dialog import PartialConfigDialog
         
-        dialog = PartialConfigDialog(self.parent, lta_folder_path, folder_name)
+        dialog = PartialConfigDialog(self.parent, lta_folder_path, folder_name, lta_file_path)
         self.parent.wait_window(dialog.dialog)
         
         # Refresh the display to show updated info

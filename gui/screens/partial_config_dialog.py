@@ -18,10 +18,11 @@ logger = logging.getLogger(__name__)
 class PartialConfigDialog:
     """Dialog for configuring partial LTA processing"""
     
-    def __init__(self, parent, lta_folder_path, folder_name):
+    def __init__(self, parent, lta_folder_path, folder_name, lta_file_path=None):
         self.parent = parent
         self.lta_folder_path = lta_folder_path
         self.folder_name = folder_name
+        self.lta_file_path = lta_file_path
         self.config_saved = False
         
         # Load existing config if available
@@ -166,9 +167,20 @@ class PartialConfigDialog:
         totals_frame = ttk.LabelFrame(main_frame, text="Totaux LTA", padding="10")
         totals_frame.pack(fill=tk.X, pady=5)
         
-        ttk.Label(totals_frame, text=f"Poids Total: {self.lta_data['total_weight']} kg").pack(anchor=tk.W)
-        ttk.Label(totals_frame, text=f"Positions Totales: {self.lta_data['total_positions']}").pack(anchor=tk.W)
-        ttk.Label(totals_frame, text=f"Nombre de DUMs: {len(self.lta_data['dums'])}").pack(anchor=tk.W)
+        # Add LTA Reference Field - Grid Layout
+        ttk.Label(totals_frame, text="Référence LTA (MAWB):").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        
+        # Get initial reference
+        initial_ref = self.existing_config.get('lta_reference') if self.existing_config else self._get_lta_reference()
+        self.lta_reference_var = tk.StringVar(value=initial_ref)
+        
+        ref_entry = ttk.Entry(totals_frame, textvariable=self.lta_reference_var, width=20)
+        ref_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+        
+        # Add totals using grid
+        ttk.Label(totals_frame, text=f"Poids Total: {self.lta_data['total_weight']} kg").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(totals_frame, text=f"Positions Totales: {self.lta_data['total_positions']}").grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(totals_frame, text=f"Nombre de DUMs: {len(self.lta_data['dums'])}").grid(row=1, column=2, sticky=tk.W, padx=5, pady=2)
         
         # Number of partials
         partials_frame = ttk.LabelFrame(main_frame, text="Nombre de Partiels", padding="10")
@@ -243,9 +255,25 @@ class PartialConfigDialog:
         )
         confirm_exception_btn.grid(row=4, column=0, columnspan=2, padx=5, pady=10, sticky=tk.W)
         
-        # Partials container (scrollable)
+        # Buttons frame - CRITICAL: Pack BEFORE content frames to keep at bottom
+        buttons_frame = ttk.Frame(main_frame)
+        buttons_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
+        
+        ttk.Button(
+            buttons_frame,
+            text="💾 Sauvegarder",
+            command=self._save_config
+        ).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            buttons_frame,
+            text="❌ Annuler",
+            command=self.dialog.destroy
+        ).pack(side=tk.LEFT, padx=5)
+        
+        # Partials container (scrollable) - packs AFTER buttons to fill remaining space
         self.partials_container = ttk.Frame(main_frame)
-        self.partials_container.pack(fill=tk.BOTH, expand=True, pady=10)
+        self.partials_container.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
         canvas = tk.Canvas(self.partials_container, highlightthickness=0)
         scrollbar = ttk.Scrollbar(self.partials_container, orient=tk.VERTICAL, command=canvas.yview)
@@ -264,22 +292,6 @@ class PartialConfigDialog:
         
         self.canvas = canvas
         
-        # Buttons
-        buttons_frame = ttk.Frame(main_frame)
-        buttons_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Button(
-            buttons_frame,
-            text="💾 Sauvegarder",
-            command=self._save_config
-        ).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(
-            buttons_frame,
-            text="❌ Annuler",
-            command=self.dialog.destroy
-        ).pack(side=tk.LEFT, padx=5)
-        
         # Load existing config if available
         if self.existing_config:
             self.num_partials_var.set(len(self.existing_config['partials']))
@@ -293,7 +305,7 @@ class PartialConfigDialog:
                 if airport_ref and positions:
                     self.exception_confirmed = True
                     self.exception_status_label.config(
-                        text="✅ Informations exception confirmées (config existante)",
+                        text="Informations exception récupérées de la config existante",
                         foreground="green"
                     )
             self._generate_partial_forms(load_existing=True)
@@ -430,37 +442,17 @@ class PartialConfigDialog:
             # Mark as confirmed
             self.exception_confirmed = True
             self.exception_status_label.config(
-                text="✅ Informations exception confirmées - Faites défiler vers le bas pour voir le bouton 'Sauvegarder'",
+                text="Informations exception confirmées",
                 foreground="green",
                 wraplength=600
             )
             
-            # CRITICAL FIX: Update preview to reflect user-provided positions!
+            # Update preview to reflect user-provided positions
             self._update_distribution_preview()
             
-            # Update layout to ensure everything is rendered
+            # Update and scroll to show all content
             self.dialog.update_idletasks()
-            
-            # Ensure dialog is large enough to show all content including buttons
-            current_width = self.dialog.winfo_width()
-            current_height = self.dialog.winfo_height()
-            
-            # Calculate required height
-            self.dialog.update_idletasks()
-            required_height = self.dialog.winfo_reqheight()
-            
-            # Resize dialog if needed (ensure buttons at bottom are visible)
-            # Buttons are at the bottom of main_frame, so we need enough height
-            if required_height > current_height:
-                new_height = max(required_height + 80, 750)  # Add extra padding for buttons
-                self.dialog.geometry(f"{current_width}x{new_height}")
-            
-            # Force another update to ensure layout is complete
-            self.dialog.update_idletasks()
-            
-            # Scroll canvas to bottom to show all partial forms (buttons are outside canvas)
             self.dialog.after(100, lambda: self._scroll_to_bottom())
-            
             
         except Exception as e:
             logger.error(f"Error confirming exception fields: {e}", exc_info=True)
@@ -510,16 +502,27 @@ class PartialConfigDialog:
                 # Show exception frame if hidden
                 if not self.exception_frame.winfo_manager():
                     self.exception_frame.pack(fill=tk.X, pady=5, before=self.partials_container)
-                # Reset confirmation flag when weights change (user needs to reconfirm)
-                if self.exception_confirmed:
-                    self.exception_confirmed = False
-                    self.exception_status_label.config(text="", foreground="green")
+                
+                # CRITICAL FIX: Only reset confirmation if weights actually changed
+                # Check if weights are different from last time
+                current_weights_tuple = tuple(partial_weights)
+                if not hasattr(self, '_last_exception_weights'):
+                    self._last_exception_weights = current_weights_tuple
+                
+                if current_weights_tuple != self._last_exception_weights:
+                    # Weights changed - reset confirmation
+                    if self.exception_confirmed:
+                        self.exception_confirmed = False
+                        self.exception_status_label.config(text="⚠️ Poids modifié - veuillez reconfirmer", foreground="red")
+                    self._last_exception_weights = current_weights_tuple
             else:
                 # Hide exception frame
                 if self.exception_frame.winfo_manager():
                     self.exception_frame.pack_forget()
                 # Reset confirmation flag when exception is no longer detected
                 self.exception_confirmed = False
+                if hasattr(self, '_last_exception_weights'):
+                    del self._last_exception_weights
             
             # Calculate distribution
             distribution = self._calculate_dum_distribution(partial_weights)
@@ -1010,9 +1013,27 @@ class PartialConfigDialog:
                     )
                     return
             
+            # Validate LTA reference
+            lta_reference = self.lta_reference_var.get().strip()
+            if not lta_reference or lta_reference == "UNKNOWN":
+                messagebox.showerror(
+                    "Validation",
+                    "Veuillez renseigner la Référence LTA (MAWB) avant de sauvegarder."
+                )
+                return
+
             # Build config
+            # CRITICAL: For exception cases, lta_reference MUST be the airport reference
+            if is_exception_case:
+                config_lta_reference = airport_reference
+                # Store original MAWB separately just in case
+                main_lta_reference = lta_reference
+            else:
+                config_lta_reference = lta_reference
+                main_lta_reference = lta_reference
+
             config = {
-                'lta_reference': self._get_lta_reference(),
+                'lta_reference': config_lta_reference,
                 'lta_total_weight': self.lta_data['total_weight'],
                 'lta_total_positions': self.lta_data['total_positions'],
                 'partial_type': 'exception' if is_exception_case else 'normal',
@@ -1025,6 +1046,7 @@ class PartialConfigDialog:
                 config['smallest_partial_number'] = smallest_partial_number
                 config['smallest_partial_positions'] = smallest_partial_positions
                 config['smallest_partial_airport_reference'] = airport_reference
+                config['main_lta_reference'] = main_lta_reference  # Save MAWB here
             
             # Save config
             success = save_lta_partial_config(
@@ -1047,6 +1069,17 @@ class PartialConfigDialog:
     def _get_lta_reference(self):
         """Get LTA reference from LTA file"""
         try:
+            # Use passed LTA file path if available
+            if self.lta_file_path and os.path.exists(self.lta_file_path):
+                 with open(self.lta_file_path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                 if len(lines) >= 4:
+                    reference = lines[3].strip()  # Line 4 (index 3)
+                    if reference.endswith('/1'):
+                        reference = reference[:-2]
+                    logger.info(f"Found LTA reference (from detection): {reference}")
+                    return reference
+            
             lta_file_patterns = [
                 f"{self.folder_name}.txt",
                 f"{self.folder_name.replace(' ', '')}.txt",
@@ -1055,6 +1088,8 @@ class PartialConfigDialog:
             
             for pattern in lta_file_patterns:
                 lta_file = os.path.join(self.lta_folder_path, pattern)
+                logger.info(f"Looking for LTA file: {lta_file}")
+                
                 if os.path.exists(lta_file):
                     with open(lta_file, 'r', encoding='utf-8') as f:
                         lines = f.readlines()
