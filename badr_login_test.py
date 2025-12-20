@@ -6152,9 +6152,24 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             
             # Check if this is a split DUM (for validation logic)
             is_split_dum = partial_config and str(dum_number) in partial_config.get('split_dums', {})
-            if is_split_dum:
-                print(f"      ⚠️  DUM SPLIT détecté - {num_lots_to_add} lots requis")
-                # Initialize accumulators for split DUM validation
+            
+            # Check if this is exception case DUM 1 with multiple lots (needs accumulation like split DUMs)
+            is_exception_dum1_multiple_lots = (
+                partial_config 
+                and partial_config.get('partial_type') == 'exception'
+                and dum_number == '1'
+                and num_lots_to_add > 1
+            )
+            
+            # Use accumulation validation if it's a split DUM OR exception DUM 1 with multiple lots
+            needs_accumulation = is_split_dum or is_exception_dum1_multiple_lots
+            
+            if needs_accumulation:
+                if is_split_dum:
+                    print(f"      ⚠️  DUM SPLIT détecté - {num_lots_to_add} lots requis")
+                elif is_exception_dum1_multiple_lots:
+                    print(f"      ⚠️  CAS D'EXCEPTION DUM 1 - {num_lots_to_add} lots requis (accumulation nécessaire)")
+                # Initialize accumulators for validation
                 split_accumulated_weight = 0.0
                 split_accumulated_containers = 0.0
             
@@ -6320,8 +6335,8 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                         nbr_contenants_text = nbr_contenants_span.text.strip().replace(',', '.')
                         retrieved_containers = float(nbr_contenants_text)
                         
-                        # For split DUMs: accumulate values instead of validating immediately
-                        if is_split_dum:
+                        # For split DUMs or exception DUM 1 with multiple lots: accumulate values instead of validating immediately
+                        if needs_accumulation:
                             split_accumulated_weight += retrieved_weight
                             split_accumulated_containers += retrieved_containers
                             
@@ -6358,10 +6373,14 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                                     from datetime import datetime
                                     current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                     
+                                    error_type = "SPLIT" if is_split_dum else "EXCEPTION" if is_exception_dum1_multiple_lots else "MULTIPLE_LOTS"
                                     with open(error_filepath, 'w', encoding='utf-8') as f:
-                                        f.write(f"ERREUR - Préapurement DS - Données Incohérentes (DUM Split)\n\n")
+                                        f.write(f"ERREUR - Préapurement DS - Données Incohérentes (DUM {error_type})\n\n")
                                         f.write(f"LTA: {lta_name} - {validated_lta_reference}\n")
-                                        f.write(f"DUM: {dum_number} (SPLIT en {num_lots_to_add} lots)\n")
+                                        if is_exception_dum1_multiple_lots:
+                                            f.write(f"DUM: {dum_number} (CAS D'EXCEPTION - {num_lots_to_add} lots)\n")
+                                        else:
+                                            f.write(f"DUM: {dum_number} (SPLIT en {num_lots_to_add} lots)\n")
                                         f.write(f"Date: {current_datetime}\n")
                                         f.write(f"Étape: Préapurement DS - Validation après tous les lots\n\n")
                                         f.write(f"VALEURS ATTENDUES (DUM {dum_number} complet):\n")
