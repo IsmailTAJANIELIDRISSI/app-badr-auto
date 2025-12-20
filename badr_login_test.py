@@ -18,7 +18,7 @@ from openpyxl import load_workbook
 from datetime import datetime
 from dotenv import load_dotenv
 import json
-## import psutil  # Disabled: not available in environment
+import psutil
 
 # Import file_utils for partial LTA configuration
 try:
@@ -77,9 +77,41 @@ def close_excel_file(file_path):
     Returns:
         bool: True si fichier fermé ou n'était pas ouvert, False si erreur
     """
-    # psutil is not available, so we cannot close Excel programmatically
-    # Assume file is not open or user will close it manually
-    return True
+    try:
+        file_name = os.path.basename(file_path)
+        excel_closed = False
+        
+        # Parcourir tous les processus Excel
+        for proc in psutil.process_iter(['pid', 'name']):
+            try:
+                if proc.info['name'] and 'EXCEL.EXE' in proc.info['name'].upper():
+                    # Vérifier si ce processus a le fichier ouvert
+                    try:
+                        for item in proc.open_files():
+                            if file_path.lower() in item.path.lower():
+                                print(f"      ⚠️  Fichier {file_name} ouvert dans Excel (PID: {proc.info['pid']})")
+                                print(f"      🔄 Fermeture du processus Excel...")
+                                proc.terminate()
+                                proc.wait(timeout=3)
+                                excel_closed = True
+                                print(f"      ✓ Processus Excel fermé")
+                                time.sleep(1)  # Attendre que le fichier soit libéré
+                                break
+                    except (psutil.AccessDenied, psutil.NoSuchProcess):
+                        continue
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        
+        if not excel_closed:
+            # Fichier pas ouvert, c'est OK
+            return True
+        
+        return True
+        
+    except Exception as e:
+        print(f"      ⚠️  Erreur lors de la fermeture Excel: {e}")
+        # Continuer quand même, l'opération pourrait réussir
+        return True
 
 def get_fresh_profile_path():
     """Crée un chemin unique pour un profil temporaire"""
@@ -5368,10 +5400,45 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
     """
     try:
         wait = WebDriverWait(driver, 15)
-        # ...existing code...
-    except Exception as e:
-        print(f"[ERROR] Exception in fill_declaration_form: {e}")
-        return False
+        
+        print(f"\n📝 Remplissage du formulaire pour {dum_data.get('sheet_name', 'DUM')}...")
+        print(f"   📋 LTA Reference: {lta_reference_clean}")
+        
+        # 1. Shipper Name
+        print("   1️⃣ Nom expéditeur...")
+        shipper_input = wait.until(
+            EC.presence_of_element_located((By.ID, "mainTab:form0:nomOperateurExpediteur"))
+        )
+        shipper_input.clear()
+        shipper_input.send_keys(shipper_name)
+        print(f"      ✓ Expéditeur: {shipper_name}")
+        time.sleep(0.5)
+        
+        # 2. Total Value
+        print("   2️⃣ Montant total...")
+        total_value_input = wait.until(
+            EC.presence_of_element_located((By.ID, "mainTab:form0:montTotalNumber_input"))
+        )
+        total_value_input.clear()
+        total_value_input.send_keys(str(dum_data.get('total_value', 0)))
+        print(f"      ✓ Valeur totale: {dum_data.get('total_value', 0)}")
+        time.sleep(0.5)
+        
+        # 3. Total Gross Weight
+        print("   3️⃣ Poids brut total...")
+        gross_weight_input = wait.until(
+            EC.presence_of_element_located((By.ID, "mainTab:form0:poidBrutTotal_input"))
+        )
+        gross_weight_input.clear()
+        gross_weight_input.send_keys(str(dum_data.get('total_gross_weight', 0)))
+        print(f"      ✓ Poids brut: {dum_data.get('total_gross_weight', 0)}")
+        time.sleep(0.5)
+        
+        # 4. Freight Amount
+        print("   4️⃣ Montant fret...")
+        freight_input = wait.until(
+            EC.presence_of_element_located((By.ID, "mainTab:form0:montantFret_input"))
+        )
         freight_input.clear()
         freight_input.send_keys(str(dum_data.get('total_freight', 0)))
         print(f"      ✓ Fret: {dum_data.get('total_freight', 0)}")
@@ -5959,8 +6026,47 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 ds_cle = preap_lots[0]['ds_cle']
                 print(f"      ℹ️  Utilisation série signée du premier lot: {ds_serie} {ds_cle}")
             
-            # PDS.3.1: Sélectionner type DS will be handled inside the lot loop
-            # ...existing code...
+            # PDS.3.1: Sélectionner type DS
+            try:
+                print("      ⏳ Attente du chargement du formulaire...")
+                time.sleep(2)
+                # Determine DS type based on first lot (for the initial form before loop)
+                # For exception case DUM 1: first lot uses DS MEAD(03), others use Depotage(05)
+                use_ds_mead = False
+                if preap_lots and len(preap_lots) > 0:
+                    first_lot = preap_lots[0]
+                    if first_lot.get('is_exception_smallest'):
+                        # First lot of exception DUM 1: use DS MEAD(03)
+                        use_ds_mead = True
+                        print("      ℹ️  Détection: Premier lot du cas d'exception (DUM 1) - DS MEAD(03)")
+                
+                # Open dropdown
+                type_ds_trigger = wait.until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, "div#mainTab\\:form3\\:typeDsId div.ui-selectonemenu-trigger"))
+                )
+                type_ds_trigger.click()
+                print("      ✓ Menu Type DS ouvert")
+                time.sleep(1)
+                
+                # Select correct DS type based on lot flag
+                if use_ds_mead:
+                    # First lot of DUM 1 in exception case: DS MEAD(03)
+                    ds_mead_option = wait.until(
+                        EC.element_to_be_clickable((By.XPATH, "//li[@data-label='DS MEAD(03)']"))
+                    )
+                    ds_mead_option.click()
+                    print("      ✓ Type DS: DS MEAD(03)")
+                else:
+                    # Default: Depotage(05) for all other cases
+                    depotage_option = wait.until(
+                        EC.element_to_be_clickable((By.XPATH, "//li[@data-label='Depotage(05)']"))
+                    )
+                    depotage_option.click()
+                    print("      ✓ Type DS: Depotage(05)")
+                time.sleep(1)
+            except Exception as e:
+                print(f"      ❌ Impossible de sélectionner Type DS: {e}")
+                return False
             
             # PDS.3.2: Bureau "301"
             try:
@@ -6058,47 +6164,14 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 current_ds_serie = current_lot['ds_serie'] or ds_serie
                 current_ds_cle = current_lot['ds_cle'] or ds_cle
                 split_id = current_lot.get('split_id')
-
+                
                 lot_label = f"Lot {lot_idx + 1}/{num_lots_to_add}"
                 if split_id:
                     lot_label += f" ({split_id})"
-
+                
                 print(f"\n      📦 Traitement {lot_label}: {current_lot_ref}")
                 print(f"         DS: {current_ds_serie} {current_ds_cle}")
-
-                # Select DS type for each lot
-                try:
-                    type_ds_trigger = wait.until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, "div#mainTab\\:form3\\:typeDsId div.ui-selectonemenu-trigger"))
-                    )
-                    type_ds_trigger.click()
-                    time.sleep(1)
-                    # Exception partial, DUM 1, first lot: DS MEAD(03), else Depotage(05)
-                    is_exception_partial = partial_config and partial_config.get('partial_type') == 'exception'
-                    if is_exception_partial and dum_number == '1':
-                        if lot_idx == 0:
-                            ds_mead_option = wait.until(
-                                EC.element_to_be_clickable((By.XPATH, "//li[@data-label='DS MEAD(03)']"))
-                            )
-                            ds_mead_option.click()
-                            print("      ✓ Type DS: DS MEAD(03)")
-                        else:
-                            depotage_option = wait.until(
-                                EC.element_to_be_clickable((By.XPATH, "//li[@data-label='Depotage(05)']"))
-                            )
-                            depotage_option.click()
-                            print("      ✓ Type DS: Depotage(05)")
-                    else:
-                        depotage_option = wait.until(
-                            EC.element_to_be_clickable((By.XPATH, "//li[@data-label='Depotage(05)']"))
-                        )
-                        depotage_option.click()
-                        print("      ✓ Type DS: Depotage(05)")
-                    time.sleep(1)
-                except Exception as e:
-                    print(f"      ❌ Impossible de sélectionner Type DS: {e}")
-                    return False
-
+                
                 # Si ce n'est PAS le premier lot, cliquer sur "Nouveau" pour ajouter un nouveau préapurement
                 if lot_idx > 0:
                     print(f"         ➕ Ajout d'un nouveau préapurement pour {lot_label}...")
@@ -6109,8 +6182,31 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                         nouveau_preap_btn.click()
                         print(f"         ✓ Bouton 'Nouveau' cliqué pour {lot_label}")
                         time.sleep(2)
-                        # Re-remplir les champs communs (Bureau, Régime, Année, Série, Clé)
+                        
+                        # Re-remplir les champs communs (Type DS, Bureau, Régime, Année, Série, Clé)
                         print(f"         📝 Re-remplissage des champs pour {lot_label}...")
+                        
+                        # Type DS "Depotage(05)"
+                        try:
+                            type_ds_trigger = wait.until(
+                                EC.element_to_be_clickable((By.CSS_SELECTOR, "div#mainTab\\:form3\\:typeDsId div.ui-selectonemenu-trigger"))
+                            )
+                            type_ds_trigger.click()
+                            time.sleep(1)
+                            depotage_option = wait.until(
+                                EC.element_to_be_clickable((By.XPATH, "//li[@data-label='Depotage(05)']"))
+                            )
+                            depotage_option.click()
+                            time.sleep(1)
+                        except:
+                            # Fallback JavaScript
+                            driver.execute_script("""
+                                var select = document.getElementById('mainTab:form3:typeDsId_input');
+                                if (select) { select.value = '05'; select.dispatchEvent(new Event('change', { bubbles: true })); }
+                            """)
+                            time.sleep(1)
+                        
+                        # Bureau, Régime, Année, Série, Clé (use current lot's DS values)
                         driver.find_element(By.XPATH, "//input[contains(@id, 'bureauId') or contains(@name, 'bureauId')]").send_keys("301")
                         time.sleep(0.5)
                         driver.find_element(By.XPATH, "//input[contains(@id, 'regimeId') or contains(@name, 'regimeId')]").send_keys("000")
@@ -6121,16 +6217,20 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                         time.sleep(0.5)
                         driver.find_element(By.XPATH, "//input[contains(@id, 'cleId') or contains(@name, 'cleId')]").send_keys(current_ds_cle)
                         time.sleep(0.5)
+                        
+                        print(f"         ✓ Champs re-remplis pour {lot_label}")
+                        
                         # For subsequent lots, also fill loading location
                         if loading_location:
                             try:
                                 lieu_input = wait.until(
-                                    EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'lieuChargCmb') or contains(@name, 'lieuChargCmb')]")
-                                ))
+                                    EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'lieuChargCmb') or contains(@name, 'lieuChargCmb')]"))
+                                )
                                 lieu_input.clear()
                                 lieu_input.send_keys(loading_location)
                                 print(f"         ✓ Lieu chargement: {loading_location}")
                                 time.sleep(2)
+                                
                                 # Sélectionner la première suggestion
                                 try:
                                     lieu_suggestion = wait.until(
@@ -6139,25 +6239,26 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                                     lieu_suggestion.click()
                                     print("         ✓ Suggestion lieu sélectionnée")
                                     time.sleep(1)
-                                except Exception:
+                                except:
                                     print("         ⚠️  Aucune suggestion trouvée, on continue...")
                             except Exception as e:
                                 print(f"         ⚠️  Erreur saisie lieu chargement: {e}")
+                        
                     except Exception as e:
                         print(f"         ❌ Erreur ajout nouveau préapurement: {e}")
                         return False
-
+                
                 # Lieu de chargement (pour le premier lot seulement)
                 if lot_idx == 0 and loading_location:
                     try:
                         lieu_input = wait.until(
-                            EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'lieuChargCmb') or contains(@name, 'lieuChargCmb')]")
-                            )
+                            EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'lieuChargCmb') or contains(@name, 'lieuChargCmb')]"))
                         )
                         lieu_input.clear()
                         lieu_input.send_keys(loading_location)
                         print(f"         ✓ Lieu chargement: {loading_location}")
                         time.sleep(2)
+                        
                         # Sélectionner la première suggestion
                         try:
                             lieu_suggestion = wait.until(
@@ -6166,16 +6267,15 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                             lieu_suggestion.click()
                             print("         ✓ Suggestion lieu sélectionnée")
                             time.sleep(1)
-                        except Exception:
+                        except:
                             print("         ⚠️  Aucune suggestion trouvée, on continue...")
                     except Exception as e:
                         print(f"         ⚠️  Erreur saisie lieu chargement: {e}")
-
+                
                 # Référence lot (spécifique à chaque lot)
                 try:
                     lot_ref_input = wait.until(
-                        EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'preapurement_ref_lot') or contains(@name, 'preapurement_ref_lot')]")
-                        )
+                        EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'preapurement_ref_lot') or contains(@name, 'preapurement_ref_lot')]"))
                     )
                     lot_ref_input.clear()
                     lot_ref_input.send_keys(current_lot_ref)
@@ -6184,13 +6284,12 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 except Exception as e:
                     print(f"         ❌ Erreur saisie référence lot: {e}")
                     return False
-
+                
                 # Cliquer sur "OK" pour récupérer les données
                 print(f"         🔍 Récupération des données du lot...")
                 try:
                     ok_btn = wait.until(
-                        EC.element_to_be_clickable((By.XPATH, "//button[contains(@id, 'btnRefPreapOk') or contains(text(), 'OK')]")
-                        )
+                        EC.element_to_be_clickable((By.XPATH, "//button[contains(@id, 'btnRefPreapOk') or contains(text(), 'OK')]"))
                     )
                     try:
                         ok_btn.click()
