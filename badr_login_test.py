@@ -537,15 +537,38 @@ def save_dum_series_to_excel(lta_folder_path, dum_number, serie):
     for attempt in range(max_retries):
         try:
             # Trouver le fichier generated_excel dans le dossier LTA
+            # Exclure les fichiers temporaires et de verrouillage Excel
             generated_excel_path = None
             for file in os.listdir(lta_folder_path):
+                # Exclure les fichiers temporaires et de verrouillage
+                if (file.startswith("~$") or  # Fichiers de verrouillage Excel
+                    file.endswith(".tmp") or   # Fichiers temporaires
+                    file.endswith(".tmp~")):   # Fichiers temporaires alternatifs
+                    continue
+                
+                # Chercher uniquement les vrais fichiers .xlsx
                 if file.startswith("generated_excel") and file.endswith(".xlsx"):
-                    generated_excel_path = os.path.join(lta_folder_path, file)
-                    break
+                    full_path = os.path.join(lta_folder_path, file)
+                    # Vérifier que le fichier existe vraiment et n'est pas un dossier
+                    if os.path.isfile(full_path):
+                        generated_excel_path = full_path
+                        break
             
             if not generated_excel_path:
                 print(f"      ⚠️  Fichier generated_excel non trouvé dans {lta_folder_path}")
                 return False
+            
+            # Vérification supplémentaire: s'assurer que ce n'est pas un fichier temporaire
+            if generated_excel_path.endswith('.tmp') or '.tmp' in os.path.basename(generated_excel_path):
+                print(f"      ⚠️  Fichier temporaire détecté, ignoré: {os.path.basename(generated_excel_path)}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    return False
+            
+            # Log du fichier sélectionné pour débogage
+            print(f"      📄 Fichier sélectionné: {os.path.basename(generated_excel_path)}")
             
             # Calculer la position de la cellule: C + (12 + (dum_number - 1) * 7)
             row_number = 12 + (dum_number - 1) * 7
@@ -556,11 +579,34 @@ def save_dum_series_to_excel(lta_folder_path, dum_number, serie):
                 print(f"      🔄 Tentative {attempt + 1}/{max_retries}...")
                 time.sleep(retry_delay)
             
+            # Validation finale du fichier avant ouverture
+            if not os.path.exists(generated_excel_path):
+                print(f"      ⚠️  Fichier n'existe pas: {os.path.basename(generated_excel_path)}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    return False
+            
+            # Vérifier que c'est bien un fichier .xlsx (pas .tmp ou autre)
+            if not generated_excel_path.lower().endswith('.xlsx'):
+                print(f"      ⚠️  Format de fichier invalide: {os.path.basename(generated_excel_path)}")
+                print(f"      ℹ️  Le fichier doit être un .xlsx, pas un .tmp ou autre format")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    return False
+            
             # Ouvrir le fichier Excel (data_only=False pour pouvoir écrire)
             wb = None
             try:
                 # Fermer le fichier Excel s'il est ouvert
                 close_excel_file(generated_excel_path)
+                
+                # Dernière vérification: le fichier existe toujours après fermeture
+                if not os.path.exists(generated_excel_path):
+                    raise FileNotFoundError(f"Fichier supprimé après fermeture Excel: {os.path.basename(generated_excel_path)}")
                 
                 wb = load_workbook(generated_excel_path, data_only=False)
                 ws = wb['Summary']
@@ -585,14 +631,27 @@ def save_dum_series_to_excel(lta_folder_path, dum_number, serie):
                         pass
             
         except Exception as e:
-            if attempt < max_retries - 1:
-                print(f"      ⚠️  Erreur tentative {attempt + 1}: {e}")
-                print(f"      ⏳ Nouvelle tentative dans {retry_delay}s...")
+            error_msg = str(e)
+            # Message d'erreur spécifique pour les fichiers .tmp
+            if '.tmp' in error_msg.lower() or 'tmp file format' in error_msg.lower():
+                print(f"      ❌ Fichier temporaire détecté (tentative {attempt + 1}/{max_retries})")
+                print(f"      💡 Le fichier Excel est peut-être ouvert dans Excel ou en cours de sauvegarde")
+                print(f"      💡 Veuillez fermer Excel et réessayer")
+                if attempt < max_retries - 1:
+                    print(f"      ⏳ Nouvelle tentative dans {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    return False
             else:
-                print(f"      ❌ Erreur écriture série dans generated_excel après {max_retries} tentatives: {e}")
-                print(f"      💡 Vérifiez que le fichier Excel n'est pas ouvert dans Excel")
-                traceback.print_exc()
-                return False
+                if attempt < max_retries - 1:
+                    print(f"      ⚠️  Erreur tentative {attempt + 1}: {error_msg[:100]}...")
+                    print(f"      ⏳ Nouvelle tentative dans {retry_delay}s...")
+                else:
+                    print(f"      ❌ Erreur écriture série dans generated_excel après {max_retries} tentatives: {error_msg}")
+                    print(f"      💡 Vérifiez que le fichier Excel n'est pas ouvert dans Excel")
+                    traceback.print_exc()
+                    return False
     
     return False
 
