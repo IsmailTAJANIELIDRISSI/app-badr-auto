@@ -535,8 +535,6 @@ def save_dum_series_to_excel(lta_folder_path, dum_number, serie):
     retry_delay = 2  # secondes
     
     for attempt in range(max_retries):
-        wb = None
-        temp_file = None
         try:
             # Trouver le fichier generated_excel dans le dossier LTA
             generated_excel_path = None
@@ -558,113 +556,41 @@ def save_dum_series_to_excel(lta_folder_path, dum_number, serie):
                 print(f"      🔄 Tentative {attempt + 1}/{max_retries}...")
                 time.sleep(retry_delay)
             
-            # Check if file is locked/read-only
-            try:
-                # Try to open file in append mode to check if it's locked
-                test_file = open(generated_excel_path, 'r+b')
-                test_file.close()
-            except (PermissionError, IOError) as lock_err:
-                if attempt < max_retries - 1:
-                    print(f"      ⚠️  Fichier verrouillé (tentative {attempt + 1}): {lock_err}")
-                    print(f"      ⏳ Nouvelle tentative dans {retry_delay}s...")
-                    time.sleep(retry_delay)
-                    continue
-                else:
-                    print(f"      ❌ Fichier Excel verrouillé après {max_retries} tentatives")
-                    print(f"      💡 Fermez le fichier dans Excel et réessayez")
-                    return False
-            
-            # Fermer le fichier Excel s'il est ouvert
-            close_excel_file(generated_excel_path)
-            
-            # Create temporary file for safer writing
-            temp_file = generated_excel_path + ".tmp"
-            
             # Ouvrir le fichier Excel (data_only=False pour pouvoir écrire)
-            # Use read_only=False and keep_vba=False to avoid corruption
-            wb = load_workbook(generated_excel_path, data_only=False, keep_vba=False)
-            ws = wb['Summary']
-            
-            # Écrire la série dans la cellule
-            ws[cell_position] = serie
-            
-            # Save to temporary file first (safer approach)
+            wb = None
             try:
-                wb.save(temp_file)
-                wb.close()
-                wb = None
+                # Fermer le fichier Excel s'il est ouvert
+                close_excel_file(generated_excel_path)
                 
-                # Verify temp file is valid before replacing original
-                try:
-                    # Quick validation: try to open the temp file
-                    test_wb = load_workbook(temp_file, read_only=True, data_only=True)
-                    test_wb.close()
-                    
-                    # If successful, replace original with temp file
-                    shutil.move(temp_file, generated_excel_path)
-                    temp_file = None  # Mark as successfully moved
-                    
-                    print(f"      ✓ Série écrite dans generated_excel")
-                    print(f"         Cellule {cell_position}: {serie}")
-                    
-                    return True
-                except Exception as validation_err:
-                    print(f"      ⚠️  Fichier temporaire invalide: {validation_err}")
-                    # Don't replace original if temp is corrupted
-                    if os.path.exists(temp_file):
-                        try:
-                            os.remove(temp_file)
-                        except:
-                            pass
-                    raise
-                    
-            except Exception as save_err:
-                # If save failed, close workbook and clean up
+                wb = load_workbook(generated_excel_path, data_only=False)
+                ws = wb['Summary']
+                
+                # Écrire la série dans la cellule
+                ws[cell_position] = serie
+                
+                # Sauvegarder le fichier
+                wb.save(generated_excel_path)
+                
+                print(f"      ✓ Série écrite dans generated_excel")
+                print(f"         Cellule {cell_position}: {serie}")
+                
+                return True
+                
+            finally:
+                # Toujours fermer le workbook
                 if wb:
                     try:
                         wb.close()
                     except:
                         pass
-                wb = None
-                if os.path.exists(temp_file):
-                    try:
-                        os.remove(temp_file)
-                    except:
-                        pass
-                raise save_err
             
         except Exception as e:
-            # Clean up on error
-            if wb:
-                try:
-                    wb.close()
-                except:
-                    pass
-            if temp_file and os.path.exists(temp_file):
-                try:
-                    os.remove(temp_file)
-                except:
-                    pass
-            
             if attempt < max_retries - 1:
-                error_msg = str(e)
-                # Check for specific corruption errors
-                if "[Content_Types].xml" in error_msg or "archive" in error_msg.lower():
-                    print(f"      ⚠️  Erreur tentative {attempt + 1}: Corruption détectée - {error_msg[:100]}")
-                    print(f"      💡 Le fichier Excel peut être corrompu ou ouvert dans Excel")
-                else:
-                    print(f"      ⚠️  Erreur tentative {attempt + 1}: {error_msg[:100]}")
+                print(f"      ⚠️  Erreur tentative {attempt + 1}: {e}")
                 print(f"      ⏳ Nouvelle tentative dans {retry_delay}s...")
-                time.sleep(retry_delay)
             else:
-                error_msg = str(e)
-                if "[Content_Types].xml" in error_msg or "archive" in error_msg.lower():
-                    print(f"      ❌ Erreur écriture série dans generated_excel après {max_retries} tentatives")
-                    print(f"      💡 Le fichier Excel est probablement corrompu ou ouvert dans Excel")
-                    print(f"      💡 Fermez Excel et vérifiez le fichier: {generated_excel_path}")
-                else:
-                    print(f"      ❌ Erreur écriture série dans generated_excel après {max_retries} tentatives: {error_msg[:200]}")
-                    print(f"      💡 Vérifiez que le fichier Excel n'est pas ouvert dans Excel")
+                print(f"      ❌ Erreur écriture série dans generated_excel après {max_retries} tentatives: {e}")
+                print(f"      💡 Vérifiez que le fichier Excel n'est pas ouvert dans Excel")
                 traceback.print_exc()
                 return False
     
@@ -5579,51 +5505,11 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         # ==================================================================
         print("\n   📑 Navigation vers l'onglet 'Articles'...")
         try:
-            # Wait for UI blocker to disappear first
-            print("      ⏳ Attente du disparition du blocker UI...")
-            if wait_for_ui_blocker_disappear(driver, timeout=10):
-                print("      ✓ Blocker UI disparu")
-            else:
-                print("      ⚠️  Blocker toujours présent, on continue quand même...")
-            
-            # Additional wait to ensure page is stable
-            time.sleep(1)
-            
-            # Try to click with retry logic
-            articles_tab = None
-            for retry in range(3):
-                try:
-                    articles_tab = wait.until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab1']"))
-                    )
-                    # Check if blocker is still there
-                    if wait_for_ui_blocker_disappear(driver, timeout=2):
-                        # Try JavaScript click if normal click fails
-                        try:
-                            articles_tab.click()
-                            print("      ✓ Onglet 'Articles' cliqué")
-                            break
-                        except:
-                            if retry < 2:
-                                print(f"      🔄 Tentative {retry + 1}/3 avec JavaScript...")
-                                driver.execute_script("arguments[0].click();", articles_tab)
-                                print("      ✓ Onglet 'Articles' cliqué (JavaScript)")
-                                break
-                            else:
-                                raise
-                    else:
-                        if retry < 2:
-                            print(f"      ⏳ Blocker encore présent, attente supplémentaire...")
-                            time.sleep(2)
-                            continue
-                except Exception as retry_err:
-                    if retry < 2:
-                        print(f"      🔄 Tentative {retry + 1}/3 échouée: {retry_err}")
-                        time.sleep(2)
-                        continue
-                    else:
-                        raise
-            
+            articles_tab = wait.until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab1']"))
+            )
+            articles_tab.click()
+            print("      ✓ Onglet 'Articles' cliqué")
             time.sleep(2)  # Attendre le chargement de l'onglet
         except Exception as e:
             print(f"      ❌ Erreur navigation vers 'Articles': {e}")
@@ -6144,16 +6030,13 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             try:
                 print("      ⏳ Attente du chargement du formulaire...")
                 time.sleep(2)
-                # Determine DS type based on first lot (for the initial form before loop)
-                # For exception case DUM 1: first lot uses DS MEAD(03), others use Depotage(05)
-                use_ds_mead = False
-                if preap_lots and len(preap_lots) > 0:
-                    first_lot = preap_lots[0]
-                    if first_lot.get('is_exception_smallest'):
-                        # First lot of exception DUM 1: use DS MEAD(03)
-                        use_ds_mead = True
-                        print("      ℹ️  Détection: Premier lot du cas d'exception (DUM 1) - DS MEAD(03)")
-                
+                # Determine if this is the first lot of DUM 1 in exception partial
+                is_exception_partial = False
+                is_first_lot_dum1 = False
+                if partial_config and partial_config.get('partial_type') == 'exception':
+                    is_exception_partial = True
+                    if dum_number == '1' and lot_idx == 0:
+                        is_first_lot_dum1 = True
                 # Open dropdown
                 type_ds_trigger = wait.until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, "div#mainTab\\:form3\\:typeDsId div.ui-selectonemenu-trigger"))
@@ -6161,17 +6044,24 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 type_ds_trigger.click()
                 print("      ✓ Menu Type DS ouvert")
                 time.sleep(1)
-                
-                # Select correct DS type based on lot flag
-                if use_ds_mead:
-                    # First lot of DUM 1 in exception case: DS MEAD(03)
-                    ds_mead_option = wait.until(
-                        EC.element_to_be_clickable((By.XPATH, "//li[@data-label='DS MEAD(03)']"))
-                    )
-                    ds_mead_option.click()
-                    print("      ✓ Type DS: DS MEAD(03)")
+                # Select correct DS type
+                if is_exception_partial and dum_number == '1':
+                    if lot_idx == 0:
+                        # First lot of DUM 1: DS MEAD(03)
+                        ds_mead_option = wait.until(
+                            EC.element_to_be_clickable((By.XPATH, "//li[@data-label='DS MEAD(03)']"))
+                        )
+                        ds_mead_option.click()
+                        print("      ✓ Type DS: DS MEAD(03)")
+                    else:
+                        # Second (and subsequent) lot(s) of DUM 1: Depotage(05)
+                        depotage_option = wait.until(
+                            EC.element_to_be_clickable((By.XPATH, "//li[@data-label='Depotage(05)']"))
+                        )
+                        depotage_option.click()
+                        print("      ✓ Type DS: Depotage(05)")
                 else:
-                    # Default: Depotage(05) for all other cases
+                    # Default: Depotage(05)
                     depotage_option = wait.until(
                         EC.element_to_be_clickable((By.XPATH, "//li[@data-label='Depotage(05)']"))
                     )
@@ -6266,24 +6156,9 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             
             # Check if this is a split DUM (for validation logic)
             is_split_dum = partial_config and str(dum_number) in partial_config.get('split_dums', {})
-            
-            # Check if this is exception case DUM 1 with multiple lots (needs accumulation like split DUMs)
-            is_exception_dum1_multiple_lots = (
-                partial_config 
-                and partial_config.get('partial_type') == 'exception'
-                and dum_number == '1'
-                and num_lots_to_add > 1
-            )
-            
-            # Use accumulation validation if it's a split DUM OR exception DUM 1 with multiple lots
-            needs_accumulation = is_split_dum or is_exception_dum1_multiple_lots
-            
-            if needs_accumulation:
-                if is_split_dum:
-                    print(f"      ⚠️  DUM SPLIT détecté - {num_lots_to_add} lots requis")
-                elif is_exception_dum1_multiple_lots:
-                    print(f"      ⚠️  CAS D'EXCEPTION DUM 1 - {num_lots_to_add} lots requis (accumulation nécessaire)")
-                # Initialize accumulators for validation
+            if is_split_dum:
+                print(f"      ⚠️  DUM SPLIT détecté - {num_lots_to_add} lots requis")
+                # Initialize accumulators for split DUM validation
                 split_accumulated_weight = 0.0
                 split_accumulated_containers = 0.0
             
@@ -6449,8 +6324,8 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                         nbr_contenants_text = nbr_contenants_span.text.strip().replace(',', '.')
                         retrieved_containers = float(nbr_contenants_text)
                         
-                        # For split DUMs or exception DUM 1 with multiple lots: accumulate values instead of validating immediately
-                        if needs_accumulation:
+                        # For split DUMs: accumulate values instead of validating immediately
+                        if is_split_dum:
                             split_accumulated_weight += retrieved_weight
                             split_accumulated_containers += retrieved_containers
                             
@@ -6487,14 +6362,10 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                                     from datetime import datetime
                                     current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                     
-                                    error_type = "SPLIT" if is_split_dum else "EXCEPTION" if is_exception_dum1_multiple_lots else "MULTIPLE_LOTS"
                                     with open(error_filepath, 'w', encoding='utf-8') as f:
-                                        f.write(f"ERREUR - Préapurement DS - Données Incohérentes (DUM {error_type})\n\n")
+                                        f.write(f"ERREUR - Préapurement DS - Données Incohérentes (DUM Split)\n\n")
                                         f.write(f"LTA: {lta_name} - {validated_lta_reference}\n")
-                                        if is_exception_dum1_multiple_lots:
-                                            f.write(f"DUM: {dum_number} (CAS D'EXCEPTION - {num_lots_to_add} lots)\n")
-                                        else:
-                                            f.write(f"DUM: {dum_number} (SPLIT en {num_lots_to_add} lots)\n")
+                                        f.write(f"DUM: {dum_number} (SPLIT en {num_lots_to_add} lots)\n")
                                         f.write(f"Date: {current_datetime}\n")
                                         f.write(f"Étape: Préapurement DS - Validation après tous les lots\n\n")
                                         f.write(f"VALEURS ATTENDUES (DUM {dum_number} complet):\n")

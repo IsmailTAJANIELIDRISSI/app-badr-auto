@@ -13,6 +13,7 @@ from gui.screens.preparation import PreparationScreen
 from gui.screens.phase1_ed import Phase1EDScreen
 from gui.screens.phase2_dum import Phase2DUMScreen
 from gui.screens.logs import LogsScreen
+from gui.utils.theme import create_header, create_footer, set_window_icon
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +22,11 @@ class BADRApp:
     
     def __init__(self, root):
         self.root = root
-        self.root.title("BADR Automation - Déclarations LTA")
-        self.root.geometry("900x700")
+        self.root.title("MedAfrica Logistics - BADR Automation")
+        self.root.geometry("1000x750")
+        
+        # Set window icon (logo)
+        set_window_icon(root)
         
         # Application state
         self.current_folder = None
@@ -40,13 +44,18 @@ class BADRApp:
     
     def _setup_ui(self):
         """Setup the main UI with tabs"""
-        # Create main frame
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        # Create orange header with company branding
+        header = create_header(self.root)
+        
+        # Create main container (between header and footer)
+        main_container = tk.Frame(self.root)
+        main_container.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
+        
+        # Create main frame with padding
+        main_frame = ttk.Frame(main_container, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
         
         # Configure grid weights
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(0, weight=1)
         main_frame.rowconfigure(0, weight=1)
         
@@ -77,6 +86,9 @@ class BADRApp:
         status_bar = ttk.Label(main_frame, textvariable=self.status_var, 
                               relief=tk.SUNKEN, anchor=tk.W)
         status_bar.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
+        
+        # Create footer with copyright
+        footer = create_footer(self.root)
     
     def set_status(self, message):
         """Update status bar message"""
