@@ -535,6 +535,8 @@ def save_dum_series_to_excel(lta_folder_path, dum_number, serie):
     retry_delay = 2  # secondes
     
     for attempt in range(max_retries):
+        wb = None
+        temp_file = None
         try:
             # Trouver le fichier generated_excel dans le dossier LTA
             generated_excel_path = None
@@ -556,41 +558,113 @@ def save_dum_series_to_excel(lta_folder_path, dum_number, serie):
                 print(f"      🔄 Tentative {attempt + 1}/{max_retries}...")
                 time.sleep(retry_delay)
             
-            # Ouvrir le fichier Excel (data_only=False pour pouvoir écrire)
-            wb = None
+            # Check if file is locked/read-only
             try:
-                # Fermer le fichier Excel s'il est ouvert
-                close_excel_file(generated_excel_path)
+                # Try to open file in append mode to check if it's locked
+                test_file = open(generated_excel_path, 'r+b')
+                test_file.close()
+            except (PermissionError, IOError) as lock_err:
+                if attempt < max_retries - 1:
+                    print(f"      ⚠️  Fichier verrouillé (tentative {attempt + 1}): {lock_err}")
+                    print(f"      ⏳ Nouvelle tentative dans {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    print(f"      ❌ Fichier Excel verrouillé après {max_retries} tentatives")
+                    print(f"      💡 Fermez le fichier dans Excel et réessayez")
+                    return False
+            
+            # Fermer le fichier Excel s'il est ouvert
+            close_excel_file(generated_excel_path)
+            
+            # Create temporary file for safer writing
+            temp_file = generated_excel_path + ".tmp"
+            
+            # Ouvrir le fichier Excel (data_only=False pour pouvoir écrire)
+            # Use read_only=False and keep_vba=False to avoid corruption
+            wb = load_workbook(generated_excel_path, data_only=False, keep_vba=False)
+            ws = wb['Summary']
+            
+            # Écrire la série dans la cellule
+            ws[cell_position] = serie
+            
+            # Save to temporary file first (safer approach)
+            try:
+                wb.save(temp_file)
+                wb.close()
+                wb = None
                 
-                wb = load_workbook(generated_excel_path, data_only=False)
-                ws = wb['Summary']
-                
-                # Écrire la série dans la cellule
-                ws[cell_position] = serie
-                
-                # Sauvegarder le fichier
-                wb.save(generated_excel_path)
-                
-                print(f"      ✓ Série écrite dans generated_excel")
-                print(f"         Cellule {cell_position}: {serie}")
-                
-                return True
-                
-            finally:
-                # Toujours fermer le workbook
+                # Verify temp file is valid before replacing original
+                try:
+                    # Quick validation: try to open the temp file
+                    test_wb = load_workbook(temp_file, read_only=True, data_only=True)
+                    test_wb.close()
+                    
+                    # If successful, replace original with temp file
+                    shutil.move(temp_file, generated_excel_path)
+                    temp_file = None  # Mark as successfully moved
+                    
+                    print(f"      ✓ Série écrite dans generated_excel")
+                    print(f"         Cellule {cell_position}: {serie}")
+                    
+                    return True
+                except Exception as validation_err:
+                    print(f"      ⚠️  Fichier temporaire invalide: {validation_err}")
+                    # Don't replace original if temp is corrupted
+                    if os.path.exists(temp_file):
+                        try:
+                            os.remove(temp_file)
+                        except:
+                            pass
+                    raise
+                    
+            except Exception as save_err:
+                # If save failed, close workbook and clean up
                 if wb:
                     try:
                         wb.close()
                     except:
                         pass
+                wb = None
+                if os.path.exists(temp_file):
+                    try:
+                        os.remove(temp_file)
+                    except:
+                        pass
+                raise save_err
             
         except Exception as e:
+            # Clean up on error
+            if wb:
+                try:
+                    wb.close()
+                except:
+                    pass
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass
+            
             if attempt < max_retries - 1:
-                print(f"      ⚠️  Erreur tentative {attempt + 1}: {e}")
+                error_msg = str(e)
+                # Check for specific corruption errors
+                if "[Content_Types].xml" in error_msg or "archive" in error_msg.lower():
+                    print(f"      ⚠️  Erreur tentative {attempt + 1}: Corruption détectée - {error_msg[:100]}")
+                    print(f"      💡 Le fichier Excel peut être corrompu ou ouvert dans Excel")
+                else:
+                    print(f"      ⚠️  Erreur tentative {attempt + 1}: {error_msg[:100]}")
                 print(f"      ⏳ Nouvelle tentative dans {retry_delay}s...")
+                time.sleep(retry_delay)
             else:
-                print(f"      ❌ Erreur écriture série dans generated_excel après {max_retries} tentatives: {e}")
-                print(f"      💡 Vérifiez que le fichier Excel n'est pas ouvert dans Excel")
+                error_msg = str(e)
+                if "[Content_Types].xml" in error_msg or "archive" in error_msg.lower():
+                    print(f"      ❌ Erreur écriture série dans generated_excel après {max_retries} tentatives")
+                    print(f"      💡 Le fichier Excel est probablement corrompu ou ouvert dans Excel")
+                    print(f"      💡 Fermez Excel et vérifiez le fichier: {generated_excel_path}")
+                else:
+                    print(f"      ❌ Erreur écriture série dans generated_excel après {max_retries} tentatives: {error_msg[:200]}")
+                    print(f"      💡 Vérifiez que le fichier Excel n'est pas ouvert dans Excel")
                 traceback.print_exc()
                 return False
     
@@ -5505,11 +5579,51 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         # ==================================================================
         print("\n   📑 Navigation vers l'onglet 'Articles'...")
         try:
-            articles_tab = wait.until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab1']"))
-            )
-            articles_tab.click()
-            print("      ✓ Onglet 'Articles' cliqué")
+            # Wait for UI blocker to disappear first
+            print("      ⏳ Attente du disparition du blocker UI...")
+            if wait_for_ui_blocker_disappear(driver, timeout=10):
+                print("      ✓ Blocker UI disparu")
+            else:
+                print("      ⚠️  Blocker toujours présent, on continue quand même...")
+            
+            # Additional wait to ensure page is stable
+            time.sleep(1)
+            
+            # Try to click with retry logic
+            articles_tab = None
+            for retry in range(3):
+                try:
+                    articles_tab = wait.until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab1']"))
+                    )
+                    # Check if blocker is still there
+                    if wait_for_ui_blocker_disappear(driver, timeout=2):
+                        # Try JavaScript click if normal click fails
+                        try:
+                            articles_tab.click()
+                            print("      ✓ Onglet 'Articles' cliqué")
+                            break
+                        except:
+                            if retry < 2:
+                                print(f"      🔄 Tentative {retry + 1}/3 avec JavaScript...")
+                                driver.execute_script("arguments[0].click();", articles_tab)
+                                print("      ✓ Onglet 'Articles' cliqué (JavaScript)")
+                                break
+                            else:
+                                raise
+                    else:
+                        if retry < 2:
+                            print(f"      ⏳ Blocker encore présent, attente supplémentaire...")
+                            time.sleep(2)
+                            continue
+                except Exception as retry_err:
+                    if retry < 2:
+                        print(f"      🔄 Tentative {retry + 1}/3 échouée: {retry_err}")
+                        time.sleep(2)
+                        continue
+                    else:
+                        raise
+            
             time.sleep(2)  # Attendre le chargement de l'onglet
         except Exception as e:
             print(f"      ❌ Erreur navigation vers 'Articles': {e}")
