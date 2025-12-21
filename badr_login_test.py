@@ -7599,12 +7599,24 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                     # Sauvegarder la référence dans result_LTAS.txt
                     save_dum_reference(lta_folder_path, dum_reference)
                     
-                    # Extraire le numéro du DUM depuis sheet_name (ex: "Sheet 1" → 1)
-                    sheet_name = dum_data.get('sheet_name', '')
-                    dum_number = int(sheet_name.split()[-1]) if sheet_name.startswith('Sheet') else 1
-                    
-                    # Sauvegarder la série dans generated_excel
-                    save_dum_series_to_excel(lta_folder_path, dum_number, dum_reference)
+                    # ====================================================================
+                    # EXCEL SAVING TEMPORARILY DISABLED (to prevent script hanging)
+                    # ====================================================================
+                    # The Excel saving is commented out because it causes the script to hang
+                    # when Excel files are corrupted or locked.
+                    # 
+                    # TO RE-ENABLE: Uncomment the 4 lines below (remove the # symbols)
+                    # 
+                    # # Extraire le numéro du DUM depuis sheet_name (ex: "Sheet 1" → 1)
+                    # sheet_name = dum_data.get('sheet_name', '')
+                    # dum_number = int(sheet_name.split()[-1]) if sheet_name.startswith('Sheet') else 1
+                    # 
+                    # # Sauvegarder la série dans generated_excel
+                    # save_dum_series_to_excel(lta_folder_path, dum_number, dum_reference)
+                    # 
+                    # NOTE: If error marking (mark_dum_as_error_in_excel) also causes hangs,
+                    #       you can comment out those calls too (search for "mark_dum_as_error_in_excel")
+                    # ====================================================================
                     
                 else:
                     print(f"      ⚠️  Table de référence incomplète (cellules: {len(cells)})")
