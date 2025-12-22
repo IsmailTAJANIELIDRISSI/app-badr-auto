@@ -51,7 +51,7 @@ def set_window_icon(root):
 
 def create_header(parent):
     """Create simple orange header with company name and logo"""
-    header_frame = tk.Frame(parent, bg=ORANGE_PRIMARY, height=70)
+    header_frame = tk.Frame(parent, bg=ORANGE_PRIMARY, height=50)
     header_frame.pack(fill=tk.X, padx=0, pady=0)
     header_frame.pack_propagate(False)
     
@@ -61,39 +61,25 @@ def create_header(parent):
         try:
             from PIL import Image, ImageTk
             img = Image.open(logo_path)
-            # Resize to fit header (max height 50px)
-            img.thumbnail((180, 50), Image.Resampling.LANCZOS)
+            # Resize to fit header (max height 40px)
+            img.thumbnail((180, 40), Image.Resampling.LANCZOS)
             logo_img = ImageTk.PhotoImage(img)
             logo_label = tk.Label(header_frame, image=logo_img, bg=ORANGE_PRIMARY)
             logo_label.image = logo_img  # Keep a reference
-            logo_label.pack(side=tk.LEFT, padx=15, pady=10)
+            logo_label.pack(side=tk.LEFT, padx=15, pady=5)
         except Exception:
             # If PIL not available or image fails, continue without logo
             pass
     
-    # Company name and title
-    title_frame = tk.Frame(header_frame, bg=ORANGE_PRIMARY)
-    title_frame.pack(side=tk.LEFT, padx=20, pady=10, fill=tk.Y)
-    
-    # Application title - using bright white with better contrast
-    title_label = tk.Label(
-        title_frame,
-        text="BADR Automation - Déclarations LTA",
-        bg=ORANGE_PRIMARY,
-        fg="#FFFFFF",  # Pure white for maximum contrast
-        font=('Arial', 14, 'bold')
-    )
-    title_label.pack(side=tk.TOP, anchor=tk.W, pady=(0, 2))
-    
     # Company name
     company_label = tk.Label(
-        title_frame,
+        header_frame,
         text="MedAfrica Logistics",
         bg=ORANGE_PRIMARY,
         fg="#FFFFFF",  # Pure white for maximum contrast
-        font=('Arial', 10, 'italic')
+        font=('Arial', 12, 'italic')
     )
-    company_label.pack(side=tk.TOP, anchor=tk.W)
+    company_label.pack(side=tk.LEFT, padx=20, pady=5)
     
     return header_frame
 

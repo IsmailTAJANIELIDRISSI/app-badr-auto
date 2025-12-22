@@ -13,7 +13,7 @@ from gui.screens.preparation import PreparationScreen
 from gui.screens.phase1_ed import Phase1EDScreen
 from gui.screens.phase2_dum import Phase2DUMScreen
 from gui.screens.logs import LogsScreen
-from gui.utils.theme import create_header, create_footer, set_window_icon
+from gui.utils.theme import create_footer, set_window_icon
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +44,7 @@ class BADRApp:
     
     def _setup_ui(self):
         """Setup the main UI with tabs"""
-        # Create orange header with company branding
-        header = create_header(self.root)
-        
-        # Create main container (between header and footer)
+        # Create main container
         main_container = tk.Frame(self.root)
         main_container.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
         
