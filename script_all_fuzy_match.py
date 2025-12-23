@@ -1560,9 +1560,9 @@ def create_bloc_note(directory_name, mawb_number, shipper_name):
             if shipper_name:
                 f.write(f"{shipper_name}\n")
             else:
-                f.write("Shipper: Not found\n")
+                f.write("\n")
             f.write("\n")
-        print(f"    ✓ Created bloc note: '{directory_name}.txt' with shipper: {shipper_name or 'Not found'}")
+        print(f"    ✓ Created bloc note: '{directory_name}.txt' with shipper: {shipper_name or '(empty)'}")
         
         # EXTRA: Create a simplified shipper-only file for automation
         safe_name = directory_name.replace(' ', '_')
@@ -1571,7 +1571,7 @@ def create_bloc_note(directory_name, mawb_number, shipper_name):
             if shipper_name:
                 f.write(f"{shipper_name}\n")
             else:
-                f.write("Shipper: Not found\n")
+                f.write("\n")
         print(f"    ✓ Created shipper file: '{safe_name}_shipper_name.txt'")
         
         return True

@@ -276,6 +276,22 @@ class Phase2DUMScreen:
             messagebox.showwarning("Attention", "Aucun LTA sélectionné")
             return
         
+        # Check for LTAs with empty shipper names
+        ltas_without_shipper = []
+        for lta in selected_ltas:
+            shipper_name = lta.get('shipper_name')
+            # Check if shipper_name is None, empty string, or just whitespace
+            if not shipper_name or not shipper_name.strip():
+                ltas_without_shipper.append(lta['name'])
+        
+        if ltas_without_shipper:
+            # Format message: "8eme LTA n'a pas de nom d'expéditeur"
+            lta_names = '\n'.join([f"{lta_name} n'a pas de nom d'expéditeur" for lta_name in ltas_without_shipper])
+            message = f"{lta_names}\n\nVeuillez ajouter le nom d'expéditeur avant de continuer."
+            messagebox.showerror("Nom d'expéditeur manquant", message)
+            self.app.log_message(f"Phase 2 bloquée: {len(ltas_without_shipper)} LTA(s) sans nom d'expéditeur", "WARNING")
+            return
+        
         # Confirm start
         total_dums = sum(cb['dum_count'] for cb in self.lta_checkboxes if cb['var'].get())
         if not messagebox.askyesno("Confirmation", 

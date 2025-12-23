@@ -91,6 +91,11 @@ def detect_ltas(folder_path):
                     lta_info['ds_series'] = shipper_data.get('ds_series')
                     lta_info['validated_ds'] = shipper_data.get('ds_reference')  # Line 4
                     lta_info['location'] = shipper_data.get('location')
+                    lta_info['shipper_name'] = shipper_data.get('shipper_name')  # Store shipper name
+                else:
+                    lta_info['shipper_name'] = None
+            else:
+                lta_info['shipper_name'] = None
             
             # Check if LTA has partial configuration (multiple DS series)
             partial_config = get_lta_partial_info(folder_path, folder_name)
