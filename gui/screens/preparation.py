@@ -703,6 +703,16 @@ class PreparationScreen:
             
             logger.info(f"Processing LTA: {lta['name']}, DS: {ds_series}, Location: {location}, Shipper: {shipper_name}, Blocage: {is_blocage}")
             
+            # Validate shipper name (required)
+            if not shipper_name or not shipper_name.strip() or shipper_name == "Shipper: Not found":
+                messagebox.showerror(
+                    "Nom d'expéditeur manquant",
+                    f"{lta['name']} n'a pas de nom d'expéditeur.\n\nVeuillez ajouter le nom d'expéditeur avant de continuer."
+                )
+                error_count += 1
+                self.app.log_message(f"Validation échouée: {lta['name']} n'a pas de nom d'expéditeur", "WARNING")
+                continue
+            
             # Validate DS if provided
             if ds_series:
                 ds_series = normalize_ds_series(ds_series)

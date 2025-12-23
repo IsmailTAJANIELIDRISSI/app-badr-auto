@@ -126,7 +126,7 @@ def setup_gemini_api():
 def verify_shipper_with_gemini(extracted_name, database_companies):
     """Use Gemini AI to select the best company name from candidates and database"""
     try:
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         # Accept either a single string or a list of candidates
         if isinstance(extracted_name, list):
             candidates = extracted_name
