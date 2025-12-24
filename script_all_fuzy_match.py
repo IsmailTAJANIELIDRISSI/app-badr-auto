@@ -88,23 +88,62 @@ def load_companies_database():
         KNOWN_COMPANIES = []
 
 def save_companies_database():
-    """Save known companies to JSON file"""
+    """Save known companies to JSON file with atomic write to prevent corruption"""
     try:
-        with open(DATABASE_FILE, 'w', encoding='utf-8') as f:
+        # Use atomic write: write to temp file first, then rename
+        temp_file = DATABASE_FILE + '.tmp'
+        with open(temp_file, 'w', encoding='utf-8') as f:
             json.dump(KNOWN_COMPANIES, f, indent=2, ensure_ascii=False)
+        
+        # Atomic rename (works on Windows and Unix)
+        if os.path.exists(DATABASE_FILE):
+            os.replace(temp_file, DATABASE_FILE)
+        else:
+            os.rename(temp_file, DATABASE_FILE)
+        
         logger.info(f"Saved {len(KNOWN_COMPANIES)} companies to database")
     except Exception as e:
         logger.error(f"Error saving companies database: {e}")
+        # Clean up temp file if it exists
+        try:
+            if os.path.exists(DATABASE_FILE + '.tmp'):
+                os.remove(DATABASE_FILE + '.tmp')
+        except:
+            pass
 
 def add_company_to_database(company_name):
-    """Add new company to database if it doesn't exist"""
+    """Add new company to database if it doesn't exist - reloads database first to prevent overwrites"""
     global KNOWN_COMPANIES
-    if company_name and company_name not in KNOWN_COMPANIES:
-        KNOWN_COMPANIES.append(company_name)
-        save_companies_database()
-        logger.info(f"Added new company to database: {company_name}")
-        return True
-    return False
+    
+    if not company_name:
+        return False
+    
+    # CRITICAL: Reload database from file before adding to ensure we have the latest data
+    # This prevents overwriting companies added by other script instances
+    try:
+        if os.path.exists(DATABASE_FILE):
+            with open(DATABASE_FILE, 'r', encoding='utf-8') as f:
+                current_companies = json.load(f)
+                # Update global list with latest data from file
+                KNOWN_COMPANIES = current_companies
+                logger.debug(f"Reloaded {len(KNOWN_COMPANIES)} companies from database before adding")
+    except Exception as e:
+        logger.warning(f"Could not reload database before adding: {e}, using current in-memory list")
+        # Continue with current KNOWN_COMPANIES if reload fails
+    
+    # Check if company already exists (case-insensitive comparison)
+    company_name_upper = company_name.upper().strip()
+    existing_upper = [c.upper().strip() if c else '' for c in KNOWN_COMPANIES]
+    
+    if company_name_upper in existing_upper:
+        logger.debug(f"Company already exists in database (case-insensitive): {company_name}")
+        return False
+    
+    # Add the company
+    KNOWN_COMPANIES.append(company_name)
+    save_companies_database()
+    logger.info(f"Added new company to database: {company_name} (total: {len(KNOWN_COMPANIES)})")
+    return True
 
 def setup_gemini_api():
     """Setup Gemini API with API key from environment or prompt user"""
@@ -2755,7 +2794,19 @@ def main():
     print("  ✓ Warning reports generated for any corrections")
     print()
     
-    # Final database save
+    # Final database save - reload first to ensure we have all companies
+    try:
+        if os.path.exists(DATABASE_FILE):
+            with open(DATABASE_FILE, 'r', encoding='utf-8') as f:
+                final_companies = json.load(f)
+                # Merge with in-memory list (avoid duplicates)
+                for company in KNOWN_COMPANIES:
+                    if company and company not in final_companies:
+                        final_companies.append(company)
+                KNOWN_COMPANIES = final_companies
+    except Exception as e:
+        logger.warning(f"Could not reload database for final save: {e}")
+    
     save_companies_database()
     print(f"Companies database contains {len(KNOWN_COMPANIES)} entries")
     print()
