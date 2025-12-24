@@ -2795,6 +2795,7 @@ def main():
     print()
     
     # Final database save - reload first to ensure we have all companies
+    global KNOWN_COMPANIES
     try:
         if os.path.exists(DATABASE_FILE):
             with open(DATABASE_FILE, 'r', encoding='utf-8') as f:
