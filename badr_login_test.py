@@ -358,11 +358,103 @@ def navigate_and_login(driver):
     """Navigue vers le site et effectue la connexion"""
     try:
         print("🌐 Navigation vers le site BADR...")
-        driver.get("https://badr.douane.gov.ma:40444/badr/Login")
-        print("✓ Navigation réussie !")
-        print(f"📄 Titre: {driver.title}")
         
-        wait = WebDriverWait(driver, 10)
+        # Tentative de navigation avec gestion des certificats SSL
+        try:
+            driver.get("https://badr.douane.gov.ma:40444/badr/Login")
+            print("✓ Navigation réussie !")
+            print(f"📄 Titre: {driver.title}")
+        except Exception as nav_error:
+            error_msg = str(nav_error)
+            if "ERR_SSL_CLIENT_AUTH_CERT_NEEDED" in error_msg or "certificate" in error_msg.lower() or "ssl" in error_msg.lower():
+                print("\n" + "="*70)
+                print("🔐 CERTIFICAT CLIENT REQUIS")
+                print("="*70)
+                print("   ⏳ Veuillez entrer le code PIN du certificat dans la fenêtre Edge")
+                print("   ⏳ Le script attendra patiemment jusqu'à ce que vous ayez terminé...")
+                print("="*70 + "\n")
+                
+                # Attendre que l'utilisateur entre le certificat (vérifier que la page se charge)
+                max_wait_cert = 300  # 5 minutes maximum
+                waited = 0
+                check_interval = 2
+                cert_accepted = False
+                
+                while waited < max_wait_cert:
+                    try:
+                        # Essayer de vérifier si la page est chargée (pas d'erreur SSL)
+                        current_url = driver.current_url
+                        page_title = driver.title
+                        
+                        # Si on arrive à lire l'URL et le titre sans erreur, c'est que le certificat est accepté
+                        if current_url and page_title:
+                            # Vérifier que ce n'est pas une page d'erreur
+                            if "badr" in current_url.lower() and "err" not in page_title.lower():
+                                print(f"\n✓ Certificat accepté ! Page chargée: {page_title}")
+                                cert_accepted = True
+                                break
+                            # Même si ce n'est pas encore la page de login, si on a une page valide c'est bon signe
+                            if "err" not in page_title.lower() and "error" not in page_title.lower():
+                                cert_accepted = True
+                                # Réessayer la navigation maintenant que le certificat est accepté
+                                time.sleep(1)
+                                try:
+                                    driver.get("https://badr.douane.gov.ma:40444/badr/Login")
+                                    print(f"✓ Navigation réussie après authentification certificat !")
+                                    break
+                                except:
+                                    # La page est peut-être déjà chargée
+                                    pass
+                                break
+                    except Exception as check_error:
+                        # Si on ne peut pas lire (erreur SSL encore présente), continuer à attendre
+                        pass
+                    
+                    time.sleep(check_interval)
+                    waited += check_interval
+                    
+                    # Afficher un message toutes les 10 secondes pour rassurer l'utilisateur
+                    if waited % 10 == 0 and waited > 0:
+                        print(f"   ⏳ En attente de l'entrée du code PIN... ({waited}s / {max_wait_cert}s)")
+                
+                if not cert_accepted and waited >= max_wait_cert:
+                    print("\n❌ Timeout: Le certificat n'a pas été entré à temps (5 minutes)")
+                    return False
+                
+                # S'assurer que la page de login est chargée
+                time.sleep(2)
+                try:
+                    current_url = driver.current_url
+                    if "login" not in current_url.lower():
+                        driver.get("https://badr.douane.gov.ma:40444/badr/Login")
+                        time.sleep(2)
+                        print("✓ Page de login chargée après certificat")
+                except:
+                    pass
+            else:
+                # Autre type d'erreur - réessayer une fois
+                print(f"⚠️  Erreur de navigation: {error_msg}")
+                print("   🔄 Nouvelle tentative dans 2 secondes...")
+                time.sleep(2)
+                try:
+                    driver.get("https://badr.douane.gov.ma:40444/badr/Login")
+                    print("✓ Navigation réussie après retry !")
+                except Exception as retry_error:
+                    print(f"❌ Erreur persistante: {retry_error}")
+                    raise retry_error
+        
+        wait = WebDriverWait(driver, 30)  # Augmenter le timeout pour laisser le temps au certificat
+        
+        # Vérifier que nous sommes bien sur la page de login après le certificat
+        try:
+            current_url = driver.current_url
+            if "login" not in current_url.lower():
+                print("⚠️  Redirection vers la page de login...")
+                driver.get("https://badr.douane.gov.ma:40444/badr/Login")
+                time.sleep(2)
+                print("✓ Page de login chargée")
+        except:
+            pass
         
         # ÉTAPE 1: Entrer le mot de passe
         print("\n🔐 Saisie du mot de passe...")
@@ -2840,8 +2932,16 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
         # ED.3.2: Vérifier messages d'erreur ou de succès
         error_detected = False
         try:
-            # Attendre plus longtemps pour que les messages s'affichent
+            # Attendre plus longtemps pour que les messages s'affichent et que la page se stabilise
             time.sleep(2)
+            
+            # Attendre que le blocker UI disparaisse complètement
+            try:
+                wait.until(
+                    EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
+                )
+            except:
+                pass  # Continuer même si le blocker est encore présent
             
             # Chercher message d'erreur (plusieurs tentatives)
             error_msg = driver.find_elements(By.CSS_SELECTOR, "div.ui-messages-error-detail")
@@ -2859,10 +2959,19 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                 if "n'existe pas" in error_text.lower() or "référence" in error_text.lower():
                     print(f"      ⚠️  Format 1 rejeté, tentative Format 2...")
                     
-                    # Fermer le message d'erreur
+                    # Fermer le message d'erreur et attendre qu'il disparaisse
                     try:
-                        close_btn = driver.find_element(By.CSS_SELECTOR, "a.ui-messages-close")
-                        close_btn.click()
+                        close_btns = driver.find_elements(By.CSS_SELECTOR, "a.ui-messages-close")
+                        for btn in close_btns:
+                            if btn.is_displayed():
+                                driver.execute_script("arguments[0].click();", btn)
+                        # Attendre que les messages disparaissent
+                        try:
+                            wait.until(
+                                EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-messages-error"))
+                            )
+                        except:
+                            pass  # Continuer même si l'attente échoue
                         time.sleep(0.5)
                         print("      ✓ Message d'erreur fermé")
                     except:
@@ -2895,7 +3004,16 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                             time.sleep(0.5)
                             valider_ref_btn.click()
                             print("      ✓ Bouton 'Valider' re-cliqué")
-                            time.sleep(3)
+                            # Attendre que le traitement se termine
+                            time.sleep(2)
+                            # Attendre que le blocker UI disparaisse
+                            try:
+                                wait.until(
+                                    EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
+                                )
+                            except:
+                                pass
+                            time.sleep(1)  # Attente supplémentaire pour laisser les messages apparaître
                             break
                         except Exception as retry_e:
                             if attempt < max_retries - 1:
@@ -2904,8 +3022,11 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                             else:
                                 raise retry_e
                     
-                    # Vérifier résultat Format 2
-                    time.sleep(1)
+                    # Vérifier résultat Format 2 - Attendre plus longtemps et s'assurer que les messages sont stables
+                    time.sleep(2)  # Attente plus longue pour laisser le temps aux messages de s'afficher
+                    wait.until(lambda d: len(d.find_elements(By.CSS_SELECTOR, "div.ui-messages-error, div.ui-messages-info")) > 0 or 
+                                      d.find_elements(By.CSS_SELECTOR, "a[href='#mainTab:tab2']"))  # Si on peut voir l'onglet Voyage, c'est OK
+                    
                     error_msg_retry2 = driver.find_elements(By.CSS_SELECTOR, "div.ui-messages-error-detail")
                     if not error_msg_retry2 or len(error_msg_retry2) == 0:
                         error_msg_retry2 = driver.find_elements(By.CSS_SELECTOR, "span.ui-messages-error-detail")
@@ -2915,11 +3036,18 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                         print(f"      ⚠️  Format 2 rejeté: {error_text_retry2}")
                         print(f"      🔄 Tentative Format 3 (avec tirets, sans /1)...")
                         
-                        # Fermer le message d'erreur
+                        # Fermer le message d'erreur et attendre qu'il disparaisse
                         try:
-                            close_btn = driver.find_element(By.CSS_SELECTOR, "a.ui-messages-close")
-                            close_btn.click()
+                            close_btns = driver.find_elements(By.CSS_SELECTOR, "a.ui-messages-close")
+                            for btn in close_btns:
+                                if btn.is_displayed():
+                                    driver.execute_script("arguments[0].click();", btn)
+                            # Attendre que les messages disparaissent
+                            wait.until(
+                                EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-messages-error"))
+                            )
                             time.sleep(0.5)
+                            print("      ✓ Message d'erreur fermé")
                         except:
                             pass
                         
@@ -2949,7 +3077,16 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                                 time.sleep(0.5)
                                 valider_ref_btn.click()
                                 print("      ✓ Bouton 'Valider' re-cliqué")
-                                time.sleep(3)
+                                # Attendre que le traitement se termine
+                                time.sleep(2)
+                                # Attendre que le blocker UI disparaisse
+                                try:
+                                    wait.until(
+                                        EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
+                                    )
+                                except:
+                                    pass
+                                time.sleep(1)  # Attente supplémentaire pour laisser les messages apparaître
                                 break
                             except Exception as retry_e:
                                 if attempt < max_retries - 1:
@@ -2958,8 +3095,14 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                                 else:
                                     raise retry_e
                         
-                        # Vérifier résultat Format 3
-                        time.sleep(1)
+                        # Vérifier résultat Format 3 - Attendre plus longtemps et s'assurer que les messages sont stables
+                        time.sleep(2)  # Attente plus longue pour laisser le temps aux messages de s'afficher
+                        try:
+                            wait.until(lambda d: len(d.find_elements(By.CSS_SELECTOR, "div.ui-messages-error, div.ui-messages-info")) > 0 or 
+                                              d.find_elements(By.CSS_SELECTOR, "a[href='#mainTab:tab2']"))  # Si on peut voir l'onglet Voyage, c'est OK
+                        except:
+                            pass  # Continuer même si la condition n'est pas remplie
+                        
                         error_msg_retry3 = driver.find_elements(By.CSS_SELECTOR, "div.ui-messages-error-detail")
                         if not error_msg_retry3 or len(error_msg_retry3) == 0:
                             error_msg_retry3 = driver.find_elements(By.CSS_SELECTOR, "span.ui-messages-error-detail")
@@ -3198,17 +3341,21 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
         # ==================================================================
         print("\n   📊 Navigation vers l'onglet Quantités...")
         
-        # Fermer tout message d'erreur persistant avant de continuer
+        # Fermer tout message d'erreur ou d'information persistant avant de continuer
         try:
             close_btns = driver.find_elements(By.CSS_SELECTOR, "a.ui-messages-close")
             for btn in close_btns:
-                try:
-                    btn.click()
+                if btn.is_displayed():
+                    driver.execute_script("arguments[0].click();", btn)
                     time.sleep(0.3)
-                except:
-                    pass
-        except:
-            pass
+            # Attendre que les messages disparaissent complètement
+            wait.until(
+                EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-messages-info, div.ui-messages-error"))
+            )
+            print("      ✓ Messages d'information/erreur fermés")
+        except Exception as e:
+            print(f"      ⚠️  Erreur lors de la fermeture des messages: {e}")
+            # Continuer même si la fermeture échoue
         
         try:
             quantites_tab = wait.until(
@@ -3219,9 +3366,17 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
             time.sleep(2)
         except Exception as e:
             print(f"      ❌ Erreur navigation onglet Quantités: {e}")
-            driver.switch_to.default_content()
-            return_to_home_after_error(driver)
-            return False
+            # Fallback JavaScript
+            try:
+                print("      🔄 Tentative avec JavaScript...")
+                driver.execute_script("arguments[0].click();", driver.find_element(By.CSS_SELECTOR, "a[href='#mainTab:tab3']"))
+                print("      ✓ Onglet Quantités ouvert (JS)")
+                time.sleep(2)
+            except Exception as js_e:
+                print(f"      ❌ Erreur navigation onglet Quantités (JS fallback): {js_e}")
+                driver.switch_to.default_content()
+                return_to_home_after_error(driver)
+                return False
         
         # ==================================================================
         # ÉTAPE ED.5: Extraire les totaux depuis generated_excel
@@ -6541,12 +6696,55 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         # ==================================================================
         print("\n   💾 Sauvegarde de la déclaration...")
         try:
-            # Cliquer sur le bouton "SAUVEGARDER"
-            sauvegarder_btn = wait.until(
-                EC.element_to_be_clickable((By.ID, "secure__2002"))
-            )
-            sauvegarder_btn.click()
-            print("      ✓ Bouton 'SAUVEGARDER' cliqué")
+            # Attendre que le blocker UI disparaisse AVANT de cliquer
+            print("      ⏳ Attente que le blocker UI disparaisse...")
+            if wait_for_ui_blocker_disappear(driver, timeout=10):
+                print("      ✓ Blocker UI disparu, prêt pour la sauvegarde")
+            else:
+                print("      ⚠️  Blocker UI toujours présent - continuons quand même")
+            time.sleep(1)  # Pause supplémentaire pour stabilité
+            
+            # Cliquer sur le bouton "SAUVEGARDER" avec retry et fallback JavaScript
+            max_retries = 3
+            clicked = False
+            for attempt in range(max_retries):
+                try:
+                    # Attendre que le blocker disparaisse à nouveau (au cas où il réapparaît)
+                    wait_for_ui_blocker_disappear(driver, timeout=5)
+                    time.sleep(0.5)
+                    
+                    sauvegarder_btn = wait.until(
+                        EC.element_to_be_clickable((By.ID, "secure__2002"))
+                    )
+                    
+                    # Essayer un clic normal d'abord
+                    try:
+                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", sauvegarder_btn)
+                        time.sleep(0.5)
+                        sauvegarder_btn.click()
+                        clicked = True
+                        print("      ✓ Bouton 'SAUVEGARDER' cliqué")
+                        break
+                    except Exception as click_error:
+                        if "click intercepted" in str(click_error).lower():
+                            # Fallback: utiliser JavaScript click
+                            print(f"      🔄 Clic intercepté, tentative JavaScript (essai {attempt + 1}/{max_retries})...")
+                            driver.execute_script("arguments[0].click();", sauvegarder_btn)
+                            clicked = True
+                            print("      ✓ Bouton 'SAUVEGARDER' cliqué (via JavaScript)")
+                            break
+                        else:
+                            raise click_error
+                except Exception as retry_error:
+                    if attempt < max_retries - 1:
+                        print(f"      ⏳ Retry {attempt + 1}/{max_retries}...")
+                        time.sleep(2)
+                    else:
+                        raise retry_error
+            
+            if not clicked:
+                print("      ❌ Impossible de cliquer sur 'SAUVEGARDER' après plusieurs tentatives")
+                raise Exception("Échec du clic sur SAUVEGARDER")
             
             # Attendre que l'overlay de blocage disparaisse après la sauvegarde
             print("      ⏳ Attente de la fin de la sauvegarde...")
