@@ -2957,25 +2957,9 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                 
                 # ED.3.3: Si erreur référence, essayer les autres formats
                 if "n'existe pas" in error_text.lower() or "référence" in error_text.lower():
-                    print(f"      ⚠️  Format 1 rejeté, tentative Format 2...")
+                    print(f"      ⚠️  Format 1 rejeté, passage direct au Format 2...")
                     
-                    # Fermer le message d'erreur et attendre qu'il disparaisse
-                    try:
-                        close_btns = driver.find_elements(By.CSS_SELECTOR, "a.ui-messages-close")
-                        for btn in close_btns:
-                            if btn.is_displayed():
-                                driver.execute_script("arguments[0].click();", btn)
-                        # Attendre que les messages disparaissent
-                        try:
-                            wait.until(
-                                EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-messages-error"))
-                            )
-                        except:
-                            pass  # Continuer même si l'attente échoue
-                        time.sleep(0.5)
-                        print("      ✓ Message d'erreur fermé")
-                    except:
-                        pass
+                    # Pas besoin de fermer l'erreur - passer directement au Format 2
                     
                     # Essayer Format 2 (sans tirets)
                     reference_input = wait.until(
@@ -3034,22 +3018,9 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                     if error_msg_retry2 and len(error_msg_retry2) > 0:
                         error_text_retry2 = error_msg_retry2[0].text.strip()
                         print(f"      ⚠️  Format 2 rejeté: {error_text_retry2}")
-                        print(f"      🔄 Tentative Format 3 (avec tirets, sans /1)...")
+                        print(f"      🔄 Passage direct au Format 3 (avec tirets, sans /1)...")
                         
-                        # Fermer le message d'erreur et attendre qu'il disparaisse
-                        try:
-                            close_btns = driver.find_elements(By.CSS_SELECTOR, "a.ui-messages-close")
-                            for btn in close_btns:
-                                if btn.is_displayed():
-                                    driver.execute_script("arguments[0].click();", btn)
-                            # Attendre que les messages disparaissent
-                            wait.until(
-                                EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-messages-error"))
-                            )
-                            time.sleep(0.5)
-                            print("      ✓ Message d'erreur fermé")
-                        except:
-                            pass
+                        # Pas besoin de fermer l'erreur - passer directement au Format 3
                         
                         # Essayer Format 3 (avec tirets, sans /1)
                         reference_input = wait.until(
@@ -4756,14 +4727,9 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                 
                 # Essayer les autres formats si erreur de référence
                 if "n'existe pas" in error_text.lower() or "référence" in error_text.lower():
-                    print(f"      ⚠️  Format 1 rejeté, tentative Format 2...")
+                    print(f"      ⚠️  Format 1 rejeté, passage direct au Format 2...")
                     
-                    try:
-                        close_btn = driver.find_element(By.CSS_SELECTOR, "a.ui-messages-close")
-                        close_btn.click()
-                        time.sleep(0.5)
-                    except:
-                        pass
+                    # Pas besoin de fermer l'erreur - passer directement au Format 2
                     
                     reference_input = wait.until(
                         EC.presence_of_element_located((By.ID, "mainTab:form1:referenceLotID"))
@@ -4799,14 +4765,9 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                         error_msg_retry2 = driver.find_elements(By.CSS_SELECTOR, "span.ui-messages-error-detail")
                     
                     if error_msg_retry2 and len(error_msg_retry2) > 0:
-                        print(f"      ⚠️  Format 2 rejeté, tentative Format 3...")
+                        print(f"      ⚠️  Format 2 rejeté, passage direct au Format 3...")
                         
-                        try:
-                            close_btn = driver.find_element(By.CSS_SELECTOR, "a.ui-messages-close")
-                            close_btn.click()
-                            time.sleep(0.5)
-                        except:
-                            pass
+                        # Pas besoin de fermer l'erreur - passer directement au Format 3
                         
                         reference_input.clear()
                         time.sleep(0.3)
