@@ -24,6 +24,13 @@ class PartialConfigDialog:
         self.folder_name = folder_name
         self.config_saved = False
         
+        # Create dialog FIRST (before any operations that might fail)
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title(f"Configuration Partielle - {folder_name}")
+        self.dialog.geometry("800x600")
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
         # Load existing config if available
         self.existing_config = get_lta_partial_info(lta_folder_path, folder_name)
         
@@ -31,15 +38,11 @@ class PartialConfigDialog:
         self.lta_data = self._load_lta_data()
         
         if not self.lta_data:
+            # Show error but keep dialog open so user can see the error
             messagebox.showerror("Erreur", "Impossible de charger les données LTA.\nVeuillez exécuter le script de préparation d'abord.")
+            # Don't return - let the dialog stay open so user can see what went wrong
+            # But don't call _setup_ui() if data is invalid
             return
-        
-        # Create dialog
-        self.dialog = tk.Toplevel(parent)
-        self.dialog.title(f"Configuration Partielle - {folder_name}")
-        self.dialog.geometry("800x600")
-        self.dialog.transient(parent)
-        self.dialog.grab_set()
         
         self._setup_ui()
     

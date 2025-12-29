@@ -809,16 +809,24 @@ class PreparationScreen:
             messagebox.showinfo("Info", "Veuillez cocher la case 'LTA Partiel' d'abord")
             return
         
-        # Import the partial configuration dialog
-        from gui.screens.partial_config_dialog import PartialConfigDialog
-        
-        dialog = PartialConfigDialog(self.parent, lta_folder_path, folder_name, lta_file_path)
-        self.parent.wait_window(dialog.dialog)
-        
-        # Refresh the display to show updated info
-        if dialog.config_saved:
-            self.populate_lta_table()
-            messagebox.showinfo("Succès", "Configuration partielle sauvegardée!")
+        try:
+            # Import the partial configuration dialog
+            from gui.screens.partial_config_dialog import PartialConfigDialog
+            
+            # Create dialog (only accepts 3 arguments: parent, lta_folder_path, folder_name)
+            dialog = PartialConfigDialog(self.parent, lta_folder_path, folder_name)
+            
+            # Wait for dialog to close
+            if hasattr(dialog, 'dialog'):
+                self.parent.wait_window(dialog.dialog)
+                
+                # Refresh the display to show updated info
+                if dialog.config_saved:
+                    self.populate_lta_table()
+                    messagebox.showinfo("Succès", "Configuration partielle sauvegardée!")
+        except Exception as e:
+            logger.error(f"Error opening partial config dialog: {e}", exc_info=True)
+            messagebox.showerror("Erreur", f"Impossible d'ouvrir la fenêtre de configuration:\n{str(e)}")
     
     def _create_tooltip(self, widget, text):
         """Create a tooltip for a widget"""
