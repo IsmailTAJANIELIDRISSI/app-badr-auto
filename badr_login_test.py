@@ -5698,32 +5698,26 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         
         # ÉTAPE 5.4: Modifier le textarea avec le préfixe LTA et la valeur Carton
         print(f"\n   ✏️  Mise à jour du texte avec LTA N° {lta_reference_clean}...")
+        
+        # Attendre que le blocker UI disparaisse après le clic
         try:
-            # Attendre que le blocker UI disparaisse après le clic
-            try:
-                wait.until(
-                    EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
-                )
-                time.sleep(1)
-            except:
-                time.sleep(2)  # Fallback: attendre 2 secondes
-            
-            # Chercher le textarea par XPath - attendre qu'il soit interactable
+            wait.until(
+                EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
+            )
+            time.sleep(1)
+        except:
+            time.sleep(2)  # Fallback: attendre 2 secondes
+        
+        # Utiliser directement la méthode qui fonctionne (recherche par pattern d'ID)
+        try:
+            print("      🔍 Recherche du textarea par pattern d'ID...")
             textarea = wait.until(
-                EC.element_to_be_clickable((By.XPATH, "//textarea[contains(@class, 'ui-inputtextarea') and @role='textbox']"))
+                EC.element_to_be_clickable((By.XPATH, "//textarea[contains(@id, 'mainTab:form4:j_id') and contains(@class, 'ui-inputtextarea')]"))
             )
             
             # Scroll pour s'assurer que l'élément est visible
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", textarea)
             time.sleep(0.5)
-            
-            # Vérifier que l'élément est vraiment interactable
-            is_enabled = textarea.is_enabled()
-            is_displayed = textarea.is_displayed()
-            print(f"      🔍 Textarea - Enabled: {is_enabled}, Displayed: {is_displayed}")
-            
-            if not is_enabled or not is_displayed:
-                raise Exception("Textarea n'est pas interactable")
             
             # Lire le texte actuel - essayer plusieurs méthodes
             current_text = textarea.get_attribute("value")
@@ -5772,18 +5766,11 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             time.sleep(1)
         except Exception as e:
             print(f"      ❌ Erreur modification textarea: {e}")
-            # Essayer méthode alternative avec ID contenant le pattern
+            # Méthode de secours: chercher par XPath général
             try:
-                print("      🔄 Tentative alternative avec recherche par pattern...")
-                # Attendre que le blocker disparaisse
-                try:
-                    wait.until(EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui")))
-                    time.sleep(1)
-                except:
-                    time.sleep(2)
-                
+                print("      🔄 Tentative de secours avec XPath général...")
                 textarea_alt = wait.until(
-                    EC.element_to_be_clickable((By.XPATH, "//textarea[contains(@id, 'mainTab:form4:j_id') and contains(@class, 'ui-inputtextarea')]"))
+                    EC.element_to_be_clickable((By.XPATH, "//textarea[contains(@class, 'ui-inputtextarea') and @role='textbox']"))
                 )
                 
                 # Lire le texte actuel
@@ -5798,27 +5785,20 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 
                 new_text = f"LTA N° {lta_reference_clean} {current_text}"
                 
-                # Essayer Selenium d'abord
-                try:
-                    textarea_alt.clear()
-                    time.sleep(0.3)
-                    textarea_alt.send_keys(new_text)
-                    print(f"      ✓ Texte mis à jour (méthode alternative - Selenium): {new_text}")
-                except:
-                    # Utiliser JavaScript
-                    driver.execute_script("""
-                        var textarea = arguments[0];
-                        textarea.value = arguments[1];
-                        var event = new Event('input', { bubbles: true });
-                        textarea.dispatchEvent(event);
-                        var changeEvent = new Event('change', { bubbles: true });
-                        textarea.dispatchEvent(changeEvent);
-                    """, textarea_alt, new_text)
-                    print(f"      ✓ Texte mis à jour (méthode alternative - JavaScript): {new_text}")
+                # Utiliser JavaScript directement (plus fiable)
+                driver.execute_script("""
+                    var textarea = arguments[0];
+                    textarea.value = arguments[1];
+                    var event = new Event('input', { bubbles: true });
+                    textarea.dispatchEvent(event);
+                    var changeEvent = new Event('change', { bubbles: true });
+                    textarea.dispatchEvent(changeEvent);
+                """, textarea_alt, new_text)
+                print(f"      ✓ Texte mis à jour (méthode de secours - JavaScript): {new_text}")
                 
                 time.sleep(1)
             except Exception as e2:
-                print(f"      ❌ Erreur méthode alternative: {e2}")
+                print(f"      ❌ Erreur méthode de secours: {e2}")
                 return False
         
         # ÉTAPE 5.5: Confirmer la demande
