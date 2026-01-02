@@ -5699,40 +5699,123 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         # ÉTAPE 5.4: Modifier le textarea avec le préfixe LTA et la valeur Carton
         print(f"\n   ✏️  Mise à jour du texte avec LTA N° {lta_reference_clean}...")
         try:
-            # Attendre que le formulaire se charge après le clic
-            time.sleep(1)
+            # Attendre que le blocker UI disparaisse après le clic
+            try:
+                wait.until(
+                    EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
+                )
+                time.sleep(1)
+            except:
+                time.sleep(2)  # Fallback: attendre 2 secondes
             
-            # Chercher le textarea par XPath (plus robuste que l'ID dynamique)
+            # Chercher le textarea par XPath - attendre qu'il soit interactable
             textarea = wait.until(
-                EC.presence_of_element_located((By.XPATH, "//textarea[contains(@class, 'ui-inputtextarea') and @role='textbox']"))
+                EC.element_to_be_clickable((By.XPATH, "//textarea[contains(@class, 'ui-inputtextarea') and @role='textbox']"))
             )
             
-            # Lire le texte actuel
+            # Scroll pour s'assurer que l'élément est visible
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", textarea)
+            time.sleep(0.5)
+            
+            # Vérifier que l'élément est vraiment interactable
+            is_enabled = textarea.is_enabled()
+            is_displayed = textarea.is_displayed()
+            print(f"      🔍 Textarea - Enabled: {is_enabled}, Displayed: {is_displayed}")
+            
+            if not is_enabled or not is_displayed:
+                raise Exception("Textarea n'est pas interactable")
+            
+            # Lire le texte actuel - essayer plusieurs méthodes
             current_text = textarea.get_attribute("value")
+            if not current_text or current_text.strip() == "":
+                # Essayer de lire via JavaScript
+                current_text = driver.execute_script("return arguments[0].value;", textarea)
+            if not current_text or current_text.strip() == "":
+                # Essayer textContent comme dernier recours
+                current_text = driver.execute_script("return arguments[0].textContent;", textarea)
+            
             print(f"      📄 Texte actuel: {current_text}")
             
-            # Construire le nouveau texte avec préfixe LTA
-            # Format: "LTA N° 72-73799132 SOIT {carton_value} COLIS.NS SOLL LA DISP DES FORM CCEC"
-            new_text = re.sub(r'SOIT\s+\d+\s+COLIS', f'SOIT {carton_value} COLIS', current_text)
-            new_text = f"LTA N° {lta_reference_clean} {new_text}"
+            # Si le texte actuel ne contient pas "SOIT", utiliser le texte par défaut
+            if not current_text or "SOIT" not in current_text:
+                print("      ⚠️  Texte actuel invalide ou vide, utilisation du pattern par défaut")
+                current_text = f"SOIT {carton_value} COLIS  NS SOLL LA DISP DES FORM CCEC"
+            else:
+                # Construire le nouveau texte avec préfixe LTA
+                # Format: "LTA N° 72-73799132 SOIT {carton_value} COLIS.NS SOLL LA DISP DES FORM CCEC"
+                current_text = re.sub(r'SOIT\s+\d+\s+COLIS', f'SOIT {carton_value} COLIS', current_text)
+                # Retirer le préfixe LTA existant s'il y en a un
+                current_text = re.sub(r'^LTA N°\s+\d+[-\d]*\s*', '', current_text)
             
-            # Mettre à jour le textarea
-            textarea.clear()
-            textarea.send_keys(new_text)
-            print(f"      ✓ Texte mis à jour: {new_text}")
+            new_text = f"LTA N° {lta_reference_clean} {current_text}"
+            
+            # Mettre à jour le textarea - essayer d'abord avec Selenium, puis JavaScript si échoue
+            try:
+                textarea.clear()
+                time.sleep(0.3)
+                textarea.send_keys(new_text)
+                print(f"      ✓ Texte mis à jour (Selenium): {new_text}")
+            except Exception as selenium_error:
+                print(f"      ⚠️  Selenium échoué, utilisation de JavaScript: {selenium_error}")
+                # Utiliser JavaScript pour modifier le textarea
+                driver.execute_script("""
+                    var textarea = arguments[0];
+                    textarea.value = arguments[1];
+                    // Déclencher les événements pour que le framework détecte le changement
+                    var event = new Event('input', { bubbles: true });
+                    textarea.dispatchEvent(event);
+                    var changeEvent = new Event('change', { bubbles: true });
+                    textarea.dispatchEvent(changeEvent);
+                """, textarea, new_text)
+                print(f"      ✓ Texte mis à jour (JavaScript): {new_text}")
+            
             time.sleep(1)
         except Exception as e:
             print(f"      ❌ Erreur modification textarea: {e}")
             # Essayer méthode alternative avec ID contenant le pattern
             try:
                 print("      🔄 Tentative alternative avec recherche par pattern...")
-                textarea_alt = driver.find_element(By.XPATH, "//textarea[contains(@id, 'mainTab:form4:j_id') and contains(@class, 'ui-inputtextarea')]")
+                # Attendre que le blocker disparaisse
+                try:
+                    wait.until(EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui")))
+                    time.sleep(1)
+                except:
+                    time.sleep(2)
+                
+                textarea_alt = wait.until(
+                    EC.element_to_be_clickable((By.XPATH, "//textarea[contains(@id, 'mainTab:form4:j_id') and contains(@class, 'ui-inputtextarea')]"))
+                )
+                
+                # Lire le texte actuel
                 current_text = textarea_alt.get_attribute("value")
-                new_text = re.sub(r'SOIT\s+\d+\s+COLIS', f'SOIT {carton_value} COLIS', current_text)
-                new_text = f"LTA N° {lta_reference_clean} {new_text}"
-                textarea_alt.clear()
-                textarea_alt.send_keys(new_text)
-                print(f"      ✓ Texte mis à jour (méthode alternative): {new_text}")
+                if not current_text or "SOIT" not in current_text:
+                    current_text = driver.execute_script("return arguments[0].value;", textarea_alt)
+                if not current_text or "SOIT" not in current_text:
+                    current_text = f"SOIT {carton_value} COLIS  NS SOLL LA DISP DES FORM CCEC"
+                else:
+                    current_text = re.sub(r'SOIT\s+\d+\s+COLIS', f'SOIT {carton_value} COLIS', current_text)
+                    current_text = re.sub(r'^LTA N°\s+\d+[-\d]*\s*', '', current_text)
+                
+                new_text = f"LTA N° {lta_reference_clean} {current_text}"
+                
+                # Essayer Selenium d'abord
+                try:
+                    textarea_alt.clear()
+                    time.sleep(0.3)
+                    textarea_alt.send_keys(new_text)
+                    print(f"      ✓ Texte mis à jour (méthode alternative - Selenium): {new_text}")
+                except:
+                    # Utiliser JavaScript
+                    driver.execute_script("""
+                        var textarea = arguments[0];
+                        textarea.value = arguments[1];
+                        var event = new Event('input', { bubbles: true });
+                        textarea.dispatchEvent(event);
+                        var changeEvent = new Event('change', { bubbles: true });
+                        textarea.dispatchEvent(changeEvent);
+                    """, textarea_alt, new_text)
+                    print(f"      ✓ Texte mis à jour (méthode alternative - JavaScript): {new_text}")
+                
                 time.sleep(1)
             except Exception as e2:
                 print(f"      ❌ Erreur méthode alternative: {e2}")
