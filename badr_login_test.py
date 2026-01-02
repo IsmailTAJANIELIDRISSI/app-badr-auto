@@ -6044,8 +6044,10 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                     # Compter les DUMs en vérifiant les cellules C11, C18, C25, C32, C39...
                     # Pattern: C + (11 + (dum_index - 1) * 7)
                     original_dum_count = 0
-                    for dum_idx in range(1, 10):  # Vérifier jusqu'à 9 DUMs max
+                    for dum_idx in range(1, 51):  # Vérifier jusqu'à 50 DUMs max
                         row_num = 11 + (dum_idx - 1) * 7
+                        if row_num > 500:  # Safety limit
+                            break
                         cell_value = ws_check[f'C{row_num}'].value
                         if cell_value and 'DUM' in str(cell_value).upper():
                             original_dum_count += 1

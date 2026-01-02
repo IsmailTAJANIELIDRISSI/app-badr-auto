@@ -108,8 +108,14 @@ class PartialConfigDialog:
             # Row N+3: P,NET - label in A, value in B
             # Row N+4: P,BRUT (weight) - label in A, value in B
             dums = []
-            for dum_idx in range(1, 10):
+            # Use dynamic detection: continue until no more DUMs found (up to 50 DUMs max)
+            for dum_idx in range(1, 51):  # Increased from 10 to 50 to support more DUMs
                 row_num = 11 + (dum_idx - 1) * 7
+                
+                # Safety check: don't go beyond reasonable row limit
+                if row_num > 500:
+                    break
+                
                 cell_value = ws[f'C{row_num}'].value
                 
                 if cell_value and 'DUM' in str(cell_value).upper():
@@ -129,6 +135,7 @@ class PartialConfigDialog:
                         'positions': int(dum_positions) if dum_positions else 0
                     })
                 else:
+                    # No DUM found at this position, stop searching
                     break
             
             wb.close()
