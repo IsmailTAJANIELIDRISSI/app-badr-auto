@@ -8089,11 +8089,12 @@ def create_declaration(driver):
         # Le champ prend automatiquement une valeur par défaut
         print("   ⏭️  Régime: ignoré (lecture seule avec valeur par défaut)")
         
-        # Année (2025)
+        # Année (dynamique - année courante)
+        current_year = str(datetime.datetime.now().year)
         annee_ref = driver.find_element(By.ID, "rootForm:refExist_anneeId")
         annee_ref.clear()
-        annee_ref.send_keys("2025")
-        print("   ✓ Année: 2025")
+        annee_ref.send_keys(current_year)
+        print(f"   ✓ Année: {current_year}")
         
         # Série (24287)
         serie_ref = driver.find_element(By.ID, "rootForm:refExist_serieId")
