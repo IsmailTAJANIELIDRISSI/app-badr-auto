@@ -92,7 +92,8 @@ def send_excel_via_email(excel_file_path, lta_name, dum_number=None, recipient_e
         msg = MIMEMultipart()
         msg['From'] = sender_email
         msg['To'] = recipient_email
-        msg['Subject'] = f"✅ LTA Traité - {lta_name}"
+        
+        # Set subject only once (RFC 5322 compliance)
         if dum_number:
             msg['Subject'] = f"✅ DUM {dum_number} Traité - {lta_name}"
         else:
