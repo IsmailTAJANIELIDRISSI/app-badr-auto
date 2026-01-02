@@ -8090,7 +8090,7 @@ def create_declaration(driver):
         print("   ⏭️  Régime: ignoré (lecture seule avec valeur par défaut)")
         
         # Année (dynamique - année courante)
-        current_year = str(datetime.datetime.now().year)
+        current_year = str(time.strftime("%Y"))
         annee_ref = driver.find_element(By.ID, "rootForm:refExist_anneeId")
         annee_ref.clear()
         annee_ref.send_keys(current_year)
