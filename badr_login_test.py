@@ -7953,6 +7953,21 @@ def process_lta_folder(driver, lta_folder_path, lta_name):
         # Ajouter le séparateur *** après avoir traité tous les DUMs de ce LTA
         if successful_count > 0:
             add_lta_separator()
+            
+            # Envoyer l'email avec le fichier Excel mis à jour après tous les DUMs
+            try:
+                from gui.utils.email_sender import send_excel_after_lta_completion
+                import glob
+                # Trouver le fichier generated_excel mis à jour
+                generated_excel_files = glob.glob(os.path.join(lta_folder_path, "generated_excel*.xlsx"))
+                if generated_excel_files:
+                    # Utiliser le premier fichier trouvé (normalement il n'y en a qu'un)
+                    excel_file = generated_excel_files[0]
+                    send_excel_after_lta_completion(excel_file, lta_name)
+                    print(f"   📧 Email envoyé avec le fichier Excel du LTA '{lta_name}'")
+            except Exception as email_error:
+                # Ne pas bloquer le processus si l'email échoue
+                print(f"   ⚠️  Erreur envoi email (non bloquant): {email_error}")
 
         print("="*70)
         
@@ -8658,6 +8673,21 @@ def process_lta_folder_dum_only(driver, lta_folder_path, lta_name):
         
         if successful_count > 0:
             add_lta_separator()
+            
+            # Envoyer l'email avec le fichier Excel mis à jour après tous les DUMs
+            try:
+                from gui.utils.email_sender import send_excel_after_lta_completion
+                import glob
+                # Trouver le fichier generated_excel mis à jour
+                generated_excel_files = glob.glob(os.path.join(lta_folder_path, "generated_excel*.xlsx"))
+                if generated_excel_files:
+                    # Utiliser le premier fichier trouvé (normalement il n'y en a qu'un)
+                    excel_file = generated_excel_files[0]
+                    send_excel_after_lta_completion(excel_file, lta_name)
+                    print(f"   📧 Email envoyé avec le fichier Excel du LTA '{lta_name}'")
+            except Exception as email_error:
+                # Ne pas bloquer le processus si l'email échoue
+                print(f"   ⚠️  Erreur envoi email (non bloquant): {email_error}")
         
         return successful_count
         

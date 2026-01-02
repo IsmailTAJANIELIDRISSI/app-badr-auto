@@ -39,6 +39,9 @@ dist/
 .env
 *.env
 
+# Exclude email configuration (contains sensitive passwords)
+config/email_config.json
+
 # Exclude log files
 *.log
 *_logs.txt
