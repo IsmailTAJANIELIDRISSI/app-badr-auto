@@ -93,11 +93,16 @@ def send_excel_via_email(excel_file_path, lta_name, dum_number=None, recipient_e
         msg['From'] = sender_email
         msg['To'] = recipient_email
         
+        # Ensure no duplicate Subject header (safety check)
+        if 'Subject' in msg:
+            del msg['Subject']
+        
         # Set subject only once (RFC 5322 compliance)
+        # Remove emojis from subject to avoid encoding issues with Gmail
         if dum_number:
-            msg['Subject'] = f"✅ DUM {dum_number} Traité - {lta_name}"
+            msg['Subject'] = f"DUM {dum_number} Traite - {lta_name}"
         else:
-            msg['Subject'] = f"✅ LTA Complet - {lta_name}"
+            msg['Subject'] = f"LTA Complet - {lta_name}"
         
         # Email body
         body = f"""
