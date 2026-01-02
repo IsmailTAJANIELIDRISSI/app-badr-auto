@@ -358,103 +358,11 @@ def navigate_and_login(driver):
     """Navigue vers le site et effectue la connexion"""
     try:
         print("🌐 Navigation vers le site BADR...")
+        driver.get("https://badr.douane.gov.ma:40444/badr/Login")
+        print("✓ Navigation réussie !")
+        print(f"📄 Titre: {driver.title}")
         
-        # Tentative de navigation avec gestion des certificats SSL
-        try:
-            driver.get("https://badr.douane.gov.ma:40444/badr/Login")
-            print("✓ Navigation réussie !")
-            print(f"📄 Titre: {driver.title}")
-        except Exception as nav_error:
-            error_msg = str(nav_error)
-            if "ERR_SSL_CLIENT_AUTH_CERT_NEEDED" in error_msg or "certificate" in error_msg.lower() or "ssl" in error_msg.lower():
-                print("\n" + "="*70)
-                print("🔐 CERTIFICAT CLIENT REQUIS")
-                print("="*70)
-                print("   ⏳ Veuillez entrer le code PIN du certificat dans la fenêtre Edge")
-                print("   ⏳ Le script attendra patiemment jusqu'à ce que vous ayez terminé...")
-                print("="*70 + "\n")
-                
-                # Attendre que l'utilisateur entre le certificat (vérifier que la page se charge)
-                max_wait_cert = 300  # 5 minutes maximum
-                waited = 0
-                check_interval = 2
-                cert_accepted = False
-                
-                while waited < max_wait_cert:
-                    try:
-                        # Essayer de vérifier si la page est chargée (pas d'erreur SSL)
-                        current_url = driver.current_url
-                        page_title = driver.title
-                        
-                        # Si on arrive à lire l'URL et le titre sans erreur, c'est que le certificat est accepté
-                        if current_url and page_title:
-                            # Vérifier que ce n'est pas une page d'erreur
-                            if "badr" in current_url.lower() and "err" not in page_title.lower():
-                                print(f"\n✓ Certificat accepté ! Page chargée: {page_title}")
-                                cert_accepted = True
-                                break
-                            # Même si ce n'est pas encore la page de login, si on a une page valide c'est bon signe
-                            if "err" not in page_title.lower() and "error" not in page_title.lower():
-                                cert_accepted = True
-                                # Réessayer la navigation maintenant que le certificat est accepté
-                                time.sleep(1)
-                                try:
-                                    driver.get("https://badr.douane.gov.ma:40444/badr/Login")
-                                    print(f"✓ Navigation réussie après authentification certificat !")
-                                    break
-                                except:
-                                    # La page est peut-être déjà chargée
-                                    pass
-                                break
-                    except Exception as check_error:
-                        # Si on ne peut pas lire (erreur SSL encore présente), continuer à attendre
-                        pass
-                    
-                    time.sleep(check_interval)
-                    waited += check_interval
-                    
-                    # Afficher un message toutes les 10 secondes pour rassurer l'utilisateur
-                    if waited % 10 == 0 and waited > 0:
-                        print(f"   ⏳ En attente de l'entrée du code PIN... ({waited}s / {max_wait_cert}s)")
-                
-                if not cert_accepted and waited >= max_wait_cert:
-                    print("\n❌ Timeout: Le certificat n'a pas été entré à temps (5 minutes)")
-                    return False
-                
-                # S'assurer que la page de login est chargée
-                time.sleep(2)
-                try:
-                    current_url = driver.current_url
-                    if "login" not in current_url.lower():
-                        driver.get("https://badr.douane.gov.ma:40444/badr/Login")
-                        time.sleep(2)
-                        print("✓ Page de login chargée après certificat")
-                except:
-                    pass
-            else:
-                # Autre type d'erreur - réessayer une fois
-                print(f"⚠️  Erreur de navigation: {error_msg}")
-                print("   🔄 Nouvelle tentative dans 2 secondes...")
-                time.sleep(2)
-                try:
-                    driver.get("https://badr.douane.gov.ma:40444/badr/Login")
-                    print("✓ Navigation réussie après retry !")
-                except Exception as retry_error:
-                    print(f"❌ Erreur persistante: {retry_error}")
-                    raise retry_error
-        
-        wait = WebDriverWait(driver, 30)  # Augmenter le timeout pour laisser le temps au certificat
-        
-        # Vérifier que nous sommes bien sur la page de login après le certificat
-        try:
-            current_url = driver.current_url
-            if "login" not in current_url.lower():
-                print("⚠️  Redirection vers la page de login...")
-                driver.get("https://badr.douane.gov.ma:40444/badr/Login")
-                time.sleep(2)
-                print("✓ Page de login chargée")
-        except:
-            pass
+        wait = WebDriverWait(driver, 10)
         
         # ÉTAPE 1: Entrer le mot de passe
         print("\n🔐 Saisie du mot de passe...")
@@ -629,38 +537,15 @@ def save_dum_series_to_excel(lta_folder_path, dum_number, serie):
     for attempt in range(max_retries):
         try:
             # Trouver le fichier generated_excel dans le dossier LTA
-            # Exclure les fichiers temporaires et de verrouillage Excel
             generated_excel_path = None
             for file in os.listdir(lta_folder_path):
-                # Exclure les fichiers temporaires et de verrouillage
-                if (file.startswith("~$") or  # Fichiers de verrouillage Excel
-                    file.endswith(".tmp") or   # Fichiers temporaires
-                    file.endswith(".tmp~")):   # Fichiers temporaires alternatifs
-                    continue
-                
-                # Chercher uniquement les vrais fichiers .xlsx
                 if file.startswith("generated_excel") and file.endswith(".xlsx"):
-                    full_path = os.path.join(lta_folder_path, file)
-                    # Vérifier que le fichier existe vraiment et n'est pas un dossier
-                    if os.path.isfile(full_path):
-                        generated_excel_path = full_path
-                        break
+                    generated_excel_path = os.path.join(lta_folder_path, file)
+                    break
             
             if not generated_excel_path:
                 print(f"      ⚠️  Fichier generated_excel non trouvé dans {lta_folder_path}")
                 return False
-            
-            # Vérification supplémentaire: s'assurer que ce n'est pas un fichier temporaire
-            if generated_excel_path.endswith('.tmp') or '.tmp' in os.path.basename(generated_excel_path):
-                print(f"      ⚠️  Fichier temporaire détecté, ignoré: {os.path.basename(generated_excel_path)}")
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                    continue
-                else:
-                    return False
-            
-            # Log du fichier sélectionné pour débogage
-            print(f"      📄 Fichier sélectionné: {os.path.basename(generated_excel_path)}")
             
             # Calculer la position de la cellule: C + (12 + (dum_number - 1) * 7)
             row_number = 12 + (dum_number - 1) * 7
@@ -671,34 +556,11 @@ def save_dum_series_to_excel(lta_folder_path, dum_number, serie):
                 print(f"      🔄 Tentative {attempt + 1}/{max_retries}...")
                 time.sleep(retry_delay)
             
-            # Validation finale du fichier avant ouverture
-            if not os.path.exists(generated_excel_path):
-                print(f"      ⚠️  Fichier n'existe pas: {os.path.basename(generated_excel_path)}")
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                    continue
-                else:
-                    return False
-            
-            # Vérifier que c'est bien un fichier .xlsx (pas .tmp ou autre)
-            if not generated_excel_path.lower().endswith('.xlsx'):
-                print(f"      ⚠️  Format de fichier invalide: {os.path.basename(generated_excel_path)}")
-                print(f"      ℹ️  Le fichier doit être un .xlsx, pas un .tmp ou autre format")
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                    continue
-                else:
-                    return False
-            
             # Ouvrir le fichier Excel (data_only=False pour pouvoir écrire)
             wb = None
             try:
                 # Fermer le fichier Excel s'il est ouvert
                 close_excel_file(generated_excel_path)
-                
-                # Dernière vérification: le fichier existe toujours après fermeture
-                if not os.path.exists(generated_excel_path):
-                    raise FileNotFoundError(f"Fichier supprimé après fermeture Excel: {os.path.basename(generated_excel_path)}")
                 
                 wb = load_workbook(generated_excel_path, data_only=False)
                 ws = wb['Summary']
@@ -723,27 +585,14 @@ def save_dum_series_to_excel(lta_folder_path, dum_number, serie):
                         pass
             
         except Exception as e:
-            error_msg = str(e)
-            # Message d'erreur spécifique pour les fichiers .tmp
-            if '.tmp' in error_msg.lower() or 'tmp file format' in error_msg.lower():
-                print(f"      ❌ Fichier temporaire détecté (tentative {attempt + 1}/{max_retries})")
-                print(f"      💡 Le fichier Excel est peut-être ouvert dans Excel ou en cours de sauvegarde")
-                print(f"      💡 Veuillez fermer Excel et réessayer")
-                if attempt < max_retries - 1:
-                    print(f"      ⏳ Nouvelle tentative dans {retry_delay}s...")
-                    time.sleep(retry_delay)
-                    continue
-                else:
-                    return False
+            if attempt < max_retries - 1:
+                print(f"      ⚠️  Erreur tentative {attempt + 1}: {e}")
+                print(f"      ⏳ Nouvelle tentative dans {retry_delay}s...")
             else:
-                if attempt < max_retries - 1:
-                    print(f"      ⚠️  Erreur tentative {attempt + 1}: {error_msg[:100]}...")
-                    print(f"      ⏳ Nouvelle tentative dans {retry_delay}s...")
-                else:
-                    print(f"      ❌ Erreur écriture série dans generated_excel après {max_retries} tentatives: {error_msg}")
-                    print(f"      💡 Vérifiez que le fichier Excel n'est pas ouvert dans Excel")
-                    traceback.print_exc()
-                    return False
+                print(f"      ❌ Erreur écriture série dans generated_excel après {max_retries} tentatives: {e}")
+                print(f"      💡 Vérifiez que le fichier Excel n'est pas ouvert dans Excel")
+                traceback.print_exc()
+                return False
     
     return False
 
@@ -2932,16 +2781,8 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
         # ED.3.2: Vérifier messages d'erreur ou de succès
         error_detected = False
         try:
-            # Attendre plus longtemps pour que les messages s'affichent et que la page se stabilise
+            # Attendre plus longtemps pour que les messages s'affichent
             time.sleep(2)
-            
-            # Attendre que le blocker UI disparaisse complètement
-            try:
-                wait.until(
-                    EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
-                )
-            except:
-                pass  # Continuer même si le blocker est encore présent
             
             # Chercher message d'erreur (plusieurs tentatives)
             error_msg = driver.find_elements(By.CSS_SELECTOR, "div.ui-messages-error-detail")
@@ -2957,9 +2798,16 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                 
                 # ED.3.3: Si erreur référence, essayer les autres formats
                 if "n'existe pas" in error_text.lower() or "référence" in error_text.lower():
-                    print(f"      ⚠️  Format 1 rejeté, passage direct au Format 2...")
+                    print(f"      ⚠️  Format 1 rejeté, tentative Format 2...")
                     
-                    # Pas besoin de fermer l'erreur - passer directement au Format 2
+                    # Fermer le message d'erreur
+                    try:
+                        close_btn = driver.find_element(By.CSS_SELECTOR, "a.ui-messages-close")
+                        close_btn.click()
+                        time.sleep(0.5)
+                        print("      ✓ Message d'erreur fermé")
+                    except:
+                        pass
                     
                     # Essayer Format 2 (sans tirets)
                     reference_input = wait.until(
@@ -2988,16 +2836,7 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                             time.sleep(0.5)
                             valider_ref_btn.click()
                             print("      ✓ Bouton 'Valider' re-cliqué")
-                            # Attendre que le traitement se termine
-                            time.sleep(2)
-                            # Attendre que le blocker UI disparaisse
-                            try:
-                                wait.until(
-                                    EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
-                                )
-                            except:
-                                pass
-                            time.sleep(1)  # Attente supplémentaire pour laisser les messages apparaître
+                            time.sleep(3)
                             break
                         except Exception as retry_e:
                             if attempt < max_retries - 1:
@@ -3006,11 +2845,8 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                             else:
                                 raise retry_e
                     
-                    # Vérifier résultat Format 2 - Attendre plus longtemps et s'assurer que les messages sont stables
-                    time.sleep(2)  # Attente plus longue pour laisser le temps aux messages de s'afficher
-                    wait.until(lambda d: len(d.find_elements(By.CSS_SELECTOR, "div.ui-messages-error, div.ui-messages-info")) > 0 or 
-                                      d.find_elements(By.CSS_SELECTOR, "a[href='#mainTab:tab2']"))  # Si on peut voir l'onglet Voyage, c'est OK
-                    
+                    # Vérifier résultat Format 2
+                    time.sleep(1)
                     error_msg_retry2 = driver.find_elements(By.CSS_SELECTOR, "div.ui-messages-error-detail")
                     if not error_msg_retry2 or len(error_msg_retry2) == 0:
                         error_msg_retry2 = driver.find_elements(By.CSS_SELECTOR, "span.ui-messages-error-detail")
@@ -3018,9 +2854,15 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                     if error_msg_retry2 and len(error_msg_retry2) > 0:
                         error_text_retry2 = error_msg_retry2[0].text.strip()
                         print(f"      ⚠️  Format 2 rejeté: {error_text_retry2}")
-                        print(f"      🔄 Passage direct au Format 3 (avec tirets, sans /1)...")
+                        print(f"      🔄 Tentative Format 3 (avec tirets, sans /1)...")
                         
-                        # Pas besoin de fermer l'erreur - passer directement au Format 3
+                        # Fermer le message d'erreur
+                        try:
+                            close_btn = driver.find_element(By.CSS_SELECTOR, "a.ui-messages-close")
+                            close_btn.click()
+                            time.sleep(0.5)
+                        except:
+                            pass
                         
                         # Essayer Format 3 (avec tirets, sans /1)
                         reference_input = wait.until(
@@ -3048,16 +2890,7 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                                 time.sleep(0.5)
                                 valider_ref_btn.click()
                                 print("      ✓ Bouton 'Valider' re-cliqué")
-                                # Attendre que le traitement se termine
-                                time.sleep(2)
-                                # Attendre que le blocker UI disparaisse
-                                try:
-                                    wait.until(
-                                        EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
-                                    )
-                                except:
-                                    pass
-                                time.sleep(1)  # Attente supplémentaire pour laisser les messages apparaître
+                                time.sleep(3)
                                 break
                             except Exception as retry_e:
                                 if attempt < max_retries - 1:
@@ -3066,14 +2899,8 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                                 else:
                                     raise retry_e
                         
-                        # Vérifier résultat Format 3 - Attendre plus longtemps et s'assurer que les messages sont stables
-                        time.sleep(2)  # Attente plus longue pour laisser le temps aux messages de s'afficher
-                        try:
-                            wait.until(lambda d: len(d.find_elements(By.CSS_SELECTOR, "div.ui-messages-error, div.ui-messages-info")) > 0 or 
-                                              d.find_elements(By.CSS_SELECTOR, "a[href='#mainTab:tab2']"))  # Si on peut voir l'onglet Voyage, c'est OK
-                        except:
-                            pass  # Continuer même si la condition n'est pas remplie
-                        
+                        # Vérifier résultat Format 3
+                        time.sleep(1)
                         error_msg_retry3 = driver.find_elements(By.CSS_SELECTOR, "div.ui-messages-error-detail")
                         if not error_msg_retry3 or len(error_msg_retry3) == 0:
                             error_msg_retry3 = driver.find_elements(By.CSS_SELECTOR, "span.ui-messages-error-detail")
@@ -3312,21 +3139,17 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
         # ==================================================================
         print("\n   📊 Navigation vers l'onglet Quantités...")
         
-        # Fermer tout message d'erreur ou d'information persistant avant de continuer
+        # Fermer tout message d'erreur persistant avant de continuer
         try:
             close_btns = driver.find_elements(By.CSS_SELECTOR, "a.ui-messages-close")
             for btn in close_btns:
-                if btn.is_displayed():
-                    driver.execute_script("arguments[0].click();", btn)
+                try:
+                    btn.click()
                     time.sleep(0.3)
-            # Attendre que les messages disparaissent complètement
-            wait.until(
-                EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-messages-info, div.ui-messages-error"))
-            )
-            print("      ✓ Messages d'information/erreur fermés")
-        except Exception as e:
-            print(f"      ⚠️  Erreur lors de la fermeture des messages: {e}")
-            # Continuer même si la fermeture échoue
+                except:
+                    pass
+        except:
+            pass
         
         try:
             quantites_tab = wait.until(
@@ -3337,17 +3160,9 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
             time.sleep(2)
         except Exception as e:
             print(f"      ❌ Erreur navigation onglet Quantités: {e}")
-            # Fallback JavaScript
-            try:
-                print("      🔄 Tentative avec JavaScript...")
-                driver.execute_script("arguments[0].click();", driver.find_element(By.CSS_SELECTOR, "a[href='#mainTab:tab3']"))
-                print("      ✓ Onglet Quantités ouvert (JS)")
-                time.sleep(2)
-            except Exception as js_e:
-                print(f"      ❌ Erreur navigation onglet Quantités (JS fallback): {js_e}")
-                driver.switch_to.default_content()
-                return_to_home_after_error(driver)
-                return False
+            driver.switch_to.default_content()
+            return_to_home_after_error(driver)
+            return False
         
         # ==================================================================
         # ÉTAPE ED.5: Extraire les totaux depuis generated_excel
@@ -4727,9 +4542,14 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                 
                 # Essayer les autres formats si erreur de référence
                 if "n'existe pas" in error_text.lower() or "référence" in error_text.lower():
-                    print(f"      ⚠️  Format 1 rejeté, passage direct au Format 2...")
+                    print(f"      ⚠️  Format 1 rejeté, tentative Format 2...")
                     
-                    # Pas besoin de fermer l'erreur - passer directement au Format 2
+                    try:
+                        close_btn = driver.find_element(By.CSS_SELECTOR, "a.ui-messages-close")
+                        close_btn.click()
+                        time.sleep(0.5)
+                    except:
+                        pass
                     
                     reference_input = wait.until(
                         EC.presence_of_element_located((By.ID, "mainTab:form1:referenceLotID"))
@@ -4765,9 +4585,14 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                         error_msg_retry2 = driver.find_elements(By.CSS_SELECTOR, "span.ui-messages-error-detail")
                     
                     if error_msg_retry2 and len(error_msg_retry2) > 0:
-                        print(f"      ⚠️  Format 2 rejeté, passage direct au Format 3...")
+                        print(f"      ⚠️  Format 2 rejeté, tentative Format 3...")
                         
-                        # Pas besoin de fermer l'erreur - passer directement au Format 3
+                        try:
+                            close_btn = driver.find_element(By.CSS_SELECTOR, "a.ui-messages-close")
+                            close_btn.click()
+                            time.sleep(0.5)
+                        except:
+                            pass
                         
                         reference_input.clear()
                         time.sleep(0.3)
@@ -6205,13 +6030,16 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             try:
                 print("      ⏳ Attente du chargement du formulaire...")
                 time.sleep(2)
-                # Determine if this is the first lot of DUM 1 in exception partial
-                is_exception_partial = False
-                is_first_lot_dum1 = False
-                if partial_config and partial_config.get('partial_type') == 'exception':
-                    is_exception_partial = True
-                    if dum_number == '1' and lot_idx == 0:
-                        is_first_lot_dum1 = True
+                # Determine DS type based on first lot (for the initial form before loop)
+                # For exception case DUM 1: first lot uses DS MEAD(03), others use Depotage(05)
+                use_ds_mead = False
+                if preap_lots and len(preap_lots) > 0:
+                    first_lot = preap_lots[0]
+                    if first_lot.get('is_exception_smallest'):
+                        # First lot of exception DUM 1: use DS MEAD(03)
+                        use_ds_mead = True
+                        print("      ℹ️  Détection: Premier lot du cas d'exception (DUM 1) - DS MEAD(03)")
+                
                 # Open dropdown
                 type_ds_trigger = wait.until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, "div#mainTab\\:form3\\:typeDsId div.ui-selectonemenu-trigger"))
@@ -6219,24 +6047,17 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 type_ds_trigger.click()
                 print("      ✓ Menu Type DS ouvert")
                 time.sleep(1)
-                # Select correct DS type
-                if is_exception_partial and dum_number == '1':
-                    if lot_idx == 0:
-                        # First lot of DUM 1: DS MEAD(03)
-                        ds_mead_option = wait.until(
-                            EC.element_to_be_clickable((By.XPATH, "//li[@data-label='DS MEAD(03)']"))
-                        )
-                        ds_mead_option.click()
-                        print("      ✓ Type DS: DS MEAD(03)")
-                    else:
-                        # Second (and subsequent) lot(s) of DUM 1: Depotage(05)
-                        depotage_option = wait.until(
-                            EC.element_to_be_clickable((By.XPATH, "//li[@data-label='Depotage(05)']"))
-                        )
-                        depotage_option.click()
-                        print("      ✓ Type DS: Depotage(05)")
+                
+                # Select correct DS type based on lot flag
+                if use_ds_mead:
+                    # First lot of DUM 1 in exception case: DS MEAD(03)
+                    ds_mead_option = wait.until(
+                        EC.element_to_be_clickable((By.XPATH, "//li[@data-label='DS MEAD(03)']"))
+                    )
+                    ds_mead_option.click()
+                    print("      ✓ Type DS: DS MEAD(03)")
                 else:
-                    # Default: Depotage(05)
+                    # Default: Depotage(05) for all other cases
                     depotage_option = wait.until(
                         EC.element_to_be_clickable((By.XPATH, "//li[@data-label='Depotage(05)']"))
                     )
@@ -6331,9 +6152,24 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             
             # Check if this is a split DUM (for validation logic)
             is_split_dum = partial_config and str(dum_number) in partial_config.get('split_dums', {})
-            if is_split_dum:
-                print(f"      ⚠️  DUM SPLIT détecté - {num_lots_to_add} lots requis")
-                # Initialize accumulators for split DUM validation
+            
+            # Check if this is exception case DUM 1 with multiple lots (needs accumulation like split DUMs)
+            is_exception_dum1_multiple_lots = (
+                partial_config 
+                and partial_config.get('partial_type') == 'exception'
+                and dum_number == '1'
+                and num_lots_to_add > 1
+            )
+            
+            # Use accumulation validation if it's a split DUM OR exception DUM 1 with multiple lots
+            needs_accumulation = is_split_dum or is_exception_dum1_multiple_lots
+            
+            if needs_accumulation:
+                if is_split_dum:
+                    print(f"      ⚠️  DUM SPLIT détecté - {num_lots_to_add} lots requis")
+                elif is_exception_dum1_multiple_lots:
+                    print(f"      ⚠️  CAS D'EXCEPTION DUM 1 - {num_lots_to_add} lots requis (accumulation nécessaire)")
+                # Initialize accumulators for validation
                 split_accumulated_weight = 0.0
                 split_accumulated_containers = 0.0
             
@@ -6499,8 +6335,8 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                         nbr_contenants_text = nbr_contenants_span.text.strip().replace(',', '.')
                         retrieved_containers = float(nbr_contenants_text)
                         
-                        # For split DUMs: accumulate values instead of validating immediately
-                        if is_split_dum:
+                        # For split DUMs or exception DUM 1 with multiple lots: accumulate values instead of validating immediately
+                        if needs_accumulation:
                             split_accumulated_weight += retrieved_weight
                             split_accumulated_containers += retrieved_containers
                             
@@ -6537,10 +6373,14 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                                     from datetime import datetime
                                     current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                     
+                                    error_type = "SPLIT" if is_split_dum else "EXCEPTION" if is_exception_dum1_multiple_lots else "MULTIPLE_LOTS"
                                     with open(error_filepath, 'w', encoding='utf-8') as f:
-                                        f.write(f"ERREUR - Préapurement DS - Données Incohérentes (DUM Split)\n\n")
+                                        f.write(f"ERREUR - Préapurement DS - Données Incohérentes (DUM {error_type})\n\n")
                                         f.write(f"LTA: {lta_name} - {validated_lta_reference}\n")
-                                        f.write(f"DUM: {dum_number} (SPLIT en {num_lots_to_add} lots)\n")
+                                        if is_exception_dum1_multiple_lots:
+                                            f.write(f"DUM: {dum_number} (CAS D'EXCEPTION - {num_lots_to_add} lots)\n")
+                                        else:
+                                            f.write(f"DUM: {dum_number} (SPLIT en {num_lots_to_add} lots)\n")
                                         f.write(f"Date: {current_datetime}\n")
                                         f.write(f"Étape: Préapurement DS - Validation après tous les lots\n\n")
                                         f.write(f"VALEURS ATTENDUES (DUM {dum_number} complet):\n")
@@ -6657,55 +6497,12 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         # ==================================================================
         print("\n   💾 Sauvegarde de la déclaration...")
         try:
-            # Attendre que le blocker UI disparaisse AVANT de cliquer
-            print("      ⏳ Attente que le blocker UI disparaisse...")
-            if wait_for_ui_blocker_disappear(driver, timeout=10):
-                print("      ✓ Blocker UI disparu, prêt pour la sauvegarde")
-            else:
-                print("      ⚠️  Blocker UI toujours présent - continuons quand même")
-            time.sleep(1)  # Pause supplémentaire pour stabilité
-            
-            # Cliquer sur le bouton "SAUVEGARDER" avec retry et fallback JavaScript
-            max_retries = 3
-            clicked = False
-            for attempt in range(max_retries):
-                try:
-                    # Attendre que le blocker disparaisse à nouveau (au cas où il réapparaît)
-                    wait_for_ui_blocker_disappear(driver, timeout=5)
-                    time.sleep(0.5)
-                    
-                    sauvegarder_btn = wait.until(
-                        EC.element_to_be_clickable((By.ID, "secure__2002"))
-                    )
-                    
-                    # Essayer un clic normal d'abord
-                    try:
-                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", sauvegarder_btn)
-                        time.sleep(0.5)
-                        sauvegarder_btn.click()
-                        clicked = True
-                        print("      ✓ Bouton 'SAUVEGARDER' cliqué")
-                        break
-                    except Exception as click_error:
-                        if "click intercepted" in str(click_error).lower():
-                            # Fallback: utiliser JavaScript click
-                            print(f"      🔄 Clic intercepté, tentative JavaScript (essai {attempt + 1}/{max_retries})...")
-                            driver.execute_script("arguments[0].click();", sauvegarder_btn)
-                            clicked = True
-                            print("      ✓ Bouton 'SAUVEGARDER' cliqué (via JavaScript)")
-                            break
-                        else:
-                            raise click_error
-                except Exception as retry_error:
-                    if attempt < max_retries - 1:
-                        print(f"      ⏳ Retry {attempt + 1}/{max_retries}...")
-                        time.sleep(2)
-                    else:
-                        raise retry_error
-            
-            if not clicked:
-                print("      ❌ Impossible de cliquer sur 'SAUVEGARDER' après plusieurs tentatives")
-                raise Exception("Échec du clic sur SAUVEGARDER")
+            # Cliquer sur le bouton "SAUVEGARDER"
+            sauvegarder_btn = wait.until(
+                EC.element_to_be_clickable((By.ID, "secure__2002"))
+            )
+            sauvegarder_btn.click()
+            print("      ✓ Bouton 'SAUVEGARDER' cliqué")
             
             # Attendre que l'overlay de blocage disparaisse après la sauvegarde
             print("      ⏳ Attente de la fin de la sauvegarde...")
@@ -7758,24 +7555,12 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                     # Sauvegarder la référence dans result_LTAS.txt
                     save_dum_reference(lta_folder_path, dum_reference)
                     
-                    # ====================================================================
-                    # EXCEL SAVING TEMPORARILY DISABLED (to prevent script hanging)
-                    # ====================================================================
-                    # The Excel saving is commented out because it causes the script to hang
-                    # when Excel files are corrupted or locked.
-                    # 
-                    # TO RE-ENABLE: Uncomment the 4 lines below (remove the # symbols)
-                    # 
                     # Extraire le numéro du DUM depuis sheet_name (ex: "Sheet 1" → 1)
                     sheet_name = dum_data.get('sheet_name', '')
                     dum_number = int(sheet_name.split()[-1]) if sheet_name.startswith('Sheet') else 1
                     
                     # Sauvegarder la série dans generated_excel
                     save_dum_series_to_excel(lta_folder_path, dum_number, dum_reference)
-                    # 
-                    # NOTE: If error marking (mark_dum_as_error_in_excel) also causes hangs,
-                    #       you can comment out those calls too (search for "mark_dum_as_error_in_excel")
-                    # ====================================================================
                     
                 else:
                     print(f"      ⚠️  Table de référence incomplète (cellules: {len(cells)})")
@@ -8313,14 +8098,14 @@ def create_declaration(driver):
         # Série (24287)
         serie_ref = driver.find_element(By.ID, "rootForm:refExist_serieId")
         serie_ref.clear()
-        serie_ref.send_keys("24287")
-        print("   ✓ Série: 24287")
+        serie_ref.send_keys("00004")
+        print("   ✓ Série: 00004")
         
         # Clé (P)
         cle_ref = driver.find_element(By.ID, "rootForm:refExist_cleId")
         cle_ref.clear()
-        cle_ref.send_keys("P")
-        print("   ✓ Clé: P")
+        cle_ref.send_keys("V")
+        print("   ✓ Clé: V")
         
         time.sleep(1)
         
