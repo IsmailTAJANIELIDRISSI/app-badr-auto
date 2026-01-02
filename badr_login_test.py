@@ -5827,16 +5827,57 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         # ÉTAPE 6: Naviguer vers "Moyen de transport"
         # ==================================================================
         print("\n   🚚 Navigation vers l'onglet 'Moyen de transport'...")
+        
+        # Attendre que le blocker UI disparaisse complètement
         try:
-            moyen_transport_tab = wait.until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab11']"))
+            wait.until(
+                EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
             )
-            moyen_transport_tab.click()
-            print("      ✓ Onglet 'Moyen de transport' cliqué")
-            time.sleep(2)
-        except Exception as e:
-            print(f"      ❌ Erreur navigation vers 'Moyen de transport': {e}")
-            return False
+            time.sleep(1)
+        except:
+            time.sleep(2)  # Fallback: attendre 2 secondes
+        
+        # Tentative avec retry et fallback JavaScript
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                moyen_transport_tab = wait.until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "a[href='#mainTab:tab11']"))
+                )
+                
+                # Vérifier que le blocker n'est pas présent
+                blockers = driver.find_elements(By.CSS_SELECTOR, "div.ui-blockui[style*='display: block']")
+                if blockers:
+                    print(f"      ⏳ Blocker UI encore visible, attente... (tentative {attempt + 1}/{max_retries})")
+                    time.sleep(2)
+                    continue
+                
+                # Scroll pour s'assurer que l'élément est visible
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", moyen_transport_tab)
+                time.sleep(0.5)
+                
+                # Tenter le clic avec Selenium
+                moyen_transport_tab.click()
+                print("      ✓ Onglet 'Moyen de transport' cliqué")
+                time.sleep(2)
+                break  # Succès, sortir de la boucle
+                
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"      ⏳ Erreur clic (tentative {attempt + 1}/{max_retries}): {str(e)[:100]}")
+                    time.sleep(2)
+                else:
+                    # Dernière tentative avec JavaScript
+                    print(f"      ⚠️  Selenium échoué, utilisation de JavaScript...")
+                    try:
+                        moyen_transport_tab = driver.find_element(By.CSS_SELECTOR, "a[href='#mainTab:tab11']")
+                        driver.execute_script("arguments[0].click();", moyen_transport_tab)
+                        print("      ✓ Onglet 'Moyen de transport' cliqué (via JavaScript)")
+                        time.sleep(2)
+                        break
+                    except Exception as js_error:
+                        print(f"      ❌ Erreur navigation vers 'Moyen de transport' (toutes méthodes échouées): {js_error}")
+                        return False
         
         # ÉTAPE 6.1: Cocher "Sans moyen de transport"
         print("\n   ☑️  Activation 'Sans moyen de transport'...")
@@ -7206,70 +7247,108 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         # ÉTAPE 10: Cocher "Commerce électronique - Oui"
         # ==================================================================
         print("\n   ☑️  Activation 'Commerce électronique - Oui'...")
-        try:
-            # Attendre que le tableau Commerce électronique soit visible (révélé après 1er clic VALIDER)
-            print("      ⏳ Attente du champ Commerce électronique...")
-            
-            # Attendre que le tableau soit présent dans le DOM
-            commerce_table = wait.until(
-                EC.presence_of_element_located((By.ID, "mainTab:form0:commerceElectronique"))
-            )
-            print("      ✓ Tableau Commerce électronique trouvé")
-            time.sleep(1)  # Attendre que le champ soit complètement rendu
-            
-            # Méthode 1: Cliquer sur le div.ui-radiobutton-box (interface visuelle)
+        
+        # Attendre que le champ soit révélé après le clic VALIDER (peut prendre du temps)
+        print("      ⏳ Attente du champ Commerce électronique...")
+        max_wait_attempts = 10
+        commerce_table = None
+        
+        for wait_attempt in range(max_wait_attempts):
             try:
+                commerce_table = driver.find_element(By.ID, "mainTab:form0:commerceElectronique")
+                # Vérifier que le tableau est visible et contient des radios
+                radios = commerce_table.find_elements(By.CSS_SELECTOR, "input[type='radio']")
+                if len(radios) >= 2:
+                    print(f"      ✓ Tableau Commerce électronique trouvé ({len(radios)} radios)")
+                    break
+                else:
+                    print(f"      ⏳ Tableau trouvé mais radios non prêts ({len(radios)} radios, tentative {wait_attempt + 1}/{max_wait_attempts})")
+                    time.sleep(1)
+            except:
+                if wait_attempt < max_wait_attempts - 1:
+                    print(f"      ⏳ Champ non encore révélé (tentative {wait_attempt + 1}/{max_wait_attempts})...")
+                    time.sleep(1)
+                else:
+                    print(f"      ❌ Champ Commerce électronique introuvable après {max_wait_attempts} tentatives")
+                    return False
+        
+        if not commerce_table:
+            print("      ❌ Tableau Commerce électronique non trouvé")
+            return False
+        
+        time.sleep(1)  # Délai supplémentaire pour stabilité
+        
+        # Tentative avec retry pour cocher le radio "Oui"
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                # Méthode 1: Cliquer sur le div.ui-radiobutton-box (interface visuelle)
                 commerce_elec_radios = driver.find_elements(By.CSS_SELECTOR, "table#mainTab\\:form0\\:commerceElectronique div.ui-radiobutton-box")
                 if len(commerce_elec_radios) >= 1:
                     # Attendre que l'élément soit cliquable
-                    wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "table#mainTab\\:form0\\:commerceElectronique div.ui-radiobutton-box")))
-                    commerce_elec_radios[0].click()
+                    radio_box = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "table#mainTab\\:form0\\:commerceElectronique div.ui-radiobutton-box")))
+                    radio_box.click()
                     print("      ✓ Radio 'Commerce électronique - Oui' coché (méthode click)")
                     time.sleep(1)
+                    break  # Succès, sortir de la boucle
                 else:
                     raise Exception(f"Aucun radio button trouvé (nombre: {len(commerce_elec_radios)})")
+                    
             except Exception as click_err:
-                # Méthode 2: JavaScript direct sur l'input radio
-                print(f"      ⚠️  Méthode click échouée: {click_err}")
-                print("      🔄 Tentative avec JavaScript...")
-                
-                js_code = """
-                // Essayer plusieurs méthodes pour cocher le radio
-                var radio = document.getElementById('mainTab:form0:commerceElectronique:0');
-                if (radio) {
-                    radio.checked = true;
-                    radio.click();
-                    
-                    // Déclencher les événements pour notifier PrimeFaces
-                    var changeEvent = new Event('change', { bubbles: true });
-                    radio.dispatchEvent(changeEvent);
-                    
-                    var clickEvent = new Event('click', { bubbles: true });
-                    radio.dispatchEvent(clickEvent);
-                    
-                    return 'success';
-                } else {
-                    // Chercher le premier input radio dans le tableau
-                    var table = document.getElementById('mainTab:form0:commerceElectronique');
-                    if (table) {
-                        var radios = table.querySelectorAll('input[type="radio"]');
-                        if (radios.length > 0) {
-                            radios[0].checked = true;
-                            radios[0].click();
-                            return 'success-alternative';
+                if attempt < max_retries - 1:
+                    print(f"      ⏳ Tentative {attempt + 1}/{max_retries} échouée: {str(click_err)[:80]}")
+                    time.sleep(1)
+                else:
+                    # Dernière tentative avec JavaScript
+                    print(f"      ⚠️  Méthode click échouée, utilisation de JavaScript...")
+                    try:
+                        js_code = """
+                        // Essayer plusieurs méthodes pour cocher le radio "Oui" (premier radio)
+                        var radio = document.getElementById('mainTab:form0:commerceElectronique:0');
+                        if (radio) {
+                            radio.checked = true;
+                            radio.click();
+                            
+                            // Déclencher les événements pour notifier PrimeFaces
+                            var changeEvent = new Event('change', { bubbles: true });
+                            radio.dispatchEvent(changeEvent);
+                            
+                            var clickEvent = new Event('click', { bubbles: true });
+                            radio.dispatchEvent(clickEvent);
+                            
+                            // Aussi cliquer sur la div visible
+                            var radioBox = radio.closest('.ui-radiobutton').querySelector('.ui-radiobutton-box');
+                            if (radioBox) {
+                                radioBox.click();
+                            }
+                            
+                            return 'success';
+                        } else {
+                            // Chercher le premier input radio dans le tableau
+                            var table = document.getElementById('mainTab:form0:commerceElectronique');
+                            if (table) {
+                                var radios = table.querySelectorAll('input[type="radio"]');
+                                if (radios.length > 0) {
+                                    radios[0].checked = true;
+                                    radios[0].click();
+                                    
+                                    var changeEvent = new Event('change', { bubbles: true });
+                                    radios[0].dispatchEvent(changeEvent);
+                                    
+                                    return 'success-alternative';
+                                }
+                            }
+                            throw new Error('Radio button not found in DOM');
                         }
-                    }
-                    throw new Error('Radio button not found in DOM');
-                }
-                """
-                result = driver.execute_script(js_code)
-                print(f"      ✓ Radio coché via JavaScript ({result})")
-                time.sleep(0.5)
-                
-        except Exception as e:
-            print(f"      ❌ Impossible de cocher Commerce électronique: {e}")
-            traceback.print_exc()
-            return False
+                        """
+                        result = driver.execute_script(js_code)
+                        print(f"      ✓ Radio coché via JavaScript ({result})")
+                        time.sleep(0.5)
+                        break  # Succès avec JavaScript, sortir de la boucle
+                    except Exception as js_error:
+                        print(f"      ❌ Impossible de cocher Commerce électronique (toutes méthodes échouées): {js_error}")
+                        traceback.print_exc()
+                        return False
         
         # ==================================================================
         # ÉTAPE 11: Deuxième clic sur "VALIDER" pour soumettre la déclaration
