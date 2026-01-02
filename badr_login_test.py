@@ -7959,7 +7959,6 @@ def process_lta_folder(driver, lta_folder_path, lta_name):
             # Envoyer l'email avec le fichier Excel mis à jour après tous les DUMs
             try:
                 from gui.utils.email_sender import send_excel_after_lta_completion
-                import glob
                 # Trouver le fichier generated_excel mis à jour
                 generated_excel_files = glob.glob(os.path.join(lta_folder_path, "generated_excel*.xlsx"))
                 if generated_excel_files:
@@ -8679,7 +8678,6 @@ def process_lta_folder_dum_only(driver, lta_folder_path, lta_name):
             # Envoyer l'email avec le fichier Excel mis à jour après tous les DUMs
             try:
                 from gui.utils.email_sender import send_excel_after_lta_completion
-                import glob
                 # Trouver le fichier generated_excel mis à jour
                 generated_excel_files = glob.glob(os.path.join(lta_folder_path, "generated_excel*.xlsx"))
                 if generated_excel_files:
