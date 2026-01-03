@@ -7203,6 +7203,10 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         # ==================================================================
         print("\n   📋 Navigation vers l'onglet 'Entête' pour validation...")
         
+        # Attendre que le UI blocker disparaisse
+        wait_for_ui_blocker_disappear(driver, timeout=10)
+        time.sleep(0.5)
+        
         # Essayer plusieurs méthodes pour garantir qu'on est sur l'onglet Entête
         entete_navigation_success = False
         
@@ -7211,32 +7215,61 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 if attempt > 1:
                     print(f"      🔄 Tentative {attempt}/3...")
                     time.sleep(1)
+                    wait_for_ui_blocker_disappear(driver, timeout=5)
+                
+                # Vérifier d'abord si l'onglet est déjà actif
+                try:
+                    active_tab = driver.find_element(By.CSS_SELECTOR, "li.ui-tabs-selected.ui-state-active a[href='#mainTab:tab0']")
+                    if active_tab:
+                        # Vérifier que le panneau Entête est visible
+                        try:
+                            entete_panel = driver.find_element(By.ID, "mainTab:tab0")
+                            if entete_panel.is_displayed():
+                                print("      ✓ Onglet 'Entête' déjà actif et visible")
+                                entete_navigation_success = True
+                                break
+                        except:
+                            pass
+                except:
+                    pass  # Onglet pas actif, continuer avec le clic
                 
                 # Méthode 1: Click sur l'onglet Entête
                 try:
                     entete_tab = wait.until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab0']"))
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "a[href='#mainTab:tab0']"))
                     )
                     
                     # Scroll into view
                     driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", entete_tab)
                     time.sleep(0.5)
                     
+                    # Attendre que le blocker disparaisse avant de cliquer
+                    wait_for_ui_blocker_disappear(driver, timeout=5)
+                    
                     # Essayer click standard puis JavaScript
                     try:
+                        # Vérifier que l'élément est clickable
+                        WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab0']")))
                         entete_tab.click()
-                    except:
+                    except Exception as click_err:
+                        print(f"      ⚠️  Clic normal échoué, utilisation JavaScript: {click_err}")
                         driver.execute_script("arguments[0].click();", entete_tab)
                     
                     time.sleep(2)
                     
+                    # Attendre que le blocker disparaisse après le clic
+                    wait_for_ui_blocker_disappear(driver, timeout=5)
+                    
                     # Vérifier que l'onglet est bien actif
                     try:
-                        active_tab = driver.find_element(By.CSS_SELECTOR, "li.ui-tabs-selected a[href='#mainTab:tab0']")
+                        active_tab = driver.find_element(By.CSS_SELECTOR, "li.ui-tabs-selected.ui-state-active a[href='#mainTab:tab0']")
                         if active_tab:
-                            print("      ✓ Onglet 'Entête' actif et visible")
-                            entete_navigation_success = True
-                            break
+                            # Vérifier aussi que le panneau est visible
+                            entete_panel = driver.find_element(By.ID, "mainTab:tab0")
+                            if entete_panel.is_displayed():
+                                print("      ✓ Onglet 'Entête' actif et visible")
+                                entete_navigation_success = True
+                                break
                     except:
                         # Vérifier alternative: le panneau Entête est visible
                         try:
@@ -7253,7 +7286,26 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             except Exception as e:
                 if attempt == 3:
                     print(f"      ❌ Impossible d'accéder à l'onglet Entête après 3 tentatives: {e}")
-                    return False
+                    # Dernière tentative avec JavaScript direct
+                    try:
+                        print("      🔄 Dernière tentative avec JavaScript direct...")
+                        driver.execute_script("""
+                            var tab = document.querySelector('a[href="#mainTab:tab0"]');
+                            if (tab) {
+                                tab.click();
+                            }
+                        """)
+                        time.sleep(2)
+                        wait_for_ui_blocker_disappear(driver, timeout=5)
+                        # Vérifier si ça a marché
+                        entete_panel = driver.find_element(By.ID, "mainTab:tab0")
+                        if entete_panel.is_displayed():
+                            print("      ✓ Onglet 'Entête' activé via JavaScript")
+                            entete_navigation_success = True
+                        else:
+                            return False
+                    except:
+                        return False
         
         if not entete_navigation_success:
             print("      ❌ Échec navigation vers 'Entête' - vérification du bouton VALIDER...")

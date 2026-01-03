@@ -258,9 +258,9 @@ class PartialConfigDialog:
         
         self.canvas = canvas
         
-        # Buttons
+        # Buttons frame - Fixed at bottom, always visible
         buttons_frame = ttk.Frame(main_frame)
-        buttons_frame.pack(fill=tk.X, pady=10)
+        buttons_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 5), padx=10)
         
         ttk.Button(
             buttons_frame,
@@ -476,6 +476,7 @@ class PartialConfigDialog:
         Automatically distribute DUMs across partials based on weights.
         Sequential distribution: Fill partials in order until weight is reached.
         Last DUM may be split if needed.
+        Exception case: Always splits DUM 1 (first DUM) instead of last DUM.
         
         Args:
             partial_weights: List of weights for each partial
@@ -495,6 +496,95 @@ class PartialConfigDialog:
                 distribution.append({'weight': 0, 'positions': 0, 'dums': []})
             return distribution
         
+        # Check if exception case
+        is_exception_case = (smallest_partial_idx is not None and smallest_partial_positions is not None)
+        
+        # For exception case: handle DUM 1 splitting (always split DUM 1, not last DUM)
+        if is_exception_case:
+            # Find smallest partial weight
+            smallest_partial_weight = partial_weights[smallest_partial_idx]
+            
+            # Find largest partial (other partial)
+            largest_partial_idx = None
+            largest_partial_weight = 0
+            for idx, weight in enumerate(partial_weights):
+                if idx != smallest_partial_idx and weight > largest_partial_weight:
+                    largest_partial_idx = idx
+                    largest_partial_weight = weight
+            
+            # DUM 1 data
+            dum1 = dums[0]
+            dum1_weight = dum1['weight']
+            dum1_positions = dum1['positions']
+            
+            # Calculate DUM 1 split for exception case
+            # Smallest partial gets: manual weight and positions (from DUM 1)
+            # Largest partial gets: DUM 1 total - smallest partial
+            dum1_largest_weight = dum1_weight - smallest_partial_weight
+            dum1_largest_positions = dum1_positions - smallest_partial_positions
+            
+            # Process smallest partial (gets part of DUM 1)
+            smallest_partial_dums = [{
+                'dum_number': 1,
+                'weight': smallest_partial_weight,
+                'positions': smallest_partial_positions,
+                'is_split': True,
+                'split_id': '1/1'  # DUM 1, first split
+            }]
+            
+            # Process largest partial (gets remaining DUM 1 + all other DUMs)
+            # For exception case: DUM 1 split in largest partial uses /1 (not /1/2) 
+            # so it matches the reference expected in préapurement DS
+            largest_partial_dums = [{
+                'dum_number': 1,
+                'weight': dum1_largest_weight,
+                'positions': dum1_largest_positions,
+                'is_split': True,
+                'split_id': ''  # Empty split_id for exception case - will use /1 in ED
+            }]
+            
+            # Add all other DUMs to largest partial
+            weight_remaining = largest_partial_weight - dum1_largest_weight
+            current_dum_idx = 1  # Start from DUM 2
+            
+            while weight_remaining > 0 and current_dum_idx < len(dums):
+                dum = dums[current_dum_idx]
+                if dum['weight'] <= weight_remaining:
+                    largest_partial_dums.append({
+                        'dum_number': dum['number'],
+                        'weight': dum['weight'],
+                        'positions': dum['positions'],
+                        'is_split': False,
+                        'split_id': ''
+                    })
+                    weight_remaining -= dum['weight']
+                    current_dum_idx += 1
+                else:
+                    # Should not happen if weights are correct, but handle it
+                    break
+            
+            # Build distribution in order
+            for partial_idx in range(len(partial_weights)):
+                if partial_idx == smallest_partial_idx:
+                    distribution.append({
+                        'weight': smallest_partial_weight,
+                        'positions': smallest_partial_positions,
+                        'dums': smallest_partial_dums
+                    })
+                elif partial_idx == largest_partial_idx:
+                    total_largest_weight = sum(d['weight'] for d in largest_partial_dums)
+                    total_largest_positions = sum(d['positions'] for d in largest_partial_dums)
+                    distribution.append({
+                        'weight': total_largest_weight,
+                        'positions': total_largest_positions,
+                        'dums': largest_partial_dums
+                    })
+                else:
+                    distribution.append({'weight': 0, 'positions': 0, 'dums': []})
+            
+            return distribution
+        
+        # Normal case: sequential distribution (existing logic)
         current_dum_idx = 0
         remaining_dum_weight = dums[0]['weight'] if dums else 0
         remaining_dum_positions = dums[0]['positions'] if dums else 0
