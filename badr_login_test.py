@@ -4650,32 +4650,71 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
         # ==================================================================
         print("\n   📊 Navigation vers l'onglet Quantités...")
         
-        # ED.4.1: Fermer tous les messages d'erreur avant navigation (éviter "element click intercepted")
+        # ED.4.1: Fermer tous les messages (erreur et info) avant navigation
         try:
+            # Fermer les messages d'erreur
             close_btns = driver.find_elements(By.CSS_SELECTOR, "a.ui-messages-close")
             for btn in close_btns:
                 try:
                     btn.click()
                     time.sleep(0.3)
-                    print("      ✓ Message d'erreur fermé")
                 except:
                     pass
+            
+            # Fermer aussi les messages d'info qui peuvent intercepter le clic
+            info_messages = driver.find_elements(By.CSS_SELECTOR, "div.ui-messages-info")
+            for msg in info_messages:
+                try:
+                    close_btn = msg.find_element(By.CSS_SELECTOR, "a.ui-messages-close")
+                    close_btn.click()
+                    time.sleep(0.3)
+                except:
+                    pass
+            
+            # Attendre que les messages disparaissent
+            time.sleep(0.5)
         except:
             pass
         
-        # ED.4.2: Cliquer sur l'onglet Quantités
-        try:
-            quantites_tab = wait.until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab3']"))
-            )
-            quantites_tab.click()
-            print("      ✓ Onglet Quantités ouvert")
-            time.sleep(2)
-        except Exception as e:
-            print(f"      ❌ Erreur navigation onglet Quantités: {e}")
-            driver.switch_to.default_content()
-            return_to_home_after_error(driver)
-            return False
+        # ED.4.2: Attendre que le blocker UI disparaisse
+        wait_for_ui_blocker_disappear(driver, timeout=10)
+        time.sleep(0.5)
+        
+        # ED.4.3: Cliquer sur l'onglet Quantités avec retry et JavaScript fallback
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                quantites_tab = wait.until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab3']"))
+                )
+                
+                # Scroller pour s'assurer que l'élément est visible
+                driver.execute_script("arguments[0].scrollIntoView(true);", quantites_tab)
+                time.sleep(0.3)
+                
+                quantites_tab.click()
+                print("      ✓ Onglet Quantités ouvert")
+                time.sleep(2)
+                break  # Success, exit retry loop
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"      ⚠️  Tentative {attempt + 1}/{max_retries} échouée, retry...")
+                    time.sleep(1)
+                    # Retry avec JavaScript
+                    try:
+                        quantites_tab = driver.find_element(By.CSS_SELECTOR, "a[href='#mainTab:tab3']")
+                        driver.execute_script("arguments[0].click();", quantites_tab)
+                        print("      ✓ Onglet Quantités ouvert (JavaScript)")
+                        time.sleep(2)
+                        break  # Success with JS, exit retry loop
+                    except:
+                        pass
+                else:
+                    # Last attempt failed
+                    print(f"      ❌ Erreur navigation onglet Quantités après {max_retries} tentatives: {e}")
+                    driver.switch_to.default_content()
+                    return_to_home_after_error(driver)
+                    return False
         
         # ==================================================================
         # ÉTAPE ED.6: Entrer les totaux (from partial data)
