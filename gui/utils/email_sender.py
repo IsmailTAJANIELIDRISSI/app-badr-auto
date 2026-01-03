@@ -120,7 +120,7 @@ Fichier joint: {os.path.basename(excel_file_path)}
 Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 Cordialement,
-Système d'automatisation BADR
+TAJANI EL IDRISSI Ismail
 """
         
         msg.attach(MIMEText(body, 'plain', 'utf-8'))
