@@ -3139,8 +3139,9 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
         # ==================================================================
         print("\n   📊 Navigation vers l'onglet Quantités...")
         
-        # Fermer tout message d'erreur persistant avant de continuer
+        # ED.4.1: Fermer tous les messages (erreur et info) avant navigation
         try:
+            # Fermer les messages d'erreur
             close_btns = driver.find_elements(By.CSS_SELECTOR, "a.ui-messages-close")
             for btn in close_btns:
                 try:
@@ -3148,18 +3149,140 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                     time.sleep(0.3)
                 except:
                     pass
+            
+            # Fermer aussi les messages d'info qui peuvent intercepter le clic
+            info_messages = driver.find_elements(By.CSS_SELECTOR, "div.ui-messages-info")
+            for msg in info_messages:
+                try:
+                    close_btn = msg.find_element(By.CSS_SELECTOR, "a.ui-messages-close")
+                    close_btn.click()
+                    time.sleep(0.3)
+                except:
+                    # Si pas de bouton close, essayer de cliquer directement sur le message pour le masquer
+                    try:
+                        driver.execute_script("arguments[0].style.display = 'none';", msg)
+                    except:
+                        pass
+            
+            # Attendre que les messages disparaissent
+            time.sleep(0.5)
+            
+            # Vérifier qu'il n'y a plus de messages visibles qui bloquent
+            try:
+                visible_messages = driver.find_elements(By.CSS_SELECTOR, "div.ui-messages-info, div.ui-messages-error")
+                for msg in visible_messages:
+                    if msg.is_displayed():
+                        try:
+                            driver.execute_script("arguments[0].style.display = 'none';", msg)
+                        except:
+                            pass
+            except:
+                pass
         except:
             pass
         
-        try:
-            quantites_tab = wait.until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab3']"))
-            )
-            quantites_tab.click()
-            print("      ✓ Onglet Quantités ouvert")
-            time.sleep(2)
-        except Exception as e:
-            print(f"      ❌ Erreur navigation onglet Quantités: {e}")
+        # ED.4.2: Attendre que le blocker UI disparaisse
+        wait_for_ui_blocker_disappear(driver, timeout=10)
+        time.sleep(0.5)
+        
+        # ED.4.3: Cliquer sur l'onglet Quantités avec retry et JavaScript fallback
+        max_retries = 3
+        quantites_navigation_success = False
+        
+        for attempt in range(max_retries):
+            try:
+                if attempt > 1:
+                    print(f"      🔄 Tentative {attempt}/3...")
+                    time.sleep(1)
+                    wait_for_ui_blocker_disappear(driver, timeout=5)
+                
+                quantites_tab = wait.until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "a[href='#mainTab:tab3']"))
+                )
+                
+                # Scroller pour s'assurer que l'élément est visible
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", quantites_tab)
+                time.sleep(0.3)
+                
+                # Attendre que le blocker disparaisse avant de cliquer
+                wait_for_ui_blocker_disappear(driver, timeout=5)
+                
+                # Essayer clic normal puis JavaScript
+                try:
+                    WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab3']")))
+                    quantites_tab.click()
+                    print("      ✓ Onglet Quantités ouvert")
+                except Exception as click_err:
+                    print(f"      ⚠️  Clic normal échoué, utilisation JavaScript: {click_err}")
+                    driver.execute_script("arguments[0].click();", quantites_tab)
+                    print("      ✓ Onglet Quantités ouvert (JavaScript)")
+                
+                time.sleep(2)
+                
+                # Attendre que le blocker disparaisse après le clic
+                wait_for_ui_blocker_disappear(driver, timeout=5)
+                
+                # Vérifier que l'onglet est bien actif
+                try:
+                    active_tab = driver.find_element(By.CSS_SELECTOR, "li.ui-tabs-selected.ui-state-active a[href='#mainTab:tab3']")
+                    if active_tab:
+                        quantites_navigation_success = True
+                        break
+                except:
+                    # Vérifier alternative: le panneau Quantités est visible
+                    try:
+                        quantites_panel = driver.find_element(By.ID, "mainTab:tab3")
+                        if quantites_panel.is_displayed():
+                            quantites_navigation_success = True
+                            break
+                    except:
+                        pass
+                
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"      ⚠️  Tentative {attempt + 1}/{max_retries} échouée, retry...")
+                    time.sleep(1)
+                    # Retry avec JavaScript
+                    try:
+                        quantites_tab = driver.find_element(By.CSS_SELECTOR, "a[href='#mainTab:tab3']")
+                        driver.execute_script("arguments[0].click();", quantites_tab)
+                        print("      ✓ Onglet Quantités ouvert (JavaScript retry)")
+                        time.sleep(2)
+                        wait_for_ui_blocker_disappear(driver, timeout=5)
+                        quantites_navigation_success = True
+                        break
+                    except:
+                        pass
+                else:
+                    # Last attempt failed
+                    print(f"      ❌ Erreur navigation onglet Quantités après {max_retries} tentatives: {e}")
+                    # Dernière tentative avec JavaScript direct
+                    try:
+                        print("      🔄 Dernière tentative avec JavaScript direct...")
+                        driver.execute_script("""
+                            var tab = document.querySelector('a[href="#mainTab:tab3"]');
+                            if (tab) {
+                                tab.click();
+                            }
+                        """)
+                        time.sleep(2)
+                        wait_for_ui_blocker_disappear(driver, timeout=5)
+                        # Vérifier si ça a marché
+                        quantites_panel = driver.find_element(By.ID, "mainTab:tab3")
+                        if quantites_panel.is_displayed():
+                            print("      ✓ Onglet Quantités activé via JavaScript")
+                            quantites_navigation_success = True
+                        else:
+                            driver.switch_to.default_content()
+                            return_to_home_after_error(driver)
+                            return False
+                    except:
+                        driver.switch_to.default_content()
+                        return_to_home_after_error(driver)
+                        return False
+        
+        if not quantites_navigation_success:
+            print("      ❌ Échec navigation vers 'Quantités'")
             driver.switch_to.default_content()
             return_to_home_after_error(driver)
             return False
