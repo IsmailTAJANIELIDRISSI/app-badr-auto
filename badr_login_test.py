@@ -3191,41 +3191,52 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
         
         for attempt in range(max_retries):
             try:
-                if attempt > 1:
-                    print(f"      🔄 Tentative {attempt}/3...")
+                if attempt > 0:
+                    print(f"      🔄 Tentative {attempt + 1}/{max_retries}...")
                     time.sleep(1)
                     wait_for_ui_blocker_disappear(driver, timeout=5)
+                else:
+                    print(f"      🔄 Tentative {attempt + 1}/{max_retries} (méthode Selenium)...")
                 
+                print("      📍 Recherche de l'élément onglet Quantités...")
                 quantites_tab = wait.until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, "a[href='#mainTab:tab3']"))
                 )
+                print("      ✓ Élément trouvé")
                 
                 # Scroller pour s'assurer que l'élément est visible
+                print("      📜 Scroll vers l'élément...")
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", quantites_tab)
                 time.sleep(0.3)
                 
                 # Attendre que le blocker disparaisse avant de cliquer
+                print("      ⏳ Attente du blocker UI...")
                 wait_for_ui_blocker_disappear(driver, timeout=5)
                 
                 # Essayer clic normal puis JavaScript
                 try:
+                    print("      🖱️  Tentative clic Selenium standard...")
                     WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab3']")))
                     quantites_tab.click()
-                    print("      ✓ Onglet Quantités ouvert")
+                    print("      ✅ SUCCÈS: Onglet Quantités ouvert (méthode Selenium standard)")
                 except Exception as click_err:
-                    print(f"      ⚠️  Clic normal échoué, utilisation JavaScript: {click_err}")
+                    print(f"      ⚠️  Échec clic Selenium: {click_err}")
+                    print("      🔄 Passage à la méthode JavaScript fallback...")
                     driver.execute_script("arguments[0].click();", quantites_tab)
-                    print("      ✓ Onglet Quantités ouvert (JavaScript)")
+                    print("      ✅ SUCCÈS: Onglet Quantités ouvert (méthode JavaScript fallback)")
                 
                 time.sleep(2)
                 
                 # Attendre que le blocker disparaisse après le clic
+                print("      ⏳ Attente du blocker UI après clic...")
                 wait_for_ui_blocker_disappear(driver, timeout=5)
                 
                 # Vérifier que l'onglet est bien actif
+                print("      🔍 Vérification que l'onglet est actif...")
                 try:
                     active_tab = driver.find_element(By.CSS_SELECTOR, "li.ui-tabs-selected.ui-state-active a[href='#mainTab:tab3']")
                     if active_tab:
+                        print("      ✅ Onglet Quantités confirmé actif (via sélecteur CSS)")
                         quantites_navigation_success = True
                         break
                 except:
@@ -3233,50 +3244,57 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                     try:
                         quantites_panel = driver.find_element(By.ID, "mainTab:tab3")
                         if quantites_panel.is_displayed():
+                            print("      ✅ Onglet Quantités confirmé actif (via panneau visible)")
                             quantites_navigation_success = True
                             break
                     except:
+                        print("      ⚠️  Onglet non confirmé actif, retry...")
                         pass
                 
             except Exception as e:
                 if attempt < max_retries - 1:
-                    print(f"      ⚠️  Tentative {attempt + 1}/{max_retries} échouée, retry...")
+                    print(f"      ❌ Tentative {attempt + 1}/{max_retries} échouée: {e}")
+                    print(f"      🔄 Retry avec JavaScript direct...")
                     time.sleep(1)
                     # Retry avec JavaScript
                     try:
                         quantites_tab = driver.find_element(By.CSS_SELECTOR, "a[href='#mainTab:tab3']")
                         driver.execute_script("arguments[0].click();", quantites_tab)
-                        print("      ✓ Onglet Quantités ouvert (JavaScript retry)")
+                        print("      ✅ SUCCÈS: Onglet Quantités ouvert (méthode JavaScript retry)")
                         time.sleep(2)
                         wait_for_ui_blocker_disappear(driver, timeout=5)
                         quantites_navigation_success = True
                         break
-                    except:
+                    except Exception as js_err:
+                        print(f"      ❌ Échec JavaScript retry: {js_err}")
                         pass
                 else:
                     # Last attempt failed
                     print(f"      ❌ Erreur navigation onglet Quantités après {max_retries} tentatives: {e}")
                     # Dernière tentative avec JavaScript direct
                     try:
-                        print("      🔄 Dernière tentative avec JavaScript direct...")
+                        print("      🔄 Dernière tentative avec JavaScript direct (querySelector)...")
                         driver.execute_script("""
                             var tab = document.querySelector('a[href="#mainTab:tab3"]');
                             if (tab) {
                                 tab.click();
                             }
                         """)
+                        print("      ✅ JavaScript querySelector exécuté")
                         time.sleep(2)
                         wait_for_ui_blocker_disappear(driver, timeout=5)
                         # Vérifier si ça a marché
                         quantites_panel = driver.find_element(By.ID, "mainTab:tab3")
                         if quantites_panel.is_displayed():
-                            print("      ✓ Onglet Quantités activé via JavaScript")
+                            print("      ✅ SUCCÈS: Onglet Quantités activé (méthode JavaScript querySelector)")
                             quantites_navigation_success = True
                         else:
+                            print("      ❌ Échec: Panneau Quantités non visible après querySelector")
                             driver.switch_to.default_content()
                             return_to_home_after_error(driver)
                             return False
-                    except:
+                    except Exception as final_err:
+                        print(f"      ❌ Échec final JavaScript querySelector: {final_err}")
                         driver.switch_to.default_content()
                         return_to_home_after_error(driver)
                         return False
@@ -4805,32 +4823,49 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
         
         # ED.4.3: Cliquer sur l'onglet Quantités avec retry et JavaScript fallback
         max_retries = 3
+        quantites_navigation_success = False
+        
         for attempt in range(max_retries):
             try:
+                if attempt > 0:
+                    print(f"      🔄 Tentative {attempt + 1}/{max_retries}...")
+                    time.sleep(1)
+                    wait_for_ui_blocker_disappear(driver, timeout=5)
+                else:
+                    print(f"      🔄 Tentative {attempt + 1}/{max_retries} (méthode Selenium)...")
+                
+                print("      📍 Recherche de l'élément onglet Quantités...")
                 quantites_tab = wait.until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab3']"))
                 )
+                print("      ✓ Élément trouvé et cliquable")
                 
                 # Scroller pour s'assurer que l'élément est visible
+                print("      📜 Scroll vers l'élément...")
                 driver.execute_script("arguments[0].scrollIntoView(true);", quantites_tab)
                 time.sleep(0.3)
                 
+                print("      🖱️  Tentative clic Selenium standard...")
                 quantites_tab.click()
-                print("      ✓ Onglet Quantités ouvert")
+                print("      ✅ SUCCÈS: Onglet Quantités ouvert (méthode Selenium standard)")
                 time.sleep(2)
+                quantites_navigation_success = True
                 break  # Success, exit retry loop
             except Exception as e:
                 if attempt < max_retries - 1:
-                    print(f"      ⚠️  Tentative {attempt + 1}/{max_retries} échouée, retry...")
+                    print(f"      ❌ Tentative {attempt + 1}/{max_retries} échouée: {e}")
+                    print(f"      🔄 Retry avec JavaScript fallback...")
                     time.sleep(1)
                     # Retry avec JavaScript
                     try:
                         quantites_tab = driver.find_element(By.CSS_SELECTOR, "a[href='#mainTab:tab3']")
                         driver.execute_script("arguments[0].click();", quantites_tab)
-                        print("      ✓ Onglet Quantités ouvert (JavaScript)")
+                        print("      ✅ SUCCÈS: Onglet Quantités ouvert (méthode JavaScript fallback)")
                         time.sleep(2)
+                        quantites_navigation_success = True
                         break  # Success with JS, exit retry loop
-                    except:
+                    except Exception as js_err:
+                        print(f"      ❌ Échec JavaScript fallback: {js_err}")
                         pass
                 else:
                     # Last attempt failed
@@ -4838,6 +4873,12 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                     driver.switch_to.default_content()
                     return_to_home_after_error(driver)
                     return False
+        
+        if not quantites_navigation_success:
+            print("      ❌ Échec navigation vers 'Quantités' (partiel)")
+            driver.switch_to.default_content()
+            return_to_home_after_error(driver)
+            return False
         
         # ==================================================================
         # ÉTAPE ED.6: Entrer les totaux (from partial data)
