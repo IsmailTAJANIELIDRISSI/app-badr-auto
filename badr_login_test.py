@@ -7321,48 +7321,152 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         # ÉTAPE 9: Premier clic sur "VALIDER" pour révéler le champ Commerce électronique
         # ==================================================================
         print("\n   🔍 Premier clic sur 'VALIDER' pour révéler les champs manquants...")
+        
+        # Vérifier qu'on est bien sur l'onglet Entête avant de cliquer
         try:
-            # Cliquer sur le bouton VALIDER (première fois)
-            valider_btn = wait.until(
-                EC.element_to_be_clickable((By.ID, "secure__2003"))
-            )
-            valider_btn.click()
-            print("      ✓ Bouton 'VALIDER' cliqué (1ère fois)")
-            
-            # Attendre que le système affiche l'erreur et révèle le champ
-            time.sleep(2)
-            print("      ✓ Champ 'Commerce électronique' révélé")
-        except Exception as e:
-            print(f"      ❌ Erreur premier clic VALIDER: {e}")
+            entete_panel = driver.find_element(By.ID, "mainTab:tab0")
+            if not entete_panel.is_displayed():
+                print("      ⚠️  Panneau Entête non visible, tentative de navigation...")
+                entete_tab = driver.find_element(By.CSS_SELECTOR, "a[href='#mainTab:tab0']")
+                driver.execute_script("arguments[0].click();", entete_tab)
+                time.sleep(2)
+                wait_for_ui_blocker_disappear(driver, timeout=5)
+        except:
+            print("      ⚠️  Impossible de vérifier l'onglet Entête, continuation...")
+        
+        # Attendre que le blocker UI disparaisse avant de cliquer
+        wait_for_ui_blocker_disappear(driver, timeout=10)
+        time.sleep(0.5)
+        
+        # Tentative avec retry pour cliquer sur VALIDER
+        valider_clicked = False
+        for valider_attempt in range(1, 4):  # 3 tentatives
+            try:
+                if valider_attempt > 1:
+                    print(f"      🔄 Tentative clic VALIDER {valider_attempt}/3...")
+                    time.sleep(1)
+                    wait_for_ui_blocker_disappear(driver, timeout=5)
+                
+                # Chercher le bouton VALIDER
+                valider_btn = wait.until(
+                    EC.presence_of_element_located((By.ID, "secure__2003"))
+                )
+                
+                # Scroll into view
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", valider_btn)
+                time.sleep(0.3)
+                
+                # Attendre que le blocker disparaisse
+                wait_for_ui_blocker_disappear(driver, timeout=5)
+                
+                # Essayer clic normal puis JavaScript
+                try:
+                    WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.ID, "secure__2003")))
+                    valider_btn.click()
+                    print(f"      ✓ Bouton 'VALIDER' cliqué (tentative {valider_attempt})")
+                except Exception as click_err:
+                    print(f"      ⚠️  Clic normal échoué, utilisation JavaScript: {click_err}")
+                    driver.execute_script("arguments[0].click();", valider_btn)
+                    print(f"      ✓ Bouton 'VALIDER' cliqué via JavaScript (tentative {valider_attempt})")
+                
+                # Attendre que le blocker apparaisse puis disparaisse (indique que le traitement est en cours)
+                time.sleep(1)
+                wait_for_ui_blocker_disappear(driver, timeout=10)
+                time.sleep(1)
+                
+                valider_clicked = True
+                break
+                
+            except Exception as e:
+                if valider_attempt == 3:
+                    print(f"      ❌ Erreur clic VALIDER après 3 tentatives: {e}")
+                    return False
+                else:
+                    print(f"      ⚠️  Erreur tentative {valider_attempt}: {e}")
+        
+        if not valider_clicked:
+            print("      ❌ Impossible de cliquer sur VALIDER")
             return False
+        
+        print("      ✓ Champ 'Commerce électronique' devrait être révélé...")
         
         # ==================================================================
         # ÉTAPE 10: Cocher "Commerce électronique - Oui"
         # ==================================================================
         print("\n   ☑️  Activation 'Commerce électronique - Oui'...")
         
+        # Vérifier qu'on est bien sur l'onglet Entête
+        try:
+            entete_panel = driver.find_element(By.ID, "mainTab:tab0")
+            if not entete_panel.is_displayed():
+                print("      ⚠️  Panneau Entête non visible, tentative navigation...")
+                entete_tab = driver.find_element(By.CSS_SELECTOR, "a[href='#mainTab:tab0']")
+                driver.execute_script("arguments[0].click();", entete_tab)
+                time.sleep(2)
+                wait_for_ui_blocker_disappear(driver, timeout=10)
+        except Exception as nav_err:
+            print(f"      ⚠️  Vérification onglet Entête échouée: {nav_err}")
+        
+        # Attendre que le blocker UI disparaisse
+        wait_for_ui_blocker_disappear(driver, timeout=10)
+        time.sleep(1)
+        
         # Attendre que le champ soit révélé après le clic VALIDER (peut prendre du temps)
         print("      ⏳ Attente du champ Commerce électronique...")
-        max_wait_attempts = 10
+        max_wait_attempts = 15  # Augmenté à 15 tentatives
         commerce_table = None
         
         for wait_attempt in range(max_wait_attempts):
             try:
+                # Chercher le tableau Commerce électronique
                 commerce_table = driver.find_element(By.ID, "mainTab:form0:commerceElectronique")
-                # Vérifier que le tableau est visible et contient des radios
+                
+                # Vérifier que le tableau est visible
+                if not commerce_table.is_displayed():
+                    if wait_attempt < max_wait_attempts - 1:
+                        print(f"      ⏳ Tableau trouvé mais non visible (tentative {wait_attempt + 1}/{max_wait_attempts})...")
+                        time.sleep(1)
+                        continue
+                
+                # Vérifier que le tableau contient des radios
                 radios = commerce_table.find_elements(By.CSS_SELECTOR, "input[type='radio']")
                 if len(radios) >= 2:
                     print(f"      ✓ Tableau Commerce électronique trouvé ({len(radios)} radios)")
                     break
                 else:
-                    print(f"      ⏳ Tableau trouvé mais radios non prêts ({len(radios)} radios, tentative {wait_attempt + 1}/{max_wait_attempts})")
-                    time.sleep(1)
-            except:
+                    if wait_attempt < max_wait_attempts - 1:
+                        print(f"      ⏳ Tableau trouvé mais radios non prêts ({len(radios)} radios, tentative {wait_attempt + 1}/{max_wait_attempts})")
+                        time.sleep(1)
+                    else:
+                        print(f"      ⚠️  Tableau trouvé mais seulement {len(radios)} radio(s) disponibles")
+            except Exception as find_err:
                 if wait_attempt < max_wait_attempts - 1:
-                    print(f"      ⏳ Champ non encore révélé (tentative {wait_attempt + 1}/{max_wait_attempts})...")
+                    # Vérifier si le blocker UI est présent (peut bloquer la recherche)
+                    try:
+                        blocker = driver.find_element(By.CSS_SELECTOR, "div.ui-blockui")
+                        if blocker.is_displayed():
+                            print(f"      ⏳ Blocker UI présent, attente... (tentative {wait_attempt + 1}/{max_wait_attempts})")
+                            wait_for_ui_blocker_disappear(driver, timeout=5)
+                        else:
+                            print(f"      ⏳ Champ non encore révélé (tentative {wait_attempt + 1}/{max_wait_attempts})...")
+                    except:
+                        print(f"      ⏳ Champ non encore révélé (tentative {wait_attempt + 1}/{max_wait_attempts})...")
                     time.sleep(1)
                 else:
                     print(f"      ❌ Champ Commerce électronique introuvable après {max_wait_attempts} tentatives")
+                    print(f"      ⚠️  Dernière erreur: {find_err}")
+                    # Dernière tentative: chercher dans tout le DOM
+                    try:
+                        all_tables = driver.find_elements(By.TAG_NAME, "table")
+                        print(f"      ℹ️  Nombre de tables trouvées dans le DOM: {len(all_tables)}")
+                        # Chercher par XPath alternatif
+                        commerce_table_alt = driver.find_element(By.XPATH, "//table[contains(@id, 'commerceElectronique')]")
+                        if commerce_table_alt:
+                            print("      ✓ Tableau trouvé via XPath alternatif")
+                            commerce_table = commerce_table_alt
+                            break
+                    except:
+                        pass
                     return False
         
         if not commerce_table:
