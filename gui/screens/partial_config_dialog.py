@@ -231,6 +231,8 @@ class PartialConfigDialog:
         self.smallest_partial_positions_var = tk.StringVar(value="")
         positions_entry = ttk.Entry(self.exception_frame, textvariable=self.smallest_partial_positions_var, width=10)
         positions_entry.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+        # Trace changes to update distribution preview when positions change
+        self.smallest_partial_positions_var.trace('w', lambda *args: self._update_distribution_preview())
         ttk.Label(self.exception_frame, text="(nombre de positions)", font=('Arial', 8, 'italic')).grid(
             row=2, column=2, sticky=tk.W, padx=5, pady=2
         )
@@ -416,8 +418,25 @@ class PartialConfigDialog:
                 if self.exception_frame.winfo_manager():
                     self.exception_frame.pack_forget()
             
+            # Get exception case positions if provided
+            smallest_partial_positions = None
+            smallest_partial_idx = None
+            if is_exception_case:
+                try:
+                    smallest_partial_positions_str = self.smallest_partial_positions_var.get().strip()
+                    if smallest_partial_positions_str:
+                        smallest_partial_positions = int(smallest_partial_positions_str)
+                        # Find which partial is the smallest
+                        smallest_partial_weight = min(w for w in partial_weights if w > 0)
+                        for idx, weight in enumerate(partial_weights):
+                            if weight == smallest_partial_weight:
+                                smallest_partial_idx = idx
+                                break
+                except (ValueError, AttributeError):
+                    pass  # If not valid, ignore and use normal calculation
+            
             # Calculate distribution
-            distribution = self._calculate_dum_distribution(partial_weights)
+            distribution = self._calculate_dum_distribution(partial_weights, smallest_partial_idx, smallest_partial_positions)
             
             # Update each partial's display
             for idx, form_data in enumerate(self.partial_forms):
@@ -452,11 +471,16 @@ class PartialConfigDialog:
             # Silently handle preview errors to avoid disrupting user input
             logger.error(f"Error updating distribution preview: {e}", exc_info=True)
     
-    def _calculate_dum_distribution(self, partial_weights):
+    def _calculate_dum_distribution(self, partial_weights, smallest_partial_idx=None, smallest_partial_positions=None):
         """
         Automatically distribute DUMs across partials based on weights.
         Sequential distribution: Fill partials in order until weight is reached.
         Last DUM may be split if needed.
+        
+        Args:
+            partial_weights: List of weights for each partial
+            smallest_partial_idx: Index of smallest partial (for exception case)
+            smallest_partial_positions: Manual positions for smallest partial (for exception case)
         """
         distribution = []
         
@@ -497,15 +521,24 @@ class PartialConfigDialog:
                 
                 if remaining_dum_weight <= weight_needed:
                     # Take entire remaining DUM (or remaining part of split DUM)
+                    # Special case: If this is smallest partial with manual positions (exception case)
+                    if (smallest_partial_idx is not None and partial_idx == smallest_partial_idx and 
+                        smallest_partial_positions is not None and is_continuing_split):
+                        # Exception case: Use manual positions for continuing split in smallest partial
+                        positions_to_use = smallest_partial_positions
+                    else:
+                        # Normal case: Use remaining positions
+                        positions_to_use = remaining_dum_positions
+                    
                     partial_dums.append({
                         'dum_number': dums[current_dum_idx]['number'],
                         'weight': remaining_dum_weight,
-                        'positions': remaining_dum_positions,
+                        'positions': positions_to_use,
                         'is_split': is_continuing_split,
                         'split_id': f"{dums[current_dum_idx]['number']}/{partial_idx + 1}" if is_continuing_split else ''
                     })
                     weight_accumulated += remaining_dum_weight
-                    positions_accumulated += remaining_dum_positions
+                    positions_accumulated += positions_to_use
                     
                     # Move to next DUM
                     current_dum_idx += 1
@@ -515,18 +548,29 @@ class PartialConfigDialog:
                         remaining_dum_positions = dums[current_dum_idx]['positions']
                 else:
                     # Split the DUM - this is the last DUM for this partial
-                    # Calculate positions proportionally to the REMAINING DUM's weight (not global ratio)
-                    # Use remaining_dum_weight/positions which may already be reduced from a previous split
+                    # Special case: If next partial is smallest partial (exception case), calculate differently
+                    next_partial_is_smallest = (smallest_partial_idx is not None and 
+                                                partial_idx + 1 == smallest_partial_idx and 
+                                                smallest_partial_positions is not None)
                     
-                    # Calculate positions for the split part proportionally to remaining weight
-                    if remaining_dum_weight > 0:
-                        # Calculate positions based on weight ratio of remaining DUM part
-                        positions_for_split = round((weight_needed / remaining_dum_weight) * remaining_dum_positions)
+                    if next_partial_is_smallest:
+                        # Exception case: Next partial is smallest with manual positions
+                        # This partial gets the remaining positions (total - manual positions)
+                        # The smallest partial will get the manual positions
+                        positions_for_split = remaining_dum_positions - smallest_partial_positions
+                        # Ensure non-negative
+                        positions_for_split = max(0, positions_for_split)
                     else:
-                        positions_for_split = 0
+                        # Normal case: Calculate positions proportionally to the REMAINING DUM's weight
+                        if remaining_dum_weight > 0:
+                            # Calculate positions based on weight ratio of remaining DUM part
+                            positions_for_split = round((weight_needed / remaining_dum_weight) * remaining_dum_positions)
+                        else:
+                            positions_for_split = 0
+                        
+                        # Ensure positions don't exceed remaining DUM positions
+                        positions_for_split = min(positions_for_split, remaining_dum_positions)
                     
-                    # Ensure positions don't exceed remaining DUM positions
-                    positions_for_split = min(positions_for_split, remaining_dum_positions)
                     # Ensure positions are non-negative
                     positions_for_split = max(0, positions_for_split)
                     
@@ -542,13 +586,23 @@ class PartialConfigDialog:
                     
                     # Update remaining DUM
                     remaining_dum_weight -= weight_needed
-                    remaining_dum_positions -= positions_for_split
+                    if next_partial_is_smallest:
+                        # For exception case, remaining positions = manual positions
+                        remaining_dum_positions = smallest_partial_positions
+                    else:
+                        remaining_dum_positions -= positions_for_split
                     is_continuing_split = True  # Mark that next partial continues this DUM
                     break
             
+            # For exception case: use manual positions for smallest partial
+            if smallest_partial_idx is not None and partial_idx == smallest_partial_idx and smallest_partial_positions is not None:
+                final_positions = smallest_partial_positions
+            else:
+                final_positions = positions_accumulated  # Use actual accumulated positions from DUMs
+            
             distribution.append({
                 'weight': weight_accumulated,
-                'positions': positions_accumulated,  # Use actual accumulated positions from DUMs, not ratio-based
+                'positions': final_positions,
                 'dums': partial_dums
             })
         
@@ -583,8 +637,28 @@ class PartialConfigDialog:
                     messagebox.showerror("Erreur", f"Poids invalide pour Partiel {form_data['partial_number']}")
                     return
             
-            # Calculate DUM distribution automatically
-            distribution = self._calculate_dum_distribution(partial_weights)
+            # Get exception case positions if provided (same logic as in _update_distribution_preview)
+            smallest_partial_positions = None
+            smallest_partial_idx = None
+            smallest_dum_weight = min(dum['weight'] for dum in self.lta_data['dums'])
+            is_exception_case = any(w > 0 and w < smallest_dum_weight for w in partial_weights)
+            
+            if is_exception_case:
+                try:
+                    smallest_partial_positions_str = self.smallest_partial_positions_var.get().strip()
+                    if smallest_partial_positions_str:
+                        smallest_partial_positions = int(smallest_partial_positions_str)
+                        # Find which partial is the smallest
+                        smallest_partial_weight = min(w for w in partial_weights if w > 0)
+                        for idx, weight in enumerate(partial_weights):
+                            if weight == smallest_partial_weight:
+                                smallest_partial_idx = idx
+                                break
+                except (ValueError, AttributeError):
+                    pass  # If not valid, ignore and use normal calculation
+            
+            # Calculate DUM distribution automatically (with exception case parameters)
+            distribution = self._calculate_dum_distribution(partial_weights, smallest_partial_idx, smallest_partial_positions)
             
             # Build partials configuration using calculated distribution
             for idx, form_data in enumerate(self.partial_forms):
