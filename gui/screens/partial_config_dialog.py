@@ -515,28 +515,40 @@ class PartialConfigDialog:
                         remaining_dum_positions = dums[current_dum_idx]['positions']
                 else:
                     # Split the DUM - this is the last DUM for this partial
-                    # Calculate positions to reach the target partial_positions
-                    positions_needed = partial_positions - positions_accumulated
+                    # Calculate positions proportionally to the REMAINING DUM's weight (not global ratio)
+                    # Use remaining_dum_weight/positions which may already be reduced from a previous split
+                    
+                    # Calculate positions for the split part proportionally to remaining weight
+                    if remaining_dum_weight > 0:
+                        # Calculate positions based on weight ratio of remaining DUM part
+                        positions_for_split = round((weight_needed / remaining_dum_weight) * remaining_dum_positions)
+                    else:
+                        positions_for_split = 0
+                    
+                    # Ensure positions don't exceed remaining DUM positions
+                    positions_for_split = min(positions_for_split, remaining_dum_positions)
+                    # Ensure positions are non-negative
+                    positions_for_split = max(0, positions_for_split)
                     
                     partial_dums.append({
                         'dum_number': dums[current_dum_idx]['number'],
                         'weight': weight_needed,
-                        'positions': positions_needed,
+                        'positions': positions_for_split,
                         'is_split': True,
                         'split_id': f"{dums[current_dum_idx]['number']}/{partial_idx + 1}"
                     })
                     weight_accumulated += weight_needed
-                    positions_accumulated += positions_needed
+                    positions_accumulated += positions_for_split
                     
                     # Update remaining DUM
                     remaining_dum_weight -= weight_needed
-                    remaining_dum_positions -= positions_needed
+                    remaining_dum_positions -= positions_for_split
                     is_continuing_split = True  # Mark that next partial continues this DUM
                     break
             
             distribution.append({
                 'weight': weight_accumulated,
-                'positions': partial_positions,  # Use calculated target positions, not accumulated
+                'positions': positions_accumulated,  # Use actual accumulated positions from DUMs, not ratio-based
                 'dums': partial_dums
             })
         
