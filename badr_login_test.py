@@ -8763,11 +8763,33 @@ def create_declaration(driver):
         traceback.print_exc()
         return False
 
+def _extract_lta_number(folder_name):
+    """Extract the numeric value from LTA folder name for sorting
+    
+    Examples:
+        "1er LTA" -> 1
+        "2eme LTA" -> 2
+        "10eme LTA" -> 10
+        "12eme LTA" -> 12
+        
+    Args:
+        folder_name: Folder name like "1er LTA", "2eme LTA", etc.
+        
+    Returns:
+        int: The numeric value, or 9999 if not found (for sorting at end)
+    """
+    import re
+    # Match patterns like "1er", "2eme", "10eme", "12eme", etc.
+    match = re.search(r'(\d+)', folder_name)
+    if match:
+        return int(match.group(1))
+    return 9999  # Put unmatched folders at the end
+
 def find_lta_folders(base_path="."):
     """Find all LTA folders in the current directory
     
     Returns:
-        List of tuples: (folder_path, folder_name)
+        List of tuples: (folder_path, folder_name) sorted by numeric order (1er, 2eme, 10eme, etc.)
     """
     all_directories = [d for d in os.listdir(base_path) 
                       if os.path.isdir(os.path.join(base_path, d))]
@@ -8777,6 +8799,9 @@ def find_lta_folders(base_path="."):
         if 'lta' in directory.lower():
             folder_path = os.path.join(base_path, directory)
             lta_folders.append((folder_path, directory))
+    
+    # Sort by numeric order (1er, 2eme, 10eme, etc.) instead of alphabetic
+    lta_folders.sort(key=lambda x: _extract_lta_number(x[1]))
     
     return lta_folders
 

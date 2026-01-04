@@ -10,6 +10,28 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def _extract_lta_number(folder_name):
+    """Extract the numeric value from LTA folder name for sorting
+    
+    Examples:
+        "1er LTA" -> 1
+        "2eme LTA" -> 2
+        "10eme LTA" -> 10
+        "12eme LTA" -> 12
+        
+    Args:
+        folder_name: Folder name like "1er LTA", "2eme LTA", etc.
+        
+    Returns:
+        int: The numeric value, or 9999 if not found (for sorting at end)
+    """
+    import re
+    # Match patterns like "1er", "2eme", "10eme", "12eme", etc.
+    match = re.search(r'(\d+)', folder_name)
+    if match:
+        return int(match.group(1))
+    return 9999  # Put unmatched folders at the end
+
 def clean_lta_reference(reference):
     """
     Clean LTA reference by removing /1 suffix
@@ -123,7 +145,8 @@ def detect_ltas(folder_path):
             ltas.append(lta_info)
         
         logger.info(f"Detected {len(ltas)} LTA folders")
-        return sorted(ltas, key=lambda x: x['name'])
+        # Sort by numeric order (1er, 2eme, 10eme, etc.) instead of alphabetic
+        return sorted(ltas, key=lambda x: _extract_lta_number(x['name']))
         
     except Exception as e:
         logger.error(f"Error detecting LTAs: {e}", exc_info=True)
