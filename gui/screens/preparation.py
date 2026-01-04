@@ -258,6 +258,7 @@ class PreparationScreen:
         
         # Predefined locations
         self.locations = [
+            "RYAD K.KHALED",
             "ISTAMBOUL ATATUR",
             "JEDDAH K/ABDUL A",
             "BAHREIN MOHARRAQ",

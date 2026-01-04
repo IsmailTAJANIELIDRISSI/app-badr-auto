@@ -7554,6 +7554,19 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         
         print("      ✓ Champ 'Commerce électronique' devrait être révélé...")
         
+        # Vérifier si le clic VALIDER a produit des changements (messages d'erreur, etc.)
+        print("      🔍 Vérification de la réponse après clic VALIDER...")
+        time.sleep(1)
+        try:
+            # Chercher des messages d'erreur qui indiquent que la validation a été traitée
+            error_messages = driver.find_elements(By.CSS_SELECTOR, "div.ui-messages-error, span.ui-messages-error-detail")
+            if error_messages:
+                print(f"      ℹ️  {len(error_messages)} message(s) d'erreur détecté(s) - validation traitée")
+            else:
+                print("      ℹ️  Aucun message d'erreur visible - le formulaire peut être déjà valide")
+        except:
+            pass
+        
         # ==================================================================
         # ÉTAPE 10: Cocher "Commerce électronique - Oui"
         # ==================================================================
@@ -7619,18 +7632,58 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 else:
                     print(f"      ❌ Champ Commerce électronique introuvable après {max_wait_attempts} tentatives")
                     print(f"      ⚠️  Dernière erreur: {find_err}")
-                    # Dernière tentative: chercher dans tout le DOM
+                    
+                    # Diagnostic: Vérifier l'état actuel de la page
+                    print("      🔍 Diagnostic de l'état de la page...")
                     try:
+                        # Vérifier quel onglet est actif
+                        active_tab = driver.find_elements(By.CSS_SELECTOR, "li.ui-tabs-selected.ui-state-active a")
+                        if active_tab:
+                            print(f"      ℹ️  Onglet actif: {active_tab[0].text}")
+                        else:
+                            print("      ⚠️  Aucun onglet actif détecté")
+                        
+                        # Vérifier si on est sur l'onglet Entête
+                        try:
+                            entete_panel = driver.find_element(By.ID, "mainTab:tab0")
+                            if entete_panel.is_displayed():
+                                print("      ℹ️  Panneau Entête est visible")
+                            else:
+                                print("      ⚠️  Panneau Entête n'est PAS visible")
+                        except:
+                            print("      ⚠️  Panneau Entête introuvable")
+                        
+                        # Chercher toutes les tables dans le DOM
                         all_tables = driver.find_elements(By.TAG_NAME, "table")
                         print(f"      ℹ️  Nombre de tables trouvées dans le DOM: {len(all_tables)}")
+                        
                         # Chercher par XPath alternatif
-                        commerce_table_alt = driver.find_element(By.XPATH, "//table[contains(@id, 'commerceElectronique')]")
-                        if commerce_table_alt:
-                            print("      ✓ Tableau trouvé via XPath alternatif")
-                            commerce_table = commerce_table_alt
-                            break
-                    except:
-                        pass
+                        try:
+                            commerce_table_alt = driver.find_element(By.XPATH, "//table[contains(@id, 'commerceElectronique')]")
+                            if commerce_table_alt:
+                                print("      ✓ Tableau trouvé via XPath alternatif")
+                                commerce_table = commerce_table_alt
+                                break
+                        except:
+                            print("      ⚠️  Tableau non trouvé via XPath alternatif")
+                        
+                        # Chercher tous les éléments avec "commerce" dans l'ID ou le nom
+                        try:
+                            commerce_elements = driver.find_elements(By.XPATH, "//*[contains(@id, 'commerce') or contains(@name, 'commerce')]")
+                            print(f"      ℹ️  Éléments contenant 'commerce' trouvés: {len(commerce_elements)}")
+                            for elem in commerce_elements[:5]:  # Afficher les 5 premiers
+                                try:
+                                    elem_id = elem.get_attribute('id') or 'N/A'
+                                    elem_name = elem.get_attribute('name') or 'N/A'
+                                    print(f"         - {elem.tag_name}: id={elem_id}, name={elem_name}")
+                                except:
+                                    pass
+                        except:
+                            pass
+                        
+                    except Exception as diag_err:
+                        print(f"      ⚠️  Erreur lors du diagnostic: {diag_err}")
+                    
                     return False
         
         if not commerce_table:
@@ -8527,13 +8580,53 @@ def create_declaration(driver):
         print("✓ Valeur '010' saisie dans Régime")
         time.sleep(2)  # Attendre les suggestions
         
-        # Cliquer sur la suggestion
+        # Cliquer sur la suggestion avec retry et fallback JavaScript
         print("   Clic sur la suggestion Régime...")
-        regime_suggestion = wait.until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, "li.ui-autocomplete-item[data-item-value*='010']"))
-        )
-        regime_suggestion.click()
-        print("✓ Régime sélectionné")
+        regime_selected = False
+        
+        for attempt in range(3):
+            try:
+                if attempt > 0:
+                    print(f"      🔄 Tentative {attempt + 1}/3 pour sélectionner Régime...")
+                    time.sleep(1)
+                
+                regime_suggestion = wait.until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, "li.ui-autocomplete-item[data-item-value*='010']"))
+                )
+                print(f"      ✓ Suggestion Régime trouvée (tentative {attempt + 1})")
+                
+                # Essayer clic normal
+                try:
+                    regime_suggestion.click()
+                    print(f"      ✅ SUCCÈS: Régime sélectionné (méthode Selenium, tentative {attempt + 1})")
+                    regime_selected = True
+                    break
+                except Exception as click_err:
+                    print(f"      ⚠️  Clic Selenium échoué: {click_err}")
+                    print(f"      🔄 Passage à JavaScript fallback...")
+                    driver.execute_script("arguments[0].click();", regime_suggestion)
+                    print(f"      ✅ SUCCÈS: Régime sélectionné (méthode JavaScript, tentative {attempt + 1})")
+                    regime_selected = True
+                    break
+                    
+            except Exception as e:
+                if attempt < 2:
+                    print(f"      ❌ Tentative {attempt + 1} échouée: {e}")
+                    # Essayer avec XPath alternatif
+                    try:
+                        regime_suggestion_alt = driver.find_element(By.XPATH, "//li[@class='ui-autocomplete-item' and contains(@data-item-value, '010')]")
+                        driver.execute_script("arguments[0].click();", regime_suggestion_alt)
+                        print(f"      ✅ SUCCÈS: Régime sélectionné (méthode JavaScript XPath, tentative {attempt + 1})")
+                        regime_selected = True
+                        break
+                    except:
+                        pass
+                else:
+                    print(f"      ❌ Échec sélection Régime après 3 tentatives: {e}")
+        
+        if not regime_selected:
+            print("      ⚠️  Impossible de sélectionner Régime, continuation avec valeur saisie...")
+        
         time.sleep(1)
         
         # ÉTAPE 4: Cocher le PREMIER radio button (Création sur formulaire vierge)
