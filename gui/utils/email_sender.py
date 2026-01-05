@@ -65,11 +65,35 @@ def send_excel_via_email(excel_file_path, lta_name, dum_number=None, recipient_e
             logger.warning("Email configuration not found. Email sending disabled.")
             return False
         
-        # Get recipient email
+        # Get recipient email(s) - support both single email and list
         if not recipient_email:
+            # Try recipient_emails (list) first, then recipient_email (single)
+            recipient_emails = config.get('recipient_emails')
             recipient_email = config.get('recipient_email')
+            
+            if recipient_emails:
+                # If recipient_emails is a list, use it
+                if isinstance(recipient_emails, list):
+                    recipient_email = recipient_emails
+                elif isinstance(recipient_emails, str):
+                    # If it's a string, split by comma
+                    recipient_email = [email.strip() for email in recipient_emails.split(',')]
+            elif recipient_email:
+                # If recipient_email is a string, convert to list for consistency
+                if isinstance(recipient_email, str):
+                    recipient_email = [email.strip() for email in recipient_email.split(',')]
+                elif isinstance(recipient_email, list):
+                    recipient_email = recipient_email
+            else:
+                recipient_email = None
         
-        if not recipient_email:
+        # Normalize recipient_email to list format
+        if recipient_email:
+            if isinstance(recipient_email, str):
+                recipient_email = [email.strip() for email in recipient_email.split(',')]
+            elif not isinstance(recipient_email, list):
+                recipient_email = [str(recipient_email)]
+        else:
             logger.error("No recipient email configured")
             return False
         
@@ -91,7 +115,8 @@ def send_excel_via_email(excel_file_path, lta_name, dum_number=None, recipient_e
         # Create email message
         msg = MIMEMultipart()
         msg['From'] = sender_email
-        msg['To'] = recipient_email
+        # Join multiple recipients with comma for email header
+        msg['To'] = ', '.join(recipient_email) if isinstance(recipient_email, list) else recipient_email
         
         # Ensure no duplicate Subject header (safety check)
         if 'Subject' in msg:
@@ -138,16 +163,18 @@ TAJANI EL IDRISSI Ismail
         msg.attach(part)
         
         # Send email
-        logger.info(f"Sending email to {recipient_email}...")
+        recipients_str = ', '.join(recipient_email) if isinstance(recipient_email, list) else recipient_email
+        logger.info(f"Sending email to {recipients_str}...")
         server = smtplib.SMTP(smtp_server, smtp_port)
         server.starttls()
         server.login(sender_email, sender_password)
         text = msg.as_string()
-        server.sendmail(sender_email, recipient_email, text)
+        # sendmail accepts list of recipients
+        server.sendmail(sender_email, recipient_email if isinstance(recipient_email, list) else [recipient_email], text)
         server.quit()
         
-        logger.info(f"✅ Email sent successfully to {recipient_email}")
-        print(f"   📧 Email envoyé avec succès à {recipient_email}")
+        logger.info(f"✅ Email sent successfully to {recipients_str}")
+        print(f"   📧 Email envoyé avec succès à {recipients_str}")
         return True
         
     except Exception as e:
