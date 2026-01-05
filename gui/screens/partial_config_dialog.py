@@ -520,14 +520,19 @@ class PartialConfigDialog:
             # Calculate DUM 1 split for exception case
             # Smallest partial gets: manual weight and positions (from DUM 1)
             # Largest partial gets: DUM 1 total - smallest partial
-            dum1_largest_weight = dum1_weight - smallest_partial_weight
-            dum1_largest_positions = dum1_positions - smallest_partial_positions
+            
+            # Round smallest partial weight and positions FIRST
+            rounded_smallest_weight = round(smallest_partial_weight, 1)
+            rounded_smallest_positions = round(smallest_partial_positions)
+            
+            dum1_largest_weight = round(dum1_weight - rounded_smallest_weight, 1)
+            dum1_largest_positions = round(dum1_positions - rounded_smallest_positions)
             
             # Process smallest partial (gets part of DUM 1)
             smallest_partial_dums = [{
                 'dum_number': 1,
-                'weight': smallest_partial_weight,
-                'positions': smallest_partial_positions,
+                'weight': rounded_smallest_weight,
+                'positions': rounded_smallest_positions,
                 'is_split': True,
                 'split_id': '1/1'  # DUM 1, first split
             }]
@@ -544,31 +549,50 @@ class PartialConfigDialog:
             }]
             
             # Add all other DUMs to largest partial
-            weight_remaining = largest_partial_weight - dum1_largest_weight
+            weight_remaining = round(largest_partial_weight - dum1_largest_weight, 1)
             current_dum_idx = 1  # Start from DUM 2
             
             while weight_remaining > 0 and current_dum_idx < len(dums):
                 dum = dums[current_dum_idx]
-                if dum['weight'] <= weight_remaining:
+                rounded_dum_weight = round(dum['weight'], 1)
+                rounded_dum_positions = round(dum['positions'])
+                
+                # Check if entire DUM fits or needs to be split
+                if rounded_dum_weight <= weight_remaining:
+                    # Entire DUM fits - not a split
                     largest_partial_dums.append({
                         'dum_number': dum['number'],
-                        'weight': dum['weight'],
-                        'positions': dum['positions'],
-                        'is_split': False,
+                        'weight': rounded_dum_weight,
+                        'positions': rounded_dum_positions,
+                        'is_split': False,  # Entire DUM, not split
                         'split_id': ''
                     })
-                    weight_remaining -= dum['weight']
+                    weight_remaining = round(weight_remaining - rounded_dum_weight, 1)
                     current_dum_idx += 1
                 else:
-                    # Should not happen if weights are correct, but handle it
+                    # DUM needs to be split
+                    split_weight = round(weight_remaining, 1)
+                    # Calculate positions proportionally
+                    if dum['weight'] > 0:
+                        split_positions = round((split_weight / dum['weight']) * dum['positions'])
+                    else:
+                        split_positions = 0
+                    
+                    largest_partial_dums.append({
+                        'dum_number': dum['number'],
+                        'weight': split_weight,
+                        'positions': split_positions,
+                        'is_split': True,
+                        'split_id': f"{dum['number']}/2"  # Split for second partial
+                    })
                     break
             
             # Build distribution in order
             for partial_idx in range(len(partial_weights)):
                 if partial_idx == smallest_partial_idx:
                     distribution.append({
-                        'weight': smallest_partial_weight,
-                        'positions': smallest_partial_positions,
+                        'weight': rounded_smallest_weight,
+                        'positions': rounded_smallest_positions,
                         'dums': smallest_partial_dums
                     })
                 elif partial_idx == largest_partial_idx:
@@ -586,9 +610,10 @@ class PartialConfigDialog:
         
         # Normal case: sequential distribution (existing logic)
         current_dum_idx = 0
-        remaining_dum_weight = dums[0]['weight'] if dums else 0
-        remaining_dum_positions = dums[0]['positions'] if dums else 0
+        remaining_dum_weight = round(dums[0]['weight'], 1) if dums else 0
+        remaining_dum_positions = round(dums[0]['positions']) if dums else 0
         is_continuing_split = False  # Track if we're continuing a split DUM
+        original_dum_weight_at_start = remaining_dum_weight  # Track original DUM weight at start of partial
         
         for partial_idx, partial_weight in enumerate(partial_weights):
             if partial_weight <= 0:
@@ -611,6 +636,12 @@ class PartialConfigDialog:
                 
                 if remaining_dum_weight <= weight_needed:
                     # Take entire remaining DUM (or remaining part of split DUM)
+                    # Check if this is the ENTIRE DUM (not a split continuation)
+                    # If remaining_dum_weight equals the original DUM weight at start, it's not a split
+                    original_dum_weight = round(dums[current_dum_idx]['weight'], 1)
+                    # Check if this is actually a split: only if we're continuing a split AND the weight is less than original
+                    is_actually_split = is_continuing_split and (abs(remaining_dum_weight - original_dum_weight_at_start) > 0.1)
+                    
                     # Special case: If this is smallest partial with manual positions (exception case)
                     if (smallest_partial_idx is not None and partial_idx == smallest_partial_idx and 
                         smallest_partial_positions is not None and is_continuing_split):
@@ -620,22 +651,27 @@ class PartialConfigDialog:
                         # Normal case: Use remaining positions
                         positions_to_use = remaining_dum_positions
                     
+                    # Round weight to 1 decimal place to avoid floating point errors
+                    rounded_weight = round(remaining_dum_weight, 1)
+                    rounded_positions = round(positions_to_use)
+                    
                     partial_dums.append({
                         'dum_number': dums[current_dum_idx]['number'],
-                        'weight': remaining_dum_weight,
-                        'positions': positions_to_use,
-                        'is_split': is_continuing_split,
-                        'split_id': f"{dums[current_dum_idx]['number']}/{partial_idx + 1}" if is_continuing_split else ''
+                        'weight': rounded_weight,
+                        'positions': rounded_positions,
+                        'is_split': is_actually_split,  # Only true if it's actually a split continuation
+                        'split_id': f"{dums[current_dum_idx]['number']}/{partial_idx + 1}" if is_actually_split else ''
                     })
-                    weight_accumulated += remaining_dum_weight
-                    positions_accumulated += positions_to_use
+                    weight_accumulated += rounded_weight
+                    positions_accumulated += rounded_positions
                     
                     # Move to next DUM
                     current_dum_idx += 1
                     is_continuing_split = False
                     if current_dum_idx < len(dums):
-                        remaining_dum_weight = dums[current_dum_idx]['weight']
-                        remaining_dum_positions = dums[current_dum_idx]['positions']
+                        remaining_dum_weight = round(dums[current_dum_idx]['weight'], 1)
+                        remaining_dum_positions = round(dums[current_dum_idx]['positions'])
+                        original_dum_weight_at_start = remaining_dum_weight  # Reset for new DUM
                 else:
                     # Split the DUM - this is the last DUM for this partial
                     # Special case: If next partial is smallest partial (exception case), calculate differently
@@ -664,23 +700,27 @@ class PartialConfigDialog:
                     # Ensure positions are non-negative
                     positions_for_split = max(0, positions_for_split)
                     
+                    # Round weight and positions to avoid floating point errors
+                    rounded_weight_needed = round(weight_needed, 1)
+                    rounded_positions_for_split = round(positions_for_split)
+                    
                     partial_dums.append({
                         'dum_number': dums[current_dum_idx]['number'],
-                        'weight': weight_needed,
-                        'positions': positions_for_split,
+                        'weight': rounded_weight_needed,
+                        'positions': rounded_positions_for_split,
                         'is_split': True,
                         'split_id': f"{dums[current_dum_idx]['number']}/{partial_idx + 1}"
                     })
-                    weight_accumulated += weight_needed
-                    positions_accumulated += positions_for_split
+                    weight_accumulated += rounded_weight_needed
+                    positions_accumulated += rounded_positions_for_split
                     
-                    # Update remaining DUM
-                    remaining_dum_weight -= weight_needed
+                    # Update remaining DUM (round to avoid floating point errors)
+                    remaining_dum_weight = round(remaining_dum_weight - rounded_weight_needed, 1)
                     if next_partial_is_smallest:
                         # For exception case, remaining positions = manual positions
                         remaining_dum_positions = smallest_partial_positions
                     else:
-                        remaining_dum_positions -= positions_for_split
+                        remaining_dum_positions = round(remaining_dum_positions - rounded_positions_for_split)
                     is_continuing_split = True  # Mark that next partial continues this DUM
                     break
             
@@ -690,9 +730,13 @@ class PartialConfigDialog:
             else:
                 final_positions = positions_accumulated  # Use actual accumulated positions from DUMs
             
+            # Round accumulated weight to 1 decimal place
+            rounded_weight_accumulated = round(weight_accumulated, 1)
+            rounded_final_positions = round(final_positions)
+            
             distribution.append({
-                'weight': weight_accumulated,
-                'positions': final_positions,
+                'weight': rounded_weight_accumulated,
+                'positions': rounded_final_positions,
                 'dums': partial_dums
             })
         

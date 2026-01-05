@@ -7105,30 +7105,167 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         
         # 7.1.1: Sélectionner le type de document "TITRE DE PROPRIÉTÉ ET/OU DE TRANSPORT"
         print("      1️⃣ Sélection du type 'TITRE DE PROPRIÉTÉ ET/OU DE TRANSPORT'...")
-        try:
-            # Cliquer sur le trigger pour ouvrir le dropdown
-            doc_type_trigger = wait.until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, "div#mainTab\\:form7\\:comp1 div.ui-selectonemenu-trigger"))
-            )
-            doc_type_trigger.click()
-            print("         ✓ Dropdown type document ouvert")
-            time.sleep(1)
+        
+        # Attendre que le blocker UI disparaisse avant de commencer
+        wait_for_ui_blocker_disappear(driver, timeout=10)
+        time.sleep(0.5)
+        
+        dropdown_opened = False
+        max_attempts = 3
+        
+        for attempt in range(1, max_attempts + 1):
+            try:
+                if attempt > 1:
+                    print(f"         🔄 Tentative {attempt}/{max_attempts}...")
+                    time.sleep(2)
+                    wait_for_ui_blocker_disappear(driver, timeout=5)
+                
+                # Méthode 1: Utiliser le trigger CSS
+                try:
+                    # Attendre que le dropdown soit complètement réinitialisé
+                    doc_type_container = wait.until(
+                        EC.presence_of_element_located((By.ID, "mainTab:form7:comp1"))
+                    )
+                    
+                    # Vérifier que le dropdown n'est pas déjà ouvert
+                    try:
+                        open_panel = driver.find_element(By.CSS_SELECTOR, "div#mainTab\\:form7\\:comp1_panel[style*='display: block']")
+                        print(f"         ℹ️  Dropdown déjà ouvert, fermeture...")
+                        driver.execute_script("arguments[0].style.display = 'none';", open_panel)
+                        time.sleep(1)
+                    except:
+                        pass
+                    
+                    # Scroll et focus sur le conteneur
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", doc_type_container)
+                    time.sleep(0.5)
+                    
+                    # Attendre que le blocker disparaisse
+                    wait_for_ui_blocker_disappear(driver, timeout=5)
+                    
+                    # Chercher le trigger
+                    doc_type_trigger = doc_type_container.find_element(By.CSS_SELECTOR, "div.ui-selectonemenu-trigger")
+                    
+                    # Essayer click standard
+                    try:
+                        WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "div#mainTab\\:form7\\:comp1 div.ui-selectonemenu-trigger")))
+                        doc_type_trigger.click()
+                        print(f"         ✓ Dropdown ouvert (méthode Selenium, tentative {attempt})")
+                    except Exception as click_err:
+                        print(f"         ⚠️  Clic Selenium échoué: {click_err}")
+                        print(f"         🔄 Passage à JavaScript fallback...")
+                        driver.execute_script("arguments[0].click();", doc_type_trigger)
+                        print(f"         ✓ Dropdown ouvert (méthode JavaScript, tentative {attempt})")
+                    
+                    time.sleep(1.5)
+                    
+                    # Vérifier si le dropdown s'est ouvert
+                    dropdown_panel = driver.find_element(By.CSS_SELECTOR, "div#mainTab\\:form7\\:comp1_panel[style*='display: block']")
+                    if dropdown_panel:
+                        print("         ✅ Dropdown type document ouvert")
+                        dropdown_opened = True
+                        break
+                    
+                except Exception as click_err:
+                    # Méthode 2: JavaScript click direct
+                    print(f"         ℹ️  Méthode 1 échouée, tentative JavaScript direct...")
+                    try:
+                        doc_type_container = driver.find_element(By.ID, "mainTab:form7:comp1")
+                        doc_type_trigger = doc_type_container.find_element(By.CSS_SELECTOR, "div.ui-selectonemenu-trigger")
+                        driver.execute_script("arguments[0].click();", doc_type_trigger)
+                        time.sleep(1.5)
+                        
+                        # Vérifier ouverture
+                        dropdown_panel = driver.find_element(By.CSS_SELECTOR, "div#mainTab\\:form7\\:comp1_panel[style*='display: block']")
+                        if dropdown_panel:
+                            print("         ✅ Dropdown ouvert (méthode JavaScript direct)")
+                            dropdown_opened = True
+                            break
+                    except Exception as js_err:
+                        # Méthode 3: Click sur le label
+                        print(f"         ℹ️  Méthode 2 échouée, tentative click sur label...")
+                        try:
+                            doc_type_label = driver.find_element(By.ID, "mainTab:form7:comp1_label")
+                            driver.execute_script("arguments[0].click();", doc_type_label)
+                            time.sleep(1.5)
+                            
+                            # Vérifier ouverture
+                            dropdown_panel = driver.find_element(By.CSS_SELECTOR, "div#mainTab\\:form7\\:comp1_panel[style*='display: block']")
+                            if dropdown_panel:
+                                print("         ✅ Dropdown ouvert (méthode label)")
+                                dropdown_opened = True
+                                break
+                        except:
+                            pass
             
-            # Sélectionner l'option "TITRE DE PROPRIÉTÉ ET/OU DE TRANSPORT"
-            doc_type_option = wait.until(
-                EC.element_to_be_clickable((By.XPATH, "//li[@data-label='TITRE DE PROPRIÉTÉ ET/OU DE TRANSPORT']"))
-            )
-            doc_type_option.click()
-            print("         ✓ Type sélectionné: A0004 (TITRE DE PROPRIÉTÉ ET/OU DE TRANSPORT)")
-            
-            # Attendre que le blocker AJAX disparaisse après sélection du type
-            print("         ⏳ Attente mise à jour formulaire...")
-            if wait_for_ui_blocker_disappear(driver, timeout=5):
-                print("         ✓ Formulaire mis à jour")
-            time.sleep(1)
-        except Exception as e:
-            print(f"      ❌ Erreur sélection type document: {e}")
+            except Exception as e:
+                if attempt == max_attempts:
+                    print(f"         ❌ Impossible d'ouvrir le dropdown après {max_attempts} tentatives: {e}")
+                    return False
+        
+        if not dropdown_opened:
+            print(f"      ❌ Dropdown non ouvert après {max_attempts} tentatives")
             return False
+        
+        # Sélectionner l'option "TITRE DE PROPRIÉTÉ ET/OU DE TRANSPORT" avec retry
+        option_selected = False
+        max_option_attempts = 3
+        
+        for option_attempt in range(1, max_option_attempts + 1):
+            try:
+                if option_attempt > 1:
+                    print(f"         🔄 Tentative sélection option {option_attempt}/{max_option_attempts}...")
+                    time.sleep(1)
+                    # Réouvrir le dropdown si nécessaire
+                    try:
+                        dropdown_panel = driver.find_element(By.CSS_SELECTOR, "div#mainTab\\:form7\\:comp1_panel[style*='display: block']")
+                    except:
+                        # Réouvrir
+                        doc_type_trigger = driver.find_element(By.CSS_SELECTOR, "div#mainTab\\:form7\\:comp1 div.ui-selectonemenu-trigger")
+                        driver.execute_script("arguments[0].click();", doc_type_trigger)
+                        time.sleep(1.5)
+                
+                # Attendre que le blocker disparaisse
+                wait_for_ui_blocker_disappear(driver, timeout=5)
+                
+                # Chercher l'option
+                doc_type_option = wait.until(
+                    EC.presence_of_element_located((By.XPATH, "//li[@data-label='TITRE DE PROPRIÉTÉ ET/OU DE TRANSPORT']"))
+                )
+                
+                # Scroll into view
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", doc_type_option)
+                time.sleep(0.3)
+                
+                # Essayer clic normal puis JavaScript
+                try:
+                    WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//li[@data-label='TITRE DE PROPRIÉTÉ ET/OU DE TRANSPORT']")))
+                    doc_type_option.click()
+                    print(f"         ✅ Type sélectionné: A0004 (TITRE DE PROPRIÉTÉ ET/OU DE TRANSPORT) (méthode Selenium, tentative {option_attempt})")
+                    option_selected = True
+                    break
+                except Exception as click_err:
+                    if option_attempt < max_option_attempts:
+                        print(f"         ⚠️  Clic Selenium échoué: {click_err}")
+                        print(f"         🔄 Passage à JavaScript fallback...")
+                    driver.execute_script("arguments[0].click();", doc_type_option)
+                    print(f"         ✅ Type sélectionné: A0004 (TITRE DE PROPRIÉTÉ ET/OU DE TRANSPORT) (méthode JavaScript, tentative {option_attempt})")
+                    option_selected = True
+                    break
+                    
+            except Exception as e:
+                if option_attempt == max_option_attempts:
+                    print(f"         ❌ Erreur sélection type document après {max_option_attempts} tentatives: {e}")
+                    return False
+        
+        if not option_selected:
+            print(f"      ❌ Impossible de sélectionner le type après {max_option_attempts} tentatives")
+            return False
+        
+        # Attendre que le blocker AJAX disparaisse après sélection du type
+        print("         ⏳ Attente mise à jour formulaire...")
+        wait_for_ui_blocker_disappear(driver, timeout=10)
+        time.sleep(1)
         
         # 7.1.2: Entrer la référence "LTA"
         print("      2️⃣ Saisie de la référence 'LTA'...")
