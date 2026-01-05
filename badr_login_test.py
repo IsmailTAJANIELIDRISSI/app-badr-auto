@@ -1429,18 +1429,64 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
                 return_to_home_after_error(driver)
                 return False
             
-            # Valider ligne
-            try:
-                valider_ligne_btn = wait.until(
-                    EC.element_to_be_clickable((By.ID, "mainTab:detailLot:ligne_section_form:btn_confirmer_ligne"))
-                )
-                valider_ligne_btn.click()
-                print(f"      ✓ Ligne validée")
-                time.sleep(2)
-            except Exception as e:
-                print(f"      ❌ Erreur validation ligne: {e}")
+            # Valider ligne avec retry et gestion blocker UI
+            print(f"      🔄 Validation de la ligne...")
+            ligne_validated = False
+            
+            for val_attempt in range(3):
+                try:
+                    if val_attempt > 0:
+                        print(f"         🔄 Tentative validation {val_attempt + 1}/3...")
+                        time.sleep(1)
+                    
+                    # Attendre que le blocker UI disparaisse
+                    wait_for_ui_blocker_disappear(driver, timeout=10)
+                    time.sleep(0.5)
+                    
+                    # Chercher le bouton
+                    valider_ligne_btn = wait.until(
+                        EC.presence_of_element_located((By.ID, "mainTab:detailLot:ligne_section_form:btn_confirmer_ligne"))
+                    )
+                    
+                    # Scroll into view
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", valider_ligne_btn)
+                    time.sleep(0.3)
+                    
+                    # Attendre que le blocker disparaisse avant de cliquer
+                    wait_for_ui_blocker_disappear(driver, timeout=5)
+                    
+                    # Essayer clic normal puis JavaScript
+                    try:
+                        if val_attempt == 0:
+                            print(f"         🖱️  Tentative clic Selenium standard...")
+                        WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.ID, "mainTab:detailLot:ligne_section_form:btn_confirmer_ligne")))
+                        valider_ligne_btn.click()
+                        print(f"         ✅ SUCCÈS: Ligne validée (méthode Selenium, tentative {val_attempt + 1})")
+                        ligne_validated = True
+                        break
+                    except Exception as click_err:
+                        if val_attempt < 2:
+                            print(f"         ⚠️  Clic Selenium échoué: {click_err}")
+                            print(f"         🔄 Passage à JavaScript fallback...")
+                        driver.execute_script("arguments[0].click();", valider_ligne_btn)
+                        print(f"         ✅ SUCCÈS: Ligne validée (méthode JavaScript, tentative {val_attempt + 1})")
+                        ligne_validated = True
+                        break
+                    
+                except Exception as e:
+                    if val_attempt < 2:
+                        print(f"         ❌ Tentative {val_attempt + 1} échouée: {e}")
+                    else:
+                        print(f"         ❌ Erreur validation ligne après 3 tentatives: {e}")
+            
+            if not ligne_validated:
+                print(f"      ❌ Impossible de valider la ligne")
                 return_to_home_after_error(driver)
                 return False
+            
+            # Attendre que le blocker disparaisse après validation
+            wait_for_ui_blocker_disappear(driver, timeout=10)
+            time.sleep(2)
             
             print(f"   ✅ Lot {dum_index} créé!")
         
@@ -3953,18 +3999,64 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
             # ==================================================================
             # ÉTAPE ED.11.3: Valider la ligne marchandise
             # ==================================================================
-            try:
-                valider_ligne_btn = wait.until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_confirmer_ligne')]"))
-                )
-                valider_ligne_btn.click()
-                print(f"      ✓ Ligne marchandise validée")
-                time.sleep(2)
-            except Exception as e:
-                print(f"      ❌ Erreur validation ligne: {e}")
+            print(f"      🔄 Validation de la ligne marchandise...")
+            ligne_validated = False
+            
+            for val_attempt in range(3):
+                try:
+                    if val_attempt > 0:
+                        print(f"         🔄 Tentative validation {val_attempt + 1}/3...")
+                        time.sleep(1)
+                    
+                    # Attendre que le blocker UI disparaisse
+                    wait_for_ui_blocker_disappear(driver, timeout=10)
+                    time.sleep(0.5)
+                    
+                    # Chercher le bouton
+                    valider_ligne_btn = wait.until(
+                        EC.presence_of_element_located((By.XPATH, "//button[contains(@name, 'btn_confirmer_ligne')]"))
+                    )
+                    
+                    # Scroll into view
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", valider_ligne_btn)
+                    time.sleep(0.3)
+                    
+                    # Attendre que le blocker disparaisse avant de cliquer
+                    wait_for_ui_blocker_disappear(driver, timeout=5)
+                    
+                    # Essayer clic normal puis JavaScript
+                    try:
+                        if val_attempt == 0:
+                            print(f"         🖱️  Tentative clic Selenium standard...")
+                        WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_confirmer_ligne')]")))
+                        valider_ligne_btn.click()
+                        print(f"         ✅ SUCCÈS: Ligne validée (méthode Selenium, tentative {val_attempt + 1})")
+                        ligne_validated = True
+                        break
+                    except Exception as click_err:
+                        if val_attempt < 2:
+                            print(f"         ⚠️  Clic Selenium échoué: {click_err}")
+                            print(f"         🔄 Passage à JavaScript fallback...")
+                        driver.execute_script("arguments[0].click();", valider_ligne_btn)
+                        print(f"         ✅ SUCCÈS: Ligne validée (méthode JavaScript, tentative {val_attempt + 1})")
+                        ligne_validated = True
+                        break
+                    
+                except Exception as e:
+                    if val_attempt < 2:
+                        print(f"         ❌ Tentative {val_attempt + 1} échouée: {e}")
+                    else:
+                        print(f"         ❌ Erreur validation ligne après 3 tentatives: {e}")
+            
+            if not ligne_validated:
+                print(f"      ❌ Impossible de valider la ligne marchandise")
                 driver.switch_to.default_content()
                 return_to_home_after_error(driver)
                 return False
+            
+            # Attendre que le blocker disparaisse après validation
+            wait_for_ui_blocker_disappear(driver, timeout=10)
+            time.sleep(2)
             
             print(f"   ✅ Lot {dum_index} créé avec succès!")
         
@@ -5234,19 +5326,65 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                 return_to_home_after_error(driver)
                 return False
             
-            # Validate line
-            try:
-                valider_ligne_btn = wait.until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_confirmer_ligne')]"))
-                )
-                valider_ligne_btn.click()
-                print(f"      ✓ Ligne marchandise validée")
-                time.sleep(2)
-            except Exception as e:
-                print(f"      ❌ Erreur validation ligne: {e}")
+            # Validate line with retry and blocker UI handling
+            print(f"      🔄 Validation de la ligne marchandise...")
+            ligne_validated = False
+            
+            for val_attempt in range(3):
+                try:
+                    if val_attempt > 0:
+                        print(f"         🔄 Tentative validation {val_attempt + 1}/3...")
+                        time.sleep(1)
+                    
+                    # Attendre que le blocker UI disparaisse
+                    wait_for_ui_blocker_disappear(driver, timeout=10)
+                    time.sleep(0.5)
+                    
+                    # Chercher le bouton
+                    valider_ligne_btn = wait.until(
+                        EC.presence_of_element_located((By.XPATH, "//button[contains(@name, 'btn_confirmer_ligne')]"))
+                    )
+                    
+                    # Scroll into view
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", valider_ligne_btn)
+                    time.sleep(0.3)
+                    
+                    # Attendre que le blocker disparaisse avant de cliquer
+                    wait_for_ui_blocker_disappear(driver, timeout=5)
+                    
+                    # Essayer clic normal puis JavaScript
+                    try:
+                        if val_attempt == 0:
+                            print(f"         🖱️  Tentative clic Selenium standard...")
+                        WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_confirmer_ligne')]")))
+                        valider_ligne_btn.click()
+                        print(f"         ✅ SUCCÈS: Ligne validée (méthode Selenium, tentative {val_attempt + 1})")
+                        ligne_validated = True
+                        break
+                    except Exception as click_err:
+                        if val_attempt < 2:
+                            print(f"         ⚠️  Clic Selenium échoué: {click_err}")
+                            print(f"         🔄 Passage à JavaScript fallback...")
+                        driver.execute_script("arguments[0].click();", valider_ligne_btn)
+                        print(f"         ✅ SUCCÈS: Ligne validée (méthode JavaScript, tentative {val_attempt + 1})")
+                        ligne_validated = True
+                        break
+                    
+                except Exception as e:
+                    if val_attempt < 2:
+                        print(f"         ❌ Tentative {val_attempt + 1} échouée: {e}")
+                    else:
+                        print(f"         ❌ Erreur validation ligne après 3 tentatives: {e}")
+            
+            if not ligne_validated:
+                print(f"      ❌ Impossible de valider la ligne marchandise")
                 driver.switch_to.default_content()
                 return_to_home_after_error(driver)
                 return False
+            
+            # Attendre que le blocker disparaisse après validation
+            wait_for_ui_blocker_disappear(driver, timeout=10)
+            time.sleep(2)
             
             print(f"   ✅ Lot {dum_index} créé avec succès!")
         
