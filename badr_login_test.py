@@ -7472,13 +7472,38 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                         return False
         
         if not entete_navigation_success:
-            print("      ❌ Échec navigation vers 'Entête' - vérification du bouton VALIDER...")
-            # Dernière vérification: le bouton VALIDER est-il accessible ?
+            print("      ❌ Échec navigation vers 'Entête' après toutes les tentatives")
+            print("      🔄 Dernière tentative forcée avec JavaScript et vérification stricte...")
+            
+            # Dernière tentative avec JavaScript direct et vérification stricte
             try:
-                wait.until(EC.presence_of_element_located((By.ID, "secure__2003")))
-                print("      ℹ️  Bouton VALIDER détecté - continuons")
-            except:
-                print("      ❌ Bouton VALIDER non accessible - abandon")
+                driver.execute_script("""
+                    var tab = document.querySelector('a[href="#mainTab:tab0"]');
+                    if (tab) {
+                        tab.click();
+                    }
+                """)
+                time.sleep(3)  # Attendre plus longtemps
+                wait_for_ui_blocker_disappear(driver, timeout=10)
+                time.sleep(1)
+                
+                # Vérification STRICTE: onglet actif ET panneau visible
+                try:
+                    active_tab = driver.find_element(By.CSS_SELECTOR, "li.ui-tabs-selected.ui-state-active a[href='#mainTab:tab0']")
+                    entete_panel = driver.find_element(By.ID, "mainTab:tab0")
+                    if active_tab and entete_panel.is_displayed():
+                        print("      ✅ Navigation réussie via JavaScript (vérification stricte)")
+                        entete_navigation_success = True
+                    else:
+                        print("      ❌ Navigation échouée: onglet ou panneau non confirmé")
+                except:
+                    print("      ❌ Navigation échouée: éléments non trouvés")
+            except Exception as final_err:
+                print(f"      ❌ Échec navigation finale: {final_err}")
+            
+            # Si toujours pas de succès, abandonner
+            if not entete_navigation_success:
+                print("      ❌ Impossible de naviguer vers 'Entête' - abandon")
                 return False
         
         # ==================================================================
@@ -7572,17 +7597,54 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         # ==================================================================
         print("\n   ☑️  Activation 'Commerce électronique - Oui'...")
         
-        # Vérifier qu'on est bien sur l'onglet Entête
+        # Vérifier STRICTEMENT qu'on est bien sur l'onglet Entête
+        print("      🔍 Vérification stricte: onglet Entête actif...")
+        on_correct_tab = False
         try:
-            entete_panel = driver.find_element(By.ID, "mainTab:tab0")
-            if not entete_panel.is_displayed():
-                print("      ⚠️  Panneau Entête non visible, tentative navigation...")
+            active_tab = driver.find_element(By.CSS_SELECTOR, "li.ui-tabs-selected.ui-state-active a")
+            active_tab_text = active_tab.text.strip()
+            print(f"      ℹ️  Onglet actif détecté: '{active_tab_text}'")
+            
+            if active_tab_text == "Entête":
+                entete_panel = driver.find_element(By.ID, "mainTab:tab0")
+                if entete_panel.is_displayed():
+                    print("      ✅ On est bien sur l'onglet Entête")
+                    on_correct_tab = True
+                else:
+                    print("      ⚠️  Onglet Entête actif mais panneau non visible")
+            else:
+                print(f"      ❌ On est sur l'onglet '{active_tab_text}' au lieu de 'Entête'")
+        except Exception as check_err:
+            print(f"      ⚠️  Erreur vérification onglet: {check_err}")
+        
+        # Si pas sur le bon onglet, forcer la navigation
+        if not on_correct_tab:
+            print("      🔄 Navigation forcée vers l'onglet Entête...")
+            try:
                 entete_tab = driver.find_element(By.CSS_SELECTOR, "a[href='#mainTab:tab0']")
                 driver.execute_script("arguments[0].click();", entete_tab)
-                time.sleep(2)
+                time.sleep(3)  # Attendre plus longtemps
                 wait_for_ui_blocker_disappear(driver, timeout=10)
-        except Exception as nav_err:
-            print(f"      ⚠️  Vérification onglet Entête échouée: {nav_err}")
+                time.sleep(1)
+                
+                # Vérifier à nouveau
+                active_tab = driver.find_element(By.CSS_SELECTOR, "li.ui-tabs-selected.ui-state-active a")
+                active_tab_text = active_tab.text.strip()
+                if active_tab_text == "Entête":
+                    entete_panel = driver.find_element(By.ID, "mainTab:tab0")
+                    if entete_panel.is_displayed():
+                        print("      ✅ Navigation forcée réussie - on est sur Entête")
+                        on_correct_tab = True
+                    else:
+                        print("      ❌ Navigation forcée échouée: panneau non visible")
+                else:
+                    print(f"      ❌ Navigation forcée échouée: toujours sur '{active_tab_text}'")
+            except Exception as nav_err:
+                print(f"      ❌ Erreur navigation forcée: {nav_err}")
+            
+            if not on_correct_tab:
+                print("      ❌ Impossible de naviguer vers Entête - abandon")
+                return False
         
         # Attendre que le blocker UI disparaisse
         wait_for_ui_blocker_disappear(driver, timeout=10)
