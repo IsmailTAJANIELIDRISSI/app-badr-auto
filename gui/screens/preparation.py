@@ -744,12 +744,39 @@ class PreparationScreen:
                     continue
                 
                 try:
-                    float(total_weight)
-                    float(blocked_weight)
-                except ValueError:
+                    # Normalize decimal separator: replace comma with dot (e.g., "0,04" -> "0.04")
+                    total_weight_normalized = str(total_weight).replace(',', '.')
+                    blocked_weight_normalized = str(blocked_weight).replace(',', '.')
+                    
+                    # Convert to float and validate
+                    total_weight_float = float(total_weight_normalized)
+                    blocked_weight_float = float(blocked_weight_normalized)
+                    
+                    # Validate that weights are positive (allow decimals between 0 and 1)
+                    if total_weight_float <= 0:
+                        messagebox.showerror(
+                            "Erreur de Validation",
+                            f"{lta['name']}: Le poids total doit être supérieur à 0"
+                        )
+                        error_count += 1
+                        continue
+                    
+                    if blocked_weight_float <= 0:
+                        messagebox.showerror(
+                            "Erreur de Validation",
+                            f"{lta['name']}: Le poids bloqué doit être supérieur à 0"
+                        )
+                        error_count += 1
+                        continue
+                    
+                    # Update the variables with normalized values for saving
+                    total_weight = total_weight_normalized
+                    blocked_weight = blocked_weight_normalized
+                    
+                except ValueError as e:
                     messagebox.showerror(
                         "Erreur de Validation",
-                        f"{lta['name']}: Les poids doivent être des nombres valides"
+                        f"{lta['name']}: Les poids doivent être des nombres valides (ex: 624 ou 0.04)"
                     )
                     error_count += 1
                     continue
