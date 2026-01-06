@@ -1155,7 +1155,8 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
             current_p = None
             current_p_brut = None
             
-            for row in range(1, 200):
+            # Increased limit to 500 rows to support 50+ DUMs (each DUM takes ~7 rows)
+            for row in range(1, 500):
                 cell_c = ws.cell(row=row, column=3).value
                 cell_a = ws.cell(row=row, column=1).value
                 cell_b = ws.cell(row=row, column=2).value
@@ -3440,7 +3441,8 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
             current_p = None
             current_p_brut = None
             
-            for row in range(1, 200):
+            # Increased limit to 500 rows to support 50+ DUMs (each DUM takes ~7 rows)
+            for row in range(1, 500):
                 cell_c = ws.cell(row=row, column=3).value
                 cell_a = ws.cell(row=row, column=1).value
                 cell_b = ws.cell(row=row, column=2).value
@@ -3499,7 +3501,12 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                 
                 with open(error_filepath, 'w', encoding='utf-8') as f:
                     f.write(f"ERREUR DE CALCUL - {lta_name}\n\n")
-                    f.write(f"LTA: {lta_name} - {lta_reference.split('/')[0]}\n")
+                    # Use lta_reference_clean if available, otherwise extract from filename
+                    try:
+                        lta_ref_for_error = lta_reference_clean.split('/')[0]
+                    except NameError:
+                        lta_ref_for_error = ref_for_filename
+                    f.write(f"LTA: {lta_name} - {lta_ref_for_error}\n")
                     f.write(f"Date: {current_datetime}\n\n")
                     f.write("TOTAUX DÉCLARÉS:\n")
                     f.write(f"- P (Total): {total_p}\n")
@@ -3601,7 +3608,8 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
             current_p = None
             current_p_brut = None
             
-            for row in range(1, 200):
+            # Increased limit to 500 rows to support 50+ DUMs (each DUM takes ~7 rows)
+            for row in range(1, 500):
                 cell_c = ws.cell(row=row, column=3).value
                 cell_a = ws.cell(row=row, column=1).value
                 cell_b = ws.cell(row=row, column=2).value

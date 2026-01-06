@@ -384,6 +384,10 @@ class PartialConfigDialog:
     def _update_distribution_preview(self):
         """Update the DUM distribution preview for all partials"""
         try:
+            # Check if partial_forms exists (may not be initialized yet)
+            if not hasattr(self, 'partial_forms') or not self.partial_forms:
+                return  # Forms not generated yet, skip update
+            
             # Validate LTA data
             if not self.lta_data.get('dums') or self.lta_data.get('total_weight', 0) <= 0:
                 # Show error message in preview
@@ -968,7 +972,7 @@ class PartialConfigDialog:
             messagebox.showerror("Erreur", f"Erreur lors de la sauvegarde:\n{e}")
     
     def _get_lta_reference(self):
-        """Get LTA reference from LTA file"""
+        """Get LTA reference from LTA file and clean leading zeros"""
         try:
             lta_file_patterns = [
                 f"{self.folder_name}.txt",
@@ -986,6 +990,16 @@ class PartialConfigDialog:
                         # Remove /1 suffix if present
                         if reference.endswith('/1'):
                             reference = reference[:-2]
+                        
+                        # Clean leading zeros from the first part (before dash)
+                        # Example: "065-123456" -> "65-123456"
+                        if '-' in reference:
+                            parts = reference.split('-', 1)
+                            if len(parts) == 2:
+                                # Remove leading zeros from first part
+                                first_part = parts[0].lstrip('0') or '0'  # Keep at least one digit
+                                reference = f"{first_part}-{parts[1]}"
+                        
                         return reference
             
             return "UNKNOWN"
