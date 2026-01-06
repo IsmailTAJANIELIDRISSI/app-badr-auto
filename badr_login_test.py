@@ -1889,16 +1889,49 @@ def correct_blocage_weights(lta_folder_path, corrected_weight):
                 remaining_to_subtract = difference
                 adjusted_dums = []
                 
-                # Parcourir les DUMs en ordre inverse pour soustraire
+                # Parcourir les DUMs en ordre inverse pour soustraire (du dernier au premier)
                 for i in range(len(dum_pbrut_cells) - 1, -1, -1):
                     if remaining_to_subtract <= 0.01:
                         break
                     
                     dum = dum_pbrut_cells[i]
-                    # Calculer la marge disponible: P,BRUT - P,NET
-                    # IMPORTANT: Garder au moins 1 kg de marge (P,BRUT doit rester > P,NET)
-                    available_margin = round(dum['pbrut_value'] - dum['pnet_value'] - 1, 2)
+                    is_last_dum = (i == len(dum_pbrut_cells) - 1)
                     
+                    # Calculer la marge disponible: P,BRUT - P,NET
+                    # Pour le dernier DUM, on accepte une marge minimale plus petite (0.01 au lieu de 1 kg)
+                    min_margin_required = 0.01 if is_last_dum else 1.0
+                    available_margin = round(dum['pbrut_value'] - dum['pnet_value'] - min_margin_required, 2)
+                    
+                    # Pour le dernier DUM avec un ajustement très petit, forcer la soustraction
+                    if is_last_dum and remaining_to_subtract <= 0.1:
+                        # Ajustement fin sur le dernier DUM : garantir que P,BRUT reste > P,NET
+                        max_safe_subtract = round(dum['pbrut_value'] - dum['pnet_value'] - 0.01, 2)
+                        if max_safe_subtract >= remaining_to_subtract:
+                            # On peut soustraire en toute sécurité
+                            can_subtract = remaining_to_subtract
+                            new_pbrut = round(dum['pbrut_value'] - can_subtract, 2)
+                            
+                            # Vérifier que la règle P,BRUT > P,NET est respectée
+                            if new_pbrut > dum['pnet_value']:
+                                # Mettre à jour dans Excel
+                                ws[dum['pbrut_cell']] = new_pbrut
+                                
+                                adjusted_dums.append({
+                                    'dum_number': dum['dum_number'],
+                                    'cell': dum['pbrut_cell'],
+                                    'old_value': dum['pbrut_value'],
+                                    'new_value': new_pbrut,
+                                    'subtracted': can_subtract
+                                })
+                                
+                                print(f"         ✓ DUM {dum['dum_number']} ({dum['pbrut_cell']}): {dum['pbrut_value']} → {new_pbrut} kg (-{can_subtract} kg)")
+                                print(f"            Règle respectée: P,NET={dum['pnet_value']} < P,BRUT={new_pbrut} (marge: {round(new_pbrut - dum['pnet_value'], 2)} kg)")
+                                
+                                remaining_to_subtract = round(remaining_to_subtract - can_subtract, 2)
+                                dum['pbrut_value'] = new_pbrut  # Mettre à jour pour le calcul final
+                                continue
+                    
+                    # Cas normal : vérifier la marge disponible
                     if available_margin > 0.01:
                         # On peut soustraire de ce DUM (en gardant P,BRUT > P,NET)
                         can_subtract = min(available_margin, remaining_to_subtract)
