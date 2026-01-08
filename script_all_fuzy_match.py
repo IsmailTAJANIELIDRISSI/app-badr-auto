@@ -173,22 +173,17 @@ def setup_gemini_api():
     
     try:
         if USE_NEW_API:
-            # New API: use Client
+            # New API (google.genai): use Client
+            # The new API doesn't require getting a model object first
+            # Just create the client and use client.models.generate_content(model='name', contents='...')
             GENAI_CLIENT = genai_new.Client(api_key=api_key)
-            # Get the model from the client
-            try:
-                GENAI_MODEL = GENAI_CLIENT.models.get('gemini-2.0-flash-exp')
-            except:
-                # Fallback to other model names
-                try:
-                    GENAI_MODEL = GENAI_CLIENT.models.get('gemini-1.5-flash')
-                except:
-                    GENAI_MODEL = GENAI_CLIENT.models.get('gemini-1.0-pro')
-            logger.info("Gemini API (new) configured successfully")
+            # Set default model name (no need to get model object)
+            GENAI_MODEL = 'gemini-2.0-flash'  # or 'gemini-2.5-flash' for latest
+            logger.info(f"Gemini API (new google.genai) configured successfully with model: {GENAI_MODEL}")
         else:
-            # Old API: use configure
+            # Old API (google.generativeai): use configure
             genai.configure(api_key=api_key)
-            logger.info("Gemini API (old) configured successfully")
+            logger.info("Gemini API (old google.generativeai) configured successfully")
         return True
     except Exception as e:
         logger.error(f"Error configuring Gemini API: {e}")
@@ -252,40 +247,24 @@ CRITICAL INSTRUCTIONS:
 """
         # Use appropriate API based on what's available
         if USE_NEW_API and GENAI_CLIENT:
-            # New API: use client to generate content
-            # Try different model names and API methods
-            model_names = ['gemini-2.0-flash-exp', 'gemini-1.5-flash', 'gemini-1.0-pro']
+            # New API (google.genai): use client.models.generate_content()
+            # Model names to try in order of preference
+            model_names = ['gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-1.5-flash']
             response = None
             last_error = None
             
             for model_name in model_names:
                 try:
-                    # Try method 1: client.models.generate_content()
-                    if hasattr(GENAI_CLIENT, 'models') and hasattr(GENAI_CLIENT.models, 'generate_content'):
-                        response = GENAI_CLIENT.models.generate_content(
-                            model=model_name,
-                            contents=prompt
-                        )
-                        break
-                except Exception as e1:
-                    last_error = e1
-                    try:
-                        # Try method 2: get model then generate
-                        model = GENAI_CLIENT.models.get(model_name)
-                        response = model.generate_content(contents=prompt)
-                        break
-                    except Exception as e2:
-                        last_error = e2
-                        try:
-                            # Try method 3: direct client call
-                            response = GENAI_CLIENT.generate_content(
-                                model=model_name,
-                                prompt=prompt
-                            )
-                            break
-                        except Exception as e3:
-                            last_error = e3
-                            continue
+                    # New google.genai API: client.models.generate_content(model='name', contents='...')
+                    response = GENAI_CLIENT.models.generate_content(
+                        model=model_name,
+                        contents=prompt
+                    )
+                    break
+                except Exception as e:
+                    last_error = e
+                    logger.debug(f"Model {model_name} failed: {e}")
+                    continue
             
             if response is None:
                 raise Exception(f"Failed to generate content with new API: {last_error}")
