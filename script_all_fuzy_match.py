@@ -20,7 +20,11 @@ import subprocess
 import tempfile
 from PyPDF2 import PdfReader, PdfWriter
 import difflib
-import google.generativeai as genai
+try:
+    import google.genai as genai
+except ImportError:
+    # Fallback to deprecated package if new one not available
+    import google.generativeai as genai
 import time
 import sys
 import json
@@ -218,10 +222,20 @@ CRITICAL INSTRUCTIONS:
 }}
 """
         response = model.generate_content(prompt)
-        logger.info(f"Gemini API response for candidates: {response.text}")
+        # Handle both new and old API response formats
+        if hasattr(response, 'text'):
+            response_text_raw = response.text
+        elif hasattr(response, 'candidates') and response.candidates:
+            # New API format: response.candidates[0].content.parts[0].text
+            response_text_raw = response.candidates[0].content.parts[0].text
+        else:
+            # Try to get text from response object directly
+            response_text_raw = str(response)
+        
+        logger.info(f"Gemini API response for candidates: {response_text_raw[:200]}...")
         # Parse JSON response
         try:
-            response_text = response.text.strip()
+            response_text = response_text_raw.strip()
             if response_text.startswith('```json'):
                 start = response_text.find('{')
                 end = response_text.rfind('}') + 1
@@ -247,7 +261,9 @@ CRITICAL INSTRUCTIONS:
             return result
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse Gemini response as JSON: {e}")
-            logger.error(f"Response text: {response.text[:200]}...")
+            # Get response text for error logging
+            error_text = response_text_raw if 'response_text_raw' in locals() else str(response)
+            logger.error(f"Response text: {error_text[:200]}...")
             return {
                 "reasoning": "JSON parse error",
                 "matched_company": None,
