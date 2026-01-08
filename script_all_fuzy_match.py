@@ -20,11 +20,22 @@ import subprocess
 import tempfile
 from PyPDF2 import PdfReader, PdfWriter
 import difflib
+# Try to import new API first, then fallback to old API
+GENAI_CLIENT = None
+GENAI_MODEL = None
+USE_NEW_API = False
+
 try:
-    import google.genai as genai
+    import google.genai as genai_new
+    USE_NEW_API = True
 except ImportError:
-    # Fallback to deprecated package if new one not available
-    import google.generativeai as genai
+    try:
+        import google.generativeai as genai_old
+        genai = genai_old
+        USE_NEW_API = False
+    except ImportError:
+        genai = None
+        USE_NEW_API = False
 import time
 import sys
 import json
@@ -151,6 +162,8 @@ def add_company_to_database(company_name):
 
 def setup_gemini_api():
     """Setup Gemini API with API key from environment or prompt user"""
+    global GENAI_CLIENT, GENAI_MODEL, USE_NEW_API
+    
     api_key = os.getenv('GEMINI_API_KEY')
     if not api_key:
         logger.warning("GEMINI_API_KEY not found in environment variables")
@@ -159,8 +172,23 @@ def setup_gemini_api():
         return False
     
     try:
-        genai.configure(api_key=api_key)
-        logger.info("Gemini API configured successfully")
+        if USE_NEW_API:
+            # New API: use Client
+            GENAI_CLIENT = genai_new.Client(api_key=api_key)
+            # Get the model from the client
+            try:
+                GENAI_MODEL = GENAI_CLIENT.models.get('gemini-2.0-flash-exp')
+            except:
+                # Fallback to other model names
+                try:
+                    GENAI_MODEL = GENAI_CLIENT.models.get('gemini-1.5-flash')
+                except:
+                    GENAI_MODEL = GENAI_CLIENT.models.get('gemini-1.0-pro')
+            logger.info("Gemini API (new) configured successfully")
+        else:
+            # Old API: use configure
+            genai.configure(api_key=api_key)
+            logger.info("Gemini API (old) configured successfully")
         return True
     except Exception as e:
         logger.error(f"Error configuring Gemini API: {e}")
@@ -168,8 +196,9 @@ def setup_gemini_api():
 
 def verify_shipper_with_gemini(extracted_name, database_companies):
     """Use Gemini AI to select the best company name from candidates and database"""
+    global GENAI_CLIENT, GENAI_MODEL, USE_NEW_API
+    
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash')
         # Accept either a single string or a list of candidates
         if isinstance(extracted_name, list):
             candidates = extracted_name
@@ -221,16 +250,78 @@ CRITICAL INSTRUCTIONS:
     "final_name": "the final cleaned company name (with OCR errors corrected)"
 }}
 """
-        response = model.generate_content(prompt)
-        # Handle both new and old API response formats
-        if hasattr(response, 'text'):
-            response_text_raw = response.text
-        elif hasattr(response, 'candidates') and response.candidates:
-            # New API format: response.candidates[0].content.parts[0].text
-            response_text_raw = response.candidates[0].content.parts[0].text
+        # Use appropriate API based on what's available
+        if USE_NEW_API and GENAI_CLIENT:
+            # New API: use client to generate content
+            # Try different model names and API methods
+            model_names = ['gemini-2.0-flash-exp', 'gemini-1.5-flash', 'gemini-1.0-pro']
+            response = None
+            last_error = None
+            
+            for model_name in model_names:
+                try:
+                    # Try method 1: client.models.generate_content()
+                    if hasattr(GENAI_CLIENT, 'models') and hasattr(GENAI_CLIENT.models, 'generate_content'):
+                        response = GENAI_CLIENT.models.generate_content(
+                            model=model_name,
+                            contents=prompt
+                        )
+                        break
+                except Exception as e1:
+                    last_error = e1
+                    try:
+                        # Try method 2: get model then generate
+                        model = GENAI_CLIENT.models.get(model_name)
+                        response = model.generate_content(contents=prompt)
+                        break
+                    except Exception as e2:
+                        last_error = e2
+                        try:
+                            # Try method 3: direct client call
+                            response = GENAI_CLIENT.generate_content(
+                                model=model_name,
+                                prompt=prompt
+                            )
+                            break
+                        except Exception as e3:
+                            last_error = e3
+                            continue
+            
+            if response is None:
+                raise Exception(f"Failed to generate content with new API: {last_error}")
+            
+            # New API response format - try multiple ways to extract text
+            response_text_raw = None
+            if hasattr(response, 'text'):
+                response_text_raw = response.text
+            elif hasattr(response, 'candidates') and response.candidates:
+                # Extract text from candidates
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'content'):
+                    if hasattr(candidate.content, 'parts') and candidate.content.parts:
+                        response_text_raw = candidate.content.parts[0].text
+                    else:
+                        response_text_raw = str(candidate.content)
+                else:
+                    response_text_raw = str(candidate)
+            elif hasattr(response, 'content'):
+                if hasattr(response.content, 'parts') and response.content.parts:
+                    response_text_raw = response.content.parts[0].text
+                else:
+                    response_text_raw = str(response.content)
+            else:
+                response_text_raw = str(response)
         else:
-            # Try to get text from response object directly
-            response_text_raw = str(response)
+            # Old API: use GenerativeModel
+            if genai is None:
+                raise Exception("Neither google.genai nor google.generativeai is available")
+            model = genai.GenerativeModel('gemini-2.0-flash-exp')
+            response = model.generate_content(prompt)
+            # Old API response format
+            if hasattr(response, 'text'):
+                response_text_raw = response.text
+            else:
+                response_text_raw = str(response)
         
         logger.info(f"Gemini API response for candidates: {response_text_raw[:200]}...")
         # Parse JSON response
