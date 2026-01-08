@@ -130,19 +130,69 @@ def get_free_port():
         port = s.getsockname()[1]
     return port
 
+def force_kill_edge_processes():
+    """Force la fermeture de tous les processus Edge avec vérification"""
+    try:
+        # Tuer tous les processus Edge
+        os.system("taskkill /F /IM msedge.exe >nul 2>&1")
+        time.sleep(1)
+        
+        # Vérifier avec psutil que tous les processus sont terminés
+        max_attempts = 5
+        for attempt in range(max_attempts):
+            edge_processes = [p for p in psutil.process_iter(['pid', 'name']) 
+                             if 'msedge' in p.info['name'].lower()]
+            if not edge_processes:
+                break
+            if attempt < max_attempts - 1:
+                time.sleep(1)
+                os.system("taskkill /F /IM msedge.exe >nul 2>&1")
+        
+        if edge_processes:
+            print(f"⚠️  {len(edge_processes)} processus Edge encore actifs après {max_attempts} tentatives")
+        else:
+            print("✓ Tous les processus Edge fermés")
+    except Exception as e:
+        print(f"⚠️  Erreur lors de la fermeture des processus Edge: {e}")
+
 def cleanup_old_profiles():
-    """Nettoie les anciens profils temporaires (optionnel)"""
+    """Nettoie les anciens profils temporaires avec gestion des fichiers verrouillés"""
     temp_dir = os.environ['TEMP']
     try:
         for item in os.listdir(temp_dir):
             if item.startswith("selenium_edge_temp_"):
                 old_profile = os.path.join(temp_dir, item)
-                try:
-                    shutil.rmtree(old_profile)
-                    print(f"🧹 Nettoyé: {item}")
-                except:
-                    pass
-    except:
+                # Essayer de supprimer avec retries
+                max_retries = 3
+                for retry in range(max_retries):
+                    try:
+                        # Vérifier si des processus Edge utilisent encore ce profil
+                        edge_processes = [p for p in psutil.process_iter(['pid', 'name', 'exe']) 
+                                         if 'msedge' in p.info['name'].lower()]
+                        if edge_processes:
+                            # Attendre un peu plus si des processus sont encore actifs
+                            time.sleep(2)
+                        
+                        shutil.rmtree(old_profile)
+                        print(f"🧹 Nettoyé: {item}")
+                        break
+                    except PermissionError as e:
+                        if retry < max_retries - 1:
+                            # Fichier verrouillé, attendre et réessayer
+                            time.sleep(2)
+                            # Essayer de tuer les processus Edge qui pourraient verrouiller le fichier
+                            force_kill_edge_processes()
+                        else:
+                            # Dernière tentative échouée, ignorer silencieusement
+                            pass
+                    except Exception as e:
+                        # Autre erreur, ignorer après la dernière tentative
+                        if retry == max_retries - 1:
+                            pass
+                        else:
+                            time.sleep(1)
+    except Exception as e:
+        # Ignorer les erreurs de listing
         pass
 
 def parse_lta_file(lta_file_path):
@@ -298,7 +348,7 @@ def start_fresh_edge():
         edge_path = EDGE_PATH
     
     print("🔄 Fermeture des instances Edge existantes...")
-    os.system("taskkill /F /IM msedge.exe >nul 2>&1")
+    force_kill_edge_processes()
     time.sleep(2)
     
     cleanup_old_profiles()
@@ -325,9 +375,30 @@ def start_fresh_edge():
     return profile_path, debug_port
 
 def connect_to_edge(debug_port):
-    """Se connecte à l'instance Edge lancée"""
+    """Se connecte à l'instance Edge lancée avec vérifications"""
     
     try:
+        # Vérifier que le port de debug est accessible
+        max_connection_attempts = 3
+        for attempt in range(max_connection_attempts):
+            try:
+                # Tester la connexion au port de debug
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(2)
+                result = sock.connect_ex(('localhost', debug_port))
+                sock.close()
+                if result == 0:
+                    break
+            except:
+                pass
+            
+            if attempt < max_connection_attempts - 1:
+                print(f"   ⏳ Attente du port de debug... (tentative {attempt + 1}/{max_connection_attempts})")
+                time.sleep(2)
+            else:
+                print(f"❌ Port de debug {debug_port} non accessible après {max_connection_attempts} tentatives")
+                return None
+        
         edge_options = Options()
         edge_options.add_experimental_option("debuggerAddress", f"localhost:{debug_port}")
         
@@ -346,7 +417,17 @@ def connect_to_edge(debug_port):
         print("🔗 Connexion à Edge...")
         driver = webdriver.Edge(service=service, options=edge_options)
         
-        print("✓ Connecté avec succès !")
+        # Vérifier que la fenêtre est toujours ouverte
+        try:
+            driver.current_window_handle
+            print("✓ Connecté avec succès !")
+        except Exception as e:
+            print(f"❌ Fenêtre Edge fermée immédiatement après connexion: {e}")
+            try:
+                driver.quit()
+            except:
+                pass
+            return None
         
         return driver
         
@@ -357,10 +438,27 @@ def connect_to_edge(debug_port):
 def navigate_and_login(driver):
     """Navigue vers le site et effectue la connexion"""
     try:
+        # Vérifier que la fenêtre est toujours ouverte avant de naviguer
+        try:
+            driver.current_window_handle
+        except Exception as e:
+            print(f"❌ Erreur lors de la connexion: {e}")
+            return False
+        
         print("🌐 Navigation vers le site BADR...")
-        driver.get("https://badr.douane.gov.ma:40444/badr/Login")
-        print("✓ Navigation réussie !")
-        print(f"📄 Titre: {driver.title}")
+        try:
+            driver.get("https://badr.douane.gov.ma:40444/badr/Login")
+            print("✓ Navigation réussie !")
+            print(f"📄 Titre: {driver.title}")
+        except Exception as e:
+            # Vérifier si la fenêtre est toujours ouverte
+            try:
+                driver.current_window_handle
+                print(f"⚠️  Erreur de navigation (fenêtre toujours ouverte): {e}")
+                return False
+            except:
+                print(f"❌ Erreur lors de la connexion: Message: no such window: target window already closed")
+                return False
         
         wait = WebDriverWait(driver, 10)
         
@@ -10074,13 +10172,40 @@ if __name__ == "__main__":
             
             # Nettoyer le profil temporaire après fermeture
             try:
-                driver.quit()
-                time.sleep(1)
+                # Fermer le driver proprement
+                try:
+                    driver.quit()
+                except:
+                    pass
+                
+                # Attendre que tous les processus Edge soient terminés
+                print("🔄 Fermeture des processus Edge...")
+                force_kill_edge_processes()
+                time.sleep(2)
+                
+                # Supprimer le profil avec retries
                 if os.path.exists(profile_path):
-                    shutil.rmtree(profile_path)
-                    print(f"🧹 Profil temporaire supprimé")
+                    max_retries = 3
+                    for retry in range(max_retries):
+                        try:
+                            shutil.rmtree(profile_path)
+                            print(f"🧹 Profil temporaire supprimé")
+                            break
+                        except PermissionError as e:
+                            if retry < max_retries - 1:
+                                print(f"   ⏳ Fichier verrouillé, nouvelle tentative dans 2s... ({retry + 1}/{max_retries})")
+                                time.sleep(2)
+                                # Forcer la fermeture des processus Edge restants
+                                force_kill_edge_processes()
+                            else:
+                                print(f"⚠️  Impossible de supprimer le profil: {e}")
+                        except Exception as e:
+                            if retry == max_retries - 1:
+                                print(f"⚠️  Impossible de supprimer le profil: {e}")
+                            else:
+                                time.sleep(1)
             except Exception as e:
-                print(f"⚠️  Impossible de supprimer le profil: {e}")
+                print(f"⚠️  Erreur lors du nettoyage: {e}")
             
             print("✓ Script terminé")
         else:
