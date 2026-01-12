@@ -195,6 +195,59 @@ def cleanup_old_profiles():
         # Ignorer les erreurs de listing
         pass
 
+def find_exact_sheet_file(lta_folder_path, sheet_name):
+    """
+    Trouve le fichier Excel Sheet correspondant exactement au sheet_name
+    (évite de matcher "Sheet 10" quand on cherche "Sheet 1")
+    
+    Args:
+        lta_folder_path: Chemin du dossier LTA
+        sheet_name: Nom du sheet (e.g., "Sheet 1", "Sheet 2")
+    
+    Returns:
+        Chemin complet du fichier si trouvé, None sinon
+    """
+    try:
+        # Extraire le numéro exact du sheet (e.g., "Sheet 1" -> 1, "Sheet 10" -> 10)
+        match = re.search(r'Sheet\s+(\d+)', sheet_name)
+        if not match:
+            # Fallback: essayer de prendre le dernier mot comme numéro
+            parts = sheet_name.split()
+            if parts and parts[-1].isdigit():
+                sheet_number = int(parts[-1])
+            else:
+                print(f"      ⚠️  Impossible d'extraire le numéro de '{sheet_name}'")
+                return None
+        else:
+            sheet_number = int(match.group(1))
+        
+        # Lister tous les fichiers Sheet*.xlsx dans le dossier
+        all_sheet_files = glob.glob(os.path.join(lta_folder_path, "Sheet *.xlsx"))
+        
+        # Filtrer pour trouver ceux qui correspondent exactement au numéro
+        exact_matches = []
+        for file_path in all_sheet_files:
+            filename = os.path.basename(file_path)
+            # Extraire le numéro du nom de fichier (e.g., "Sheet 1.xlsx" -> 1, "Sheet 10 (44).xlsx" -> 10)
+            file_match = re.search(r'Sheet\s+(\d+)', filename)
+            if file_match:
+                file_number = int(file_match.group(1))
+                if file_number == sheet_number:
+                    exact_matches.append(file_path)
+        
+        if exact_matches:
+            # Si plusieurs fichiers correspondent (e.g., "Sheet 1.xlsx" et "Sheet 1 (44).xlsx"),
+            # préférer celui sans parenthèses, ou celui avec le nom le plus simple
+            if len(exact_matches) > 1:
+                # Trier par longueur de nom (plus court = plus simple = préféré)
+                exact_matches.sort(key=lambda x: (len(os.path.basename(x)), os.path.basename(x)))
+            return exact_matches[0]
+        
+        return None
+    except Exception as e:
+        print(f"      ⚠️  Erreur recherche fichier Sheet: {e}")
+        return None
+
 def parse_lta_file(lta_file_path):
     """
     Parse un fichier [X]er LTA.txt et extrait les données structurées.
@@ -6373,21 +6426,15 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         # ==================================================================
         print(f"\n   📤 Upload du fichier Excel pour {dum_data.get('sheet_name', 'DUM')}...")
         
-        # Trouver le fichier Sheet correspondant dans le dossier LTA
+        # Trouver le fichier Sheet correspondant dans le dossier LTA (recherche exacte)
         sheet_name = dum_data.get('sheet_name', '')
         
-        # Recherche du fichier avec pattern: "Sheet 1 - *.xlsx", "Sheet 2 - *.xlsx", etc.
-        sheet_pattern = os.path.join(lta_folder_path, f"{sheet_name} - *.xlsx")
-        matching_files = glob.glob(sheet_pattern)
+        # Utiliser la fonction helper pour recherche exacte (évite de matcher "Sheet 10" pour "Sheet 1")
+        sheet_file_path = find_exact_sheet_file(lta_folder_path, sheet_name)
         
-        if not matching_files:
-            # Fallback: essayer sans le tiret
-            sheet_pattern = os.path.join(lta_folder_path, f"{sheet_name}*.xlsx")
-            matching_files = glob.glob(sheet_pattern)
-        
-        if not matching_files:
+        if not sheet_file_path:
             print(f"      ❌ Fichier Excel introuvable pour {sheet_name}")
-            print(f"         Pattern recherché: {sheet_pattern}")
+            print(f"         Recherche exacte: Sheet avec numéro correspondant à '{sheet_name}'")
             
             # NETTOYAGE: Retourner à l'accueil avant de quitter
             print("\n   🏠 Nettoyage: Retour à l'accueil...")
@@ -6403,7 +6450,6 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             
             return False
         
-        sheet_file_path = matching_files[0]  # Prendre le premier fichier trouvé
         print(f"      ✓ Fichier trouvé: {os.path.basename(sheet_file_path)}")
         
         # Upload du fichier
@@ -7912,9 +7958,15 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         # ==================================================================
         print("\n   📤 Upload 2/2: Document MN pour ce DUM...")
         
-        # Extraire le numéro du DUM depuis sheet_name (e.g., "Sheet 1" -> "1")
+        # Extraire le numéro du DUM depuis sheet_name (e.g., "Sheet 1" -> "1", "Sheet 10" -> "10")
+        # Utiliser regex pour extraction exacte (évite erreurs si format change)
         sheet_name = dum_data.get('sheet_name', '')
-        dum_number = sheet_name.split()[-1] if sheet_name.startswith('Sheet') else '1'
+        match = re.search(r'Sheet\s+(\d+)', sheet_name)
+        if match:
+            dum_number = match.group(1)  # Numéro exact extrait (e.g., "1", "10")
+        else:
+            # Fallback: essayer split (moins robuste mais compatible avec anciens formats)
+            dum_number = sheet_name.split()[-1] if sheet_name.startswith('Sheet') else '1'
         mn_reference = f"mn{dum_number}"
         mn_filename = f"mn{dum_number}.pdf"
         
