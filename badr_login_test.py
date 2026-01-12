@@ -1312,17 +1312,7 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
                 )
                 nouveau_lot_btn.click()
                 print(f"      ✓ Bouton 'Nouveau' cliqué")
-                # Attendre que le formulaire soit complètement chargé
-                time.sleep(3)  # Augmenté de 2 à 3 secondes
-                # Attendre que le champ référence soit présent (avec timeout plus long)
-                try:
-                    wait.until(
-                        EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'referenceLot_IT_id')]"))
-                    )
-                    time.sleep(1)  # Délai supplémentaire pour stabilisation
-                except:
-                    print(f"      ⚠️  Champ référence pas encore visible, on continue quand même...")
-                    time.sleep(2)  # Attendre un peu plus si le champ n'est pas encore là
+                time.sleep(2)
             except Exception as e:
                 print(f"      ❌ Erreur clic 'Nouveau': {e}")
                 return_to_home_after_error(driver)
@@ -1330,17 +1320,101 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
             
             # MED.6.2: Remplir l'en-tête du lot
             
-            # Référence: {lta_reference}/N (toujours ajouter /N, ne jamais remplacer)
+            # Référence: {lta_reference}/N (toujours ajouter /N, ne jamais remplacer) - avec retry et robustesse
             try:
                 # Toujours ajouter /N à la fin
                 # "235-94908936/1" → "235-94908936/1/2" pour DUM 2
                 # "23594908936" → "23594908936/2" pour DUM 2
                 lot_reference = f"{lta_reference_existing}/{dum_index}"
                 
-                if fill_reference_lot_field_robust(driver, wait, lot_reference):
-                    print(f"      ✓ Référence: {lot_reference}")
-                else:
-                    raise Exception("Échec après plusieurs tentatives")
+                # Attendre que le blocker UI disparaisse après le clic "Nouveau"
+                wait_for_ui_blocker_disappear(driver, timeout=10)
+                time.sleep(0.5)
+                
+                # Retry avec plusieurs tentatives pour saisir la référence
+                reference_entered = False
+                max_ref_attempts = 5
+                
+                for ref_attempt in range(max_ref_attempts):
+                    try:
+                        if ref_attempt > 0:
+                            print(f"         🔄 Tentative saisie référence {ref_attempt + 1}/{max_ref_attempts}...")
+                            time.sleep(1)
+                            wait_for_ui_blocker_disappear(driver, timeout=5)
+                        
+                        # Attendre que le champ soit présent ET interactable
+                        ref_lot_input = wait.until(
+                            EC.element_to_be_clickable((By.XPATH, "//input[contains(@name, 'referenceLot_IT_id')]"))
+                        )
+                        
+                        # Vérifier que le champ est visible et enabled
+                        if not ref_lot_input.is_displayed():
+                            raise Exception("Champ référence non visible")
+                        if not ref_lot_input.is_enabled():
+                            raise Exception("Champ référence non activé")
+                        
+                        # Scroll vers l'élément pour s'assurer qu'il est visible
+                        driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", ref_lot_input)
+                        time.sleep(0.3)
+                        
+                        # Attendre que le blocker disparaisse avant de saisir
+                        wait_for_ui_blocker_disappear(driver, timeout=3)
+                        
+                        # Essayer de saisir avec Selenium
+                        try:
+                            ref_lot_input.clear()
+                            time.sleep(0.2)
+                            ref_lot_input.send_keys(lot_reference)
+                            
+                            # Vérifier que la valeur a été saisie correctement
+                            entered_value = ref_lot_input.get_attribute("value")
+                            if entered_value and lot_reference in entered_value:
+                                print(f"      ✓ Référence: {lot_reference} (vérifiée)")
+                                reference_entered = True
+                                break
+                            else:
+                                print(f"         ⚠️  Valeur saisie incorrecte: '{entered_value}' au lieu de '{lot_reference}'")
+                                if ref_attempt < max_ref_attempts - 1:
+                                    continue
+                        except Exception as selenium_err:
+                            if ref_attempt < max_ref_attempts - 1:
+                                print(f"         ⚠️  Saisie Selenium échouée: {selenium_err}")
+                                # Essayer avec JavaScript comme fallback
+                                try:
+                                    driver.execute_script("""
+                                        var input = arguments[0];
+                                        input.value = arguments[1];
+                                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                                    """, ref_lot_input, lot_reference)
+                                    
+                                    # Vérifier la valeur
+                                    entered_value = ref_lot_input.get_attribute("value")
+                                    if entered_value and lot_reference in entered_value:
+                                        print(f"      ✓ Référence: {lot_reference} (via JavaScript)")
+                                        reference_entered = True
+                                        break
+                                except Exception as js_err:
+                                    if ref_attempt < max_ref_attempts - 1:
+                                        print(f"         ⚠️  JavaScript fallback échoué: {js_err}")
+                                        continue
+                                    else:
+                                        raise js_err
+                            else:
+                                raise selenium_err
+                                
+                    except Exception as e:
+                        if ref_attempt < max_ref_attempts - 1:
+                            print(f"         ⚠️  Tentative {ref_attempt + 1} échouée: {e}")
+                            time.sleep(1)
+                        else:
+                            print(f"      ❌ Erreur saisie référence après {max_ref_attempts} tentatives: {e}")
+                            raise
+                
+                if not reference_entered:
+                    raise Exception(f"Impossible de saisir la référence après {max_ref_attempts} tentatives")
+                
+                time.sleep(0.5)
             except Exception as e:
                 print(f"      ❌ Erreur saisie référence: {e}")
                 return_to_home_after_error(driver)
@@ -2129,109 +2203,6 @@ def correct_blocage_weights(lta_folder_path, corrected_weight):
         print(f"      ❌ Erreur correction blocage: {e}")
         traceback.print_exc()
         return False
-
-def fill_reference_lot_field_robust(driver, wait, lot_reference, max_retries=3, wait_timeout=15):
-    """
-    Remplit le champ référence lot de manière robuste avec plusieurs stratégies.
-    
-    Args:
-        driver: WebDriver instance
-        wait: WebDriverWait instance
-        lot_reference: La référence à saisir
-        max_retries: Nombre de tentatives maximum
-        wait_timeout: Timeout pour chaque tentative
-    
-    Returns:
-        bool: True si succès, False sinon
-    """
-    xpath = "//input[contains(@name, 'referenceLot_IT_id')]"
-    
-    for attempt in range(1, max_retries + 1):
-        try:
-            # Stratégie 1: Attendre que l'élément soit visible et interactable
-            try:
-                ref_lot_input = wait.until(
-                    EC.visibility_of_element_located((By.XPATH, xpath))
-                )
-            except:
-                # Si visibility échoue, essayer presence puis vérifier manuellement
-                ref_lot_input = wait.until(
-                    EC.presence_of_element_located((By.XPATH, xpath))
-                )
-                # Vérifier que l'élément est visible et enabled
-                if not ref_lot_input.is_displayed():
-                    raise Exception("Element not displayed")
-                if not ref_lot_input.is_enabled():
-                    raise Exception("Element not enabled")
-            
-            # Scroll vers l'élément pour s'assurer qu'il est visible
-            driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", ref_lot_input)
-            time.sleep(0.3)  # Petit délai après scroll
-            
-            # Attendre un peu que l'élément soit stable
-            time.sleep(0.5)
-            
-            # Stratégie 2a: Essayer avec clear() et send_keys() normal
-            try:
-                ref_lot_input.clear()
-                time.sleep(0.2)
-                ref_lot_input.send_keys(lot_reference)
-                time.sleep(0.3)
-                
-                # Vérifier que la valeur a bien été saisie
-                actual_value = ref_lot_input.get_attribute("value")
-                if actual_value == lot_reference or actual_value.upper() == lot_reference.upper():
-                    return True
-                else:
-                    print(f"      ⚠️  Tentative {attempt}: Valeur saisie incorrecte (attendu: {lot_reference}, obtenu: {actual_value})")
-                    if attempt < max_retries:
-                        time.sleep(1)
-                        continue
-            except Exception as e1:
-                print(f"      ⚠️  Tentative {attempt}: Erreur avec send_keys(): {e1}")
-                
-                # Stratégie 2b: Essayer avec JavaScript
-                try:
-                    driver.execute_script("arguments[0].value = '';", ref_lot_input)
-                    driver.execute_script("arguments[0].value = arguments[1];", ref_lot_input, lot_reference)
-                    # Déclencher les événements pour que le framework détecte le changement
-                    driver.execute_script("""
-                        var element = arguments[0];
-                        var value = arguments[1];
-                        element.value = value;
-                        element.dispatchEvent(new Event('input', { bubbles: true }));
-                        element.dispatchEvent(new Event('change', { bubbles: true }));
-                    """, ref_lot_input, lot_reference)
-                    time.sleep(0.5)
-                    
-                    # Vérifier que la valeur a bien été saisie
-                    actual_value = ref_lot_input.get_attribute("value")
-                    if actual_value == lot_reference or actual_value.upper() == lot_reference.upper():
-                        return True
-                    else:
-                        print(f"      ⚠️  Tentative {attempt}: Valeur JS incorrecte (attendu: {lot_reference}, obtenu: {actual_value})")
-                        if attempt < max_retries:
-                            time.sleep(1)
-                            continue
-                except Exception as e2:
-                    print(f"      ⚠️  Tentative {attempt}: Erreur avec JavaScript: {e2}")
-                    if attempt < max_retries:
-                        time.sleep(1)
-                        continue
-            
-            # Si on arrive ici, on a réussi
-            return True
-            
-        except Exception as e:
-            print(f"      ⚠️  Tentative {attempt}/{max_retries} échouée: {e}")
-            if attempt < max_retries:
-                # Attendre un peu plus longtemps avant de réessayer
-                time.sleep(1 + attempt * 0.5)
-            else:
-                # Dernière tentative échouée
-                return False
-    
-    return False
 
 def wait_for_ui_blocker_disappear(driver, timeout=10):
     """
@@ -3937,17 +3908,7 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                 )
                 nouveau_lot_btn.click()
                 print(f"      ✓ Bouton 'Nouveau' lot cliqué")
-                # Attendre que le formulaire soit complètement chargé
-                time.sleep(3)  # Augmenté de 2 à 3 secondes
-                # Attendre que le champ référence soit présent (avec timeout plus long)
-                try:
-                    wait.until(
-                        EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'referenceLot_IT_id')]"))
-                    )
-                    time.sleep(1)  # Délai supplémentaire pour stabilisation
-                except:
-                    print(f"      ⚠️  Champ référence pas encore visible, on continue quand même...")
-                    time.sleep(2)  # Attendre un peu plus si le champ n'est pas encore là
+                time.sleep(2)
             except Exception as e:
                 print(f"      ❌ Erreur clic 'Nouveau' lot: {e}")
                 driver.switch_to.default_content()
@@ -3958,7 +3919,7 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
             # ÉTAPE ED.10.2: Remplir les informations d'en-tête du lot
             # ==================================================================
             
-            # ED.10.2a: Référence du lot (LTA ref + /N)
+            # ED.10.2a: Référence du lot (LTA ref + /N) - avec retry et robustesse
             try:
                 # Construire la référence: ajouter /dum_index à la référence LTA validée
                 # Tous les cas: simplement ajouter /N à la fin
@@ -3973,10 +3934,94 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                 else:
                     lot_reference = f"{lta_reference_clean}/{dum_index}"
                 
-                if fill_reference_lot_field_robust(driver, wait, lot_reference):
-                    print(f"      ✓ Référence lot: {lot_reference}")
-                else:
-                    raise Exception("Échec après plusieurs tentatives")
+                # Attendre que le blocker UI disparaisse après le clic "Nouveau"
+                wait_for_ui_blocker_disappear(driver, timeout=10)
+                time.sleep(0.5)
+                
+                # Retry avec plusieurs tentatives pour saisir la référence
+                reference_entered = False
+                max_ref_attempts = 5
+                
+                for ref_attempt in range(max_ref_attempts):
+                    try:
+                        if ref_attempt > 0:
+                            print(f"         🔄 Tentative saisie référence {ref_attempt + 1}/{max_ref_attempts}...")
+                            time.sleep(1)
+                            wait_for_ui_blocker_disappear(driver, timeout=5)
+                        
+                        # Attendre que le champ soit présent ET interactable
+                        ref_lot_input = wait.until(
+                            EC.element_to_be_clickable((By.XPATH, "//input[contains(@name, 'referenceLot_IT_id')]"))
+                        )
+                        
+                        # Vérifier que le champ est visible et enabled
+                        if not ref_lot_input.is_displayed():
+                            raise Exception("Champ référence non visible")
+                        if not ref_lot_input.is_enabled():
+                            raise Exception("Champ référence non activé")
+                        
+                        # Scroll vers l'élément pour s'assurer qu'il est visible
+                        driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", ref_lot_input)
+                        time.sleep(0.3)
+                        
+                        # Attendre que le blocker disparaisse avant de saisir
+                        wait_for_ui_blocker_disappear(driver, timeout=3)
+                        
+                        # Essayer de saisir avec Selenium
+                        try:
+                            ref_lot_input.clear()
+                            time.sleep(0.2)
+                            ref_lot_input.send_keys(lot_reference)
+                            
+                            # Vérifier que la valeur a été saisie correctement
+                            entered_value = ref_lot_input.get_attribute("value")
+                            if entered_value and lot_reference in entered_value:
+                                print(f"      ✓ Référence lot: {lot_reference} (vérifiée)")
+                                reference_entered = True
+                                break
+                            else:
+                                print(f"         ⚠️  Valeur saisie incorrecte: '{entered_value}' au lieu de '{lot_reference}'")
+                                if ref_attempt < max_ref_attempts - 1:
+                                    continue
+                        except Exception as selenium_err:
+                            if ref_attempt < max_ref_attempts - 1:
+                                print(f"         ⚠️  Saisie Selenium échouée: {selenium_err}")
+                                # Essayer avec JavaScript comme fallback
+                                try:
+                                    driver.execute_script("""
+                                        var input = arguments[0];
+                                        input.value = arguments[1];
+                                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                                    """, ref_lot_input, lot_reference)
+                                    
+                                    # Vérifier la valeur
+                                    entered_value = ref_lot_input.get_attribute("value")
+                                    if entered_value and lot_reference in entered_value:
+                                        print(f"      ✓ Référence lot: {lot_reference} (via JavaScript)")
+                                        reference_entered = True
+                                        break
+                                except Exception as js_err:
+                                    if ref_attempt < max_ref_attempts - 1:
+                                        print(f"         ⚠️  JavaScript fallback échoué: {js_err}")
+                                        continue
+                                    else:
+                                        raise js_err
+                            else:
+                                raise selenium_err
+                                
+                    except Exception as e:
+                        if ref_attempt < max_ref_attempts - 1:
+                            print(f"         ⚠️  Tentative {ref_attempt + 1} échouée: {e}")
+                            time.sleep(1)
+                        else:
+                            print(f"      ❌ Erreur saisie référence lot après {max_ref_attempts} tentatives: {e}")
+                            raise
+                
+                if not reference_entered:
+                    raise Exception(f"Impossible de saisir la référence après {max_ref_attempts} tentatives")
+                
+                time.sleep(0.5)
             except Exception as e:
                 print(f"      ❌ Erreur saisie référence lot: {e}")
                 driver.switch_to.default_content()
@@ -5427,17 +5472,7 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                 )
                 nouveau_lot_btn.click()
                 print(f"      ✓ Bouton 'Nouveau' lot cliqué")
-                # Attendre que le formulaire soit complètement chargé
-                time.sleep(3)  # Augmenté de 2 à 3 secondes
-                # Attendre que le champ référence soit présent (avec timeout plus long)
-                try:
-                    wait.until(
-                        EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'referenceLot_IT_id')]"))
-                    )
-                    time.sleep(1)  # Délai supplémentaire pour stabilisation
-                except:
-                    print(f"      ⚠️  Champ référence pas encore visible, on continue quand même...")
-                    time.sleep(2)  # Attendre un peu plus si le champ n'est pas encore là
+                time.sleep(2)
             except Exception as e:
                 print(f"      ❌ Erreur clic 'Nouveau' lot: {e}")
                 driver.switch_to.default_content()
@@ -5448,7 +5483,7 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
             # ÉTAPE LOT.2: Remplir l'en-tête du lot
             # ==================================================================
             
-            # LOT.2a: Référence du lot (LTA ref + /DUM_NUMBER ou /DUM_NUMBER/SPLIT_ID)
+            # LOT.2a: Référence du lot (LTA ref + /DUM_NUMBER ou /DUM_NUMBER/SPLIT_ID) - avec retry et robustesse
             try:
                 # Construire référence selon si DUM est split ou non
                 if dum_data.get('is_split', False) and dum_data.get('split_id'):
@@ -5458,10 +5493,94 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                     # DUM normal: 157-54326451/1 ou 157-54326451/3
                     lot_reference = f"{lta_reference_format1}/{dum_data['dum_number']}"
                 
-                if fill_reference_lot_field_robust(driver, wait, lot_reference):
-                    print(f"      ✓ Référence lot: {lot_reference}")
-                else:
-                    raise Exception("Échec après plusieurs tentatives")
+                # Attendre que le blocker UI disparaisse après le clic "Nouveau"
+                wait_for_ui_blocker_disappear(driver, timeout=10)
+                time.sleep(0.5)
+                
+                # Retry avec plusieurs tentatives pour saisir la référence
+                reference_entered = False
+                max_ref_attempts = 5
+                
+                for ref_attempt in range(max_ref_attempts):
+                    try:
+                        if ref_attempt > 0:
+                            print(f"         🔄 Tentative saisie référence {ref_attempt + 1}/{max_ref_attempts}...")
+                            time.sleep(1)
+                            wait_for_ui_blocker_disappear(driver, timeout=5)
+                        
+                        # Attendre que le champ soit présent ET interactable
+                        ref_lot_input = wait.until(
+                            EC.element_to_be_clickable((By.XPATH, "//input[contains(@name, 'referenceLot_IT_id')]"))
+                        )
+                        
+                        # Vérifier que le champ est visible et enabled
+                        if not ref_lot_input.is_displayed():
+                            raise Exception("Champ référence non visible")
+                        if not ref_lot_input.is_enabled():
+                            raise Exception("Champ référence non activé")
+                        
+                        # Scroll vers l'élément pour s'assurer qu'il est visible
+                        driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", ref_lot_input)
+                        time.sleep(0.3)
+                        
+                        # Attendre que le blocker disparaisse avant de saisir
+                        wait_for_ui_blocker_disappear(driver, timeout=3)
+                        
+                        # Essayer de saisir avec Selenium
+                        try:
+                            ref_lot_input.clear()
+                            time.sleep(0.2)
+                            ref_lot_input.send_keys(lot_reference)
+                            
+                            # Vérifier que la valeur a été saisie correctement
+                            entered_value = ref_lot_input.get_attribute("value")
+                            if entered_value and lot_reference in entered_value:
+                                print(f"      ✓ Référence lot: {lot_reference} (vérifiée)")
+                                reference_entered = True
+                                break
+                            else:
+                                print(f"         ⚠️  Valeur saisie incorrecte: '{entered_value}' au lieu de '{lot_reference}'")
+                                if ref_attempt < max_ref_attempts - 1:
+                                    continue
+                        except Exception as selenium_err:
+                            if ref_attempt < max_ref_attempts - 1:
+                                print(f"         ⚠️  Saisie Selenium échouée: {selenium_err}")
+                                # Essayer avec JavaScript comme fallback
+                                try:
+                                    driver.execute_script("""
+                                        var input = arguments[0];
+                                        input.value = arguments[1];
+                                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                                    """, ref_lot_input, lot_reference)
+                                    
+                                    # Vérifier la valeur
+                                    entered_value = ref_lot_input.get_attribute("value")
+                                    if entered_value and lot_reference in entered_value:
+                                        print(f"      ✓ Référence lot: {lot_reference} (via JavaScript)")
+                                        reference_entered = True
+                                        break
+                                except Exception as js_err:
+                                    if ref_attempt < max_ref_attempts - 1:
+                                        print(f"         ⚠️  JavaScript fallback échoué: {js_err}")
+                                        continue
+                                    else:
+                                        raise js_err
+                            else:
+                                raise selenium_err
+                                
+                    except Exception as e:
+                        if ref_attempt < max_ref_attempts - 1:
+                            print(f"         ⚠️  Tentative {ref_attempt + 1} échouée: {e}")
+                            time.sleep(1)
+                        else:
+                            print(f"      ❌ Erreur saisie référence lot après {max_ref_attempts} tentatives: {e}")
+                            raise
+                
+                if not reference_entered:
+                    raise Exception(f"Impossible de saisir la référence après {max_ref_attempts} tentatives")
+                
+                time.sleep(0.5)
             except Exception as e:
                 print(f"      ❌ Erreur saisie référence lot: {e}")
                 driver.switch_to.default_content()
