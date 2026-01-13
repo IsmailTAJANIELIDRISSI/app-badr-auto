@@ -2329,6 +2329,213 @@ def create_logical_error_warning(directory, errors):
     except Exception as e:
         print(f"      Error creating logical error warning: {e}")
 
+def count_expected_dums(dir_path):
+    """
+    Count the expected number of DUMs from summary_file and/or generated_excel
+    Returns: (expected_count, source_file_name, expected_sheet_numbers)
+    """
+    expected_sheet_numbers = set()
+    source_file_name = None
+    
+    # Try summary_file first (more reliable)
+    summary_files = glob.glob(os.path.join(dir_path, "summary_file*.xlsx"))
+    if summary_files:
+        try:
+            wb = load_workbook(summary_files[0], data_only=True)
+            ws = wb.active
+            source_file_name = os.path.basename(summary_files[0])
+            
+            # Find header row
+            header_row = None
+            sheet_name_col = None
+            
+            for row in range(1, min(10, ws.max_row + 1)):
+                for col in range(1, ws.max_column + 1):
+                    cell_value = ws.cell(row=row, column=col).value
+                    if cell_value and "Sheet Name" in str(cell_value):
+                        header_row = row
+                        sheet_name_col = col
+                        break
+                if header_row:
+                    break
+            
+            if header_row and sheet_name_col:
+                # Extract all sheet numbers from summary_file
+                for row in range(header_row + 1, ws.max_row + 1):
+                    sheet_name = ws.cell(row=row, column=sheet_name_col).value
+                    if sheet_name and "Sheet" in str(sheet_name):
+                        # Extract sheet number using regex (handles Sheet 1, Sheet 10, etc.)
+                        match = re.search(r'Sheet\s+(\d+)', str(sheet_name))
+                        if match:
+                            sheet_num = int(match.group(1))
+                            expected_sheet_numbers.add(sheet_num)
+            
+            wb.close()
+        except Exception as e:
+            print(f"    ⚠️  Error reading summary_file: {e}")
+    
+    # If no sheets found in summary_file, try generated_excel
+    if not expected_sheet_numbers:
+        generated_excel_files = glob.glob(os.path.join(dir_path, "generated_excel*.xlsx"))
+        if generated_excel_files:
+            try:
+                wb = load_workbook(generated_excel_files[0], data_only=True)
+                ws = wb.active
+                source_file_name = os.path.basename(generated_excel_files[0])
+                
+                # Count DUMs by searching for "DUM" patterns (same logic as extract_p_values_from_generated_excel)
+                # Iterate through all cells and count each DUM found sequentially
+                dum_count = 0
+                for row in range(1, min(500, ws.max_row + 1)):
+                    for col in range(1, ws.max_column + 1):
+                        cell_value = ws.cell(row=row, column=col).value
+                        if cell_value is None:
+                            continue
+                        cell_str = str(cell_value).strip()
+                        if "DUM" in cell_str and any(char.isdigit() for char in cell_str):
+                            dum_count += 1
+                            expected_sheet_numbers.add(dum_count)
+                            # Continue to next row after finding a DUM (avoid counting multiple times in same row)
+                            break
+                
+                wb.close()
+            except Exception as e:
+                print(f"    ⚠️  Error reading generated_excel: {e}")
+    
+    return len(expected_sheet_numbers), source_file_name, sorted(expected_sheet_numbers)
+
+def find_exact_sheet_file(dir_path, sheet_num, file_extension):
+    """
+    Find a Sheet file with exact matching (avoids Sheet 1 matching Sheet 10)
+    Supports multiple patterns:
+    - Sheet X.xlsx
+    - Sheet X - *.xlsx (e.g., "Sheet 1 - 2026-01-12T034033.984.xlsx")
+    - Sheet X (*).xlsx (e.g., "Sheet 9 (90).xlsx")
+    
+    Uses regex to extract the exact sheet number, so "Sheet 1" won't match "Sheet 10"
+    
+    Returns: file path if found, None otherwise
+    """
+    # List all Sheet files with the extension
+    pattern = f"Sheet *.{file_extension}"
+    all_files = glob.glob(os.path.join(dir_path, pattern))
+    
+    # Use regex to extract sheet number and match exactly (avoid Sheet 1 matching Sheet 10)
+    # The regex extracts the first number after "Sheet", regardless of format:
+    # - "Sheet 9 (90).xlsx" -> extracts 9
+    # - "Sheet 9 - 2026-01-12T034039.694.xlsx" -> extracts 9
+    # - "Sheet 1.xlsx" -> extracts 1
+    for file_path in all_files:
+        filename = os.path.basename(file_path)
+        # Extract sheet number using regex to ensure exact match
+        match = re.match(rf'Sheet\s+(\d+)', filename)
+        if match:
+            file_sheet_num = int(match.group(1))
+            if file_sheet_num == sheet_num:
+                return file_path
+    
+    return None
+
+def validate_required_files_present(dir_path, directory_name):
+    """
+    Validate that all required Sheet X.xlsx and Sheet X.pdf files are present
+    (mnX.pdf files are created later by rename_sheet_pdfs, so we don't check for them)
+    Returns: (is_valid, missing_files)
+    """
+    missing_files = []
+    
+    # Count expected DUMs
+    expected_count, source_file, expected_sheet_numbers = count_expected_dums(dir_path)
+    
+    if expected_count == 0:
+        # Cannot validate if we don't know how many DUMs are expected
+        print("  ⚠️  Cannot determine expected number of DUMs - skipping file validation")
+        return True, []
+    
+    print(f"  🔍 Validating required files ({expected_count} DUMs expected from {source_file})...")
+    
+    # Check each expected Sheet number
+    for sheet_num in expected_sheet_numbers:
+        # Check for Sheet X.xlsx file (exact match to avoid Sheet 1 matching Sheet 10)
+        sheet_excel_found = find_exact_sheet_file(dir_path, sheet_num, 'xlsx')
+        
+        if not sheet_excel_found:
+            missing_files.append({
+                'type': 'Sheet Excel',
+                'filename': f'Sheet {sheet_num} - *.xlsx or Sheet {sheet_num} (*).xlsx',
+                'sheet_number': sheet_num
+            })
+            print(f"    ❌ Missing: Sheet {sheet_num} Excel file")
+        
+        # Check for Sheet X.pdf file (exact match to avoid Sheet 1 matching Sheet 10)
+        sheet_pdf_found = find_exact_sheet_file(dir_path, sheet_num, 'pdf')
+        
+        if not sheet_pdf_found:
+            missing_files.append({
+                'type': 'Sheet PDF',
+                'filename': f'Sheet {sheet_num} - *.pdf or Sheet {sheet_num} (*).pdf',
+                'sheet_number': sheet_num
+            })
+            print(f"    ❌ Missing: Sheet {sheet_num} PDF file")
+    
+    if missing_files:
+        print(f"  ❌ {len(missing_files)} file(s) missing out of {expected_count * 2} expected files")
+        return False, missing_files
+    else:
+        print(f"  ✅ All required files present ({expected_count} Sheet Excel files + {expected_count} Sheet PDF files)")
+        return True, []
+
+def create_missing_files_error(dir_path, directory_name, missing_files, expected_count, source_file):
+    """Create error report for missing required files"""
+    error_path = os.path.join(os.getcwd(), "!-------ERROR - Missing Files--------.txt")
+    try:
+        existing_content = ""
+        if os.path.exists(error_path):
+            with open(error_path, 'r', encoding='utf-8') as f:
+                existing_content = f.read()
+        
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        report = f"\n{'='*60}\n"
+        report += f"❌ ERREUR: FICHIERS MANQUANTS - {directory_name}\n"
+        report += f"Date: {timestamp}\n"
+        report += f"{'='*60}\n\n"
+        report += f"❌ TRAITEMENT ARRÊTÉ - Fichiers requis manquants!\n\n"
+        report += f"Le dossier '{directory_name}' devrait contenir {expected_count} DUMs\n"
+        report += f"(d'après {source_file}), mais certains fichiers sont manquants:\n\n"
+        
+        # Group missing files by type
+        missing_sheet_excel = [f for f in missing_files if f['type'] == 'Sheet Excel']
+        missing_sheet_pdf = [f for f in missing_files if f['type'] == 'Sheet PDF']
+        
+        if missing_sheet_excel:
+            report += f"📋 FICHIERS EXCEL MANQUANTS ({len(missing_sheet_excel)} fichier(s)):\n"
+            for file_info in sorted(missing_sheet_excel, key=lambda x: x['sheet_number']):
+                report += f"   - {file_info['filename']} (Sheet {file_info['sheet_number']})\n"
+            report += "\n"
+        
+        if missing_sheet_pdf:
+            report += f"📄 FICHIERS PDF MANQUANTS ({len(missing_sheet_pdf)} fichier(s)):\n"
+            for file_info in sorted(missing_sheet_pdf, key=lambda x: x['sheet_number']):
+                report += f"   - {file_info['filename']} (Sheet {file_info['sheet_number']})\n"
+            report += "\n"
+        
+        report += f"🔧 ACTION REQUISE:\n"
+        report += f"   1. Vérifier que tous les fichiers 'Sheet X - *.xlsx' ou 'Sheet X (*).xlsx' sont présents\n"
+        report += f"   2. Vérifier que tous les fichiers 'Sheet X - *.pdf' ou 'Sheet X (*).pdf' sont présents\n"
+        report += f"   3. Corriger {source_file} si le nombre de DUMs est incorrect\n"
+        report += f"   4. Relancer le script après correction\n\n"
+        report += f"ℹ️  NOTE: Aucun fichier n'a été renommé ou modifié pour ce dossier.\n"
+        report += f"         Le traitement a été arrêté pour éviter des erreurs.\n"
+        report += f"{'-'*60}\n"
+        
+        with open(error_path, 'w', encoding='utf-8') as f:
+            f.write(existing_content + report)
+        
+        logger.warning(f"Missing files error created for {directory_name}")
+        print(f"      ✓ Missing files error report created")
+    except Exception as e:
+        print(f"      Error creating missing files error report: {e}")
+
 def validate_and_correct_article_values(file_path):
     """Validate and correct article values to ensure no value exceeds 499 MAD
     
@@ -2714,7 +2921,16 @@ def process_directory(dir_path, directory_name):
         print(f"  ⚠️  Please fix the mismatch and re-run the script")
         return  # Exit early - do not process this folder at all
     
-    # Step 2: Validate logical values before processing
+    # Step 2: Validate that all required files (Sheet X.xlsx and mnX.pdf) are present
+    files_valid, missing_files = validate_required_files_present(dir_path, directory_name)
+    if not files_valid:
+        expected_count, source_file, _ = count_expected_dums(dir_path)
+        create_missing_files_error(dir_path, directory_name, missing_files, expected_count, source_file)
+        print(f"  ⚠️  SKIPPING ALL PROCESSING for '{directory_name}' due to missing files")
+        print(f"  ⚠️  Please check the error report and add the missing files")
+        return  # Exit early - do not process this folder at all
+    
+    # Step 3: Validate logical values before processing
     all_errors = []
     
     # Check generated_excel
