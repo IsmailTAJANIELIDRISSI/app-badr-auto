@@ -6294,6 +6294,76 @@ def read_dum_data_from_summary(summary_excel_path):
         traceback.print_exc()
         return []
 
+def is_selenium_error(error):
+    """
+    Determine if an error is a Selenium/UI interaction error that should trigger a retry,
+    vs a logical/business error that should skip to next DUM.
+    
+    Args:
+        error: Exception object or error message string
+        
+    Returns:
+        bool: True if it's a Selenium error (should retry), False if logical error (skip)
+    """
+    error_str = str(error).lower()
+    error_type = type(error).__name__ if hasattr(error, '__name__') else str(type(error)).lower()
+    
+    # Selenium errors that should trigger retry
+    selenium_error_keywords = [
+        'element click intercepted',
+        'element not interactable',
+        'timeout',
+        'stale element reference',
+        'no such element',
+        'element is not attached',
+        'invalid element state',
+        'webdriver exception',
+        'session not created',
+        'target window already closed',
+        'unable to locate element',
+        'element not visible',
+        'move target out of bounds'
+    ]
+    
+    # Check error message
+    for keyword in selenium_error_keywords:
+        if keyword in error_str:
+            return True
+    
+    # Check error type
+    selenium_error_types = [
+        'timeoutexception',
+        'nosuchelementexception',
+        'elementnotinteractableexception',
+        'elementclickinterceptedexception',
+        'stalerelementreferenceexception',
+        'invalidargumentexception',
+        'webdriverexception'
+    ]
+    
+    if any(err_type in error_type.lower() for err_type in selenium_error_types):
+        return True
+    
+    # Logical errors that should NOT trigger retry (skip to next DUM)
+    logical_error_keywords = [
+        'fichier excel introuvable',
+        'file not found',
+        'poids',
+        'weight',
+        'validation',
+        'invalid data',
+        'missing data',
+        'données manquantes'
+    ]
+    
+    # If it's clearly a logical error, return False
+    for keyword in logical_error_keywords:
+        if keyword in error_str:
+            return False
+    
+    # Default: if unsure, assume it's a Selenium error (safer to retry)
+    return True
+
 def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_reference_clean):
     """Fill the declaration form with shipper name and DUM data
     
@@ -6410,15 +6480,63 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         # ÉTAPE 2: Naviguer vers l'onglet "Articles"
         # ==================================================================
         print("\n   📑 Navigation vers l'onglet 'Articles'...")
+        
+        # Attendre que le blocker UI disparaisse si présent
         try:
-            articles_tab = wait.until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab1']"))
+            WebDriverWait(driver, 5).until_not(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "div.ui-blockui[style*='display: block']"))
             )
-            articles_tab.click()
-            print("      ✓ Onglet 'Articles' cliqué")
-            time.sleep(2)  # Attendre le chargement de l'onglet
-        except Exception as e:
-            print(f"      ❌ Erreur navigation vers 'Articles': {e}")
+            time.sleep(1)
+        except:
+            time.sleep(2)  # Fallback: attendre 2 secondes
+        
+        # Tentative avec retry et fallback JavaScript
+        max_retries = 3
+        articles_navigation_success = False
+        for attempt in range(max_retries):
+            try:
+                articles_tab = wait.until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "a[href='#mainTab:tab1']"))
+                )
+                
+                # Vérifier que le blocker n'est pas présent
+                blockers = driver.find_elements(By.CSS_SELECTOR, "div.ui-blockui[style*='display: block']")
+                if blockers:
+                    print(f"      ⏳ Blocker UI encore visible, attente... (tentative {attempt + 1}/{max_retries})")
+                    time.sleep(2)
+                    continue
+                
+                # Scroll pour s'assurer que l'élément est visible
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", articles_tab)
+                time.sleep(0.5)
+                
+                # Tenter le clic avec Selenium
+                articles_tab.click()
+                print("      ✓ Onglet 'Articles' cliqué")
+                time.sleep(2)
+                articles_navigation_success = True
+                break  # Succès, sortir de la boucle
+                
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"      ⏳ Erreur clic (tentative {attempt + 1}/{max_retries}): {str(e)[:100]}")
+                    time.sleep(2)
+                else:
+                    # Dernière tentative avec JavaScript
+                    print(f"      ⚠️  Selenium échoué, utilisation de JavaScript...")
+                    try:
+                        articles_tab = driver.find_element(By.CSS_SELECTOR, "a[href='#mainTab:tab1']")
+                        driver.execute_script("arguments[0].click();", articles_tab)
+                        print("      ✓ Onglet 'Articles' cliqué (via JavaScript)")
+                        time.sleep(2)
+                        articles_navigation_success = True
+                        break
+                    except Exception as js_error:
+                        print(f"      ❌ Erreur navigation vers 'Articles' (toutes méthodes échouées): {js_error}")
+                        return False
+        
+        if not articles_navigation_success:
+            print(f"      ❌ Échec navigation vers 'Articles' après {max_retries} tentatives")
             return False
         
         # ==================================================================
@@ -9990,53 +10108,79 @@ def process_lta_folder_dum_only(driver, lta_folder_path, lta_name):
             
             dum_success = False
             error_step = "Initialisation"
+            max_dum_retries = 2  # Maximum retries for a DUM in case of Selenium errors
+            dum_retry_count = 0
             
-            try:
-                # STEP 1: Create declaration
-                error_step = "Création déclaration (create_declaration)"
-                if not create_declaration(driver):
-                    raise Exception("create_declaration returned False")
+            while dum_retry_count <= max_dum_retries and not dum_success:
+                try:
+                    # STEP 1: Create declaration
+                    error_step = "Création déclaration (create_declaration)"
+                    if not create_declaration(driver):
+                        raise Exception("create_declaration returned False")
+                    
+                    # STEP 2-9: Fill declaration form (all steps inside)
+                    error_step = "Remplissage formulaire (fill_declaration_form)"
+                    if fill_declaration_form(driver, shipper_data['shipper_name'], dum_data, lta_folder_path, shipper_data['lta_reference_clean']):
+                        successful_count += 1
+                        dum_success = True
+                        print(f"\n✅ DUM {i} traité avec succès")
+                        break  # Success, exit retry loop
+                    else:
+                        raise Exception("fill_declaration_form returned False")
                 
-                # STEP 2-9: Fill declaration form (all steps inside)
-                error_step = "Remplissage formulaire (fill_declaration_form)"
-                if fill_declaration_form(driver, shipper_data['shipper_name'], dum_data, lta_folder_path, shipper_data['lta_reference_clean']):
-                    successful_count += 1
-                    dum_success = True
-                    print(f"\n✅ DUM {i} traité avec succès")
-                else:
-                    raise Exception("fill_declaration_form returned False")
-            
-            except Exception as e:
-                # ============================================================
-                # ERROR RECOVERY: Log, cleanup, mark error, continue
-                # ============================================================
-                failed_count += 1
-                
-                print(f"\n❌ ÉCHEC DUM {i}: {dum_data.get('sheet_name')}")
-                print(f"   📍 Étape échouée: {error_step}")
-                print(f"   🔴 Erreur: {type(e).__name__}: {str(e)[:100]}")
-                
-                # 1. Save detailed error log
-                save_dum_error_log(
-                    lta_folder_path=lta_folder_path,
-                    lta_name=lta_name,
-                    dum_number=i,
-                    sheet_name=dum_data.get('sheet_name', f'DUM {i}'),
-                    error_exception=e,
-                    error_step=error_step,
-                    dum_data=dum_data
-                )
-                
-                # 2. Return to home (cleanup state)
-                return_to_home_after_error(driver)
-                
-                # 3. Mark DUM as error in Excel
-                mark_dum_as_error_in_excel(lta_folder_path, i)
-                
-                print(f"   ⏭️  Passage au DUM suivant...")
-                
-                # Continue to next DUM (DON'T stop entire process)
-                continue
+                except Exception as e:
+                    # Check if this is a Selenium error (should retry) or logical error (skip)
+                    is_selenium = is_selenium_error(e)
+                    
+                    if is_selenium and dum_retry_count < max_dum_retries:
+                        # Selenium error: retry the DUM
+                        dum_retry_count += 1
+                        print(f"\n⚠️  ERREUR SELENIUM DUM {i} (tentative {dum_retry_count}/{max_dum_retries + 1}): {dum_data.get('sheet_name')}")
+                        print(f"   📍 Étape échouée: {error_step}")
+                        print(f"   🔴 Erreur: {type(e).__name__}: {str(e)[:100]}")
+                        print(f"   🔄 Retry du DUM après retour à l'accueil...")
+                        
+                        # Return to home before retry
+                        return_to_home_after_error(driver)
+                        
+                        # Wait a bit before retry
+                        time.sleep(3)
+                        continue  # Retry the DUM
+                    
+                    else:
+                        # Logical error or max retries reached: skip to next DUM
+                        failed_count += 1
+                        
+                        if is_selenium:
+                            print(f"\n❌ ÉCHEC DUM {i} après {max_dum_retries + 1} tentatives: {dum_data.get('sheet_name')}")
+                            print(f"   📍 Étape échouée: {error_step}")
+                            print(f"   🔴 Erreur Selenium (toutes tentatives échouées): {type(e).__name__}: {str(e)[:100]}")
+                        else:
+                            print(f"\n❌ ÉCHEC DUM {i}: {dum_data.get('sheet_name')}")
+                            print(f"   📍 Étape échouée: {error_step}")
+                            print(f"   🔴 Erreur logique: {type(e).__name__}: {str(e)[:100]}")
+                        
+                        # 1. Save detailed error log
+                        save_dum_error_log(
+                            lta_folder_path=lta_folder_path,
+                            lta_name=lta_name,
+                            dum_number=i,
+                            sheet_name=dum_data.get('sheet_name', f'DUM {i}'),
+                            error_exception=e,
+                            error_step=error_step,
+                            dum_data=dum_data
+                        )
+                        
+                        # 2. Return to home (cleanup state)
+                        return_to_home_after_error(driver)
+                        
+                        # 3. Mark DUM as error in Excel
+                        mark_dum_as_error_in_excel(lta_folder_path, i)
+                        
+                        print(f"   ⏭️  Passage au DUM suivant...")
+                        
+                        # Continue to next DUM (DON'T stop entire process)
+                        break  # Exit retry loop and continue to next DUM
         
         # ====================================================================
         # LTA SUMMARY
