@@ -1154,68 +1154,68 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
         # ==================================================================
         print("\n   🗑️  Suppression des lots conflictuels...")
         
-        # Préparer la référence de base (sans /N, sans tirets)
+        # Préparer la référence de base normalisée (sans /N, sans tirets)
         # Exemple: "157-42100284" -> "15742100284"
+        # Exemple: "15742100240" -> "15742100240"
         lta_reference_base = lta_reference_existing.split('/')[0].replace("-", "")
-        # Préparer aussi la référence avec tirets (pour pattern matching)
-        lta_reference_with_dash = lta_reference_existing.split('/')[0]
-        print(f"      📋 Référence de base (pour comparaison): {lta_reference_base}")
-        print(f"      📋 Référence avec tirets: {lta_reference_with_dash}")
+        print(f"      📋 Référence de base normalisée (pour comparaison): {lta_reference_base}")
         
         def normalize_reference(ref):
             """
             Normalise une référence LTA pour comparaison:
             - Enlève les tirets
-            - Enlève tout ce qui suit le slash (numéro de version)
+            - Enlève tout ce qui suit le premier slash (numéro de version, sous-versions, etc.)
             - Retourne juste le numéro de base
             
             Exemples:
             - "157-42100284/1" -> "15742100284"
             - "15742100284/2" -> "15742100284"
+            - "157-42100284/1/1" -> "15742100284"
+            - "157-42100284/1/2" -> "15742100284"
             - "157-42100284" -> "15742100284"
             - "15742100284" -> "15742100284"
             """
-            # Prendre seulement la partie avant le slash (enlever version)
-            base_part = ref.split('/')[0]
+            if not ref or not ref.strip():
+                return ""
+            # Prendre seulement la partie avant le premier slash (enlever toutes les versions)
+            base_part = ref.split('/')[0].strip()
             # Enlever les tirets
-            normalized = base_part.replace("-", "")
+            normalized = base_part.replace("-", "").replace(" ", "")
             return normalized
         
-        def should_delete_lot(ref_text, lta_base, lta_with_dash):
+        def should_delete_lot(ref_text, lta_base):
             """
             Détermine si un lot doit être supprimé en comparant sa référence
             avec la référence LTA validée.
             
-            Détecte les patterns suivants:
-            - "157-42100284/1", "157-42100284/2" (avec tiret et version)
-            - "15742100284/1", "15742100284/2" (sans tiret mais avec version)
-            - "157-42100284" (avec tiret, sans version)
-            - "15742100284" (sans tiret, sans version)
+            Détecte TOUS les patterns possibles en normalisant les deux références:
+            - "157-42100240/1", "157-42100240/2" (avec tiret et version)
+            - "15742100240/1", "15742100240/2" (sans tiret mais avec version)
+            - "157-42100240/1/1", "157-42100240/1/2" (avec tiret et versions multiples)
+            - "15742100240/1/1", "15742100240/1/2" (sans tiret et versions multiples)
+            - "157-42100240" (avec tiret, sans version)
+            - "15742100240" (sans tiret, sans version)
+            - "157-42100240/*" (avec wildcard)
+            - "15742100240/*" (sans tiret avec wildcard)
+            
+            La logique: normalise les deux références (enlève tirets et versions)
+            et compare les bases. Si elles correspondent, le lot doit être supprimé.
             """
-            # Règle 1: Garder les lots commençant par "MA" (items bloqués par inspecteur)
-            if ref_text.startswith("MA"):
+            if not ref_text or not ref_text.strip():
                 return False
             
-            # Normaliser les deux références pour comparaison
-            ref_normalized = normalize_reference(ref_text)
+            # Règle 1: Garder les lots commençant par "MA" (items bloqués par inspecteur)
+            if ref_text.strip().startswith("MA"):
+                return False
             
-            # Règle 2: Comparer les bases normalisées (sans tirets, sans version)
-            if ref_normalized == lta_base:
+            # Normaliser la référence du lot (enlève tirets et versions)
+            lot_ref_normalized = normalize_reference(ref_text)
+            
+            # Règle 2: Comparer les bases normalisées
+            # Si les bases correspondent, c'est le même LTA (peu importe les tirets ou versions)
+            if lot_ref_normalized == lta_base:
+                print(f"         ✓ Match détecté: '{ref_text}' -> normalisé: '{lot_ref_normalized}' == '{lta_base}'")
                 return True
-            
-            # Règle 3: Vérifier si la référence du lot commence par la référence LTA avec tirets
-            # Exemple: "157-42100284/1" commence par "157-42100284"
-            if ref_text.startswith(lta_with_dash):
-                return True
-            
-            # Règle 4: Vérifier si la référence du lot commence par la référence LTA sans tirets
-            # (pour cas comme "15742100284/1")
-            if ref_text.replace("-", "").startswith(lta_base):
-                # Mais on doit s'assurer que c'est un vrai match, pas juste une partie
-                # Par exemple, si lta_base = "15742100284", on ne veut pas matcher "157421002841"
-                ref_without_dash = ref_text.replace("-", "")
-                if ref_without_dash.startswith(lta_base) and (len(ref_without_dash) == len(lta_base) or ref_without_dash[len(lta_base)] == '/'):
-                    return True
             
             return False
         
@@ -1255,7 +1255,7 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
                         reference_text = cells[2].text.strip()
                         
                         # Décider si on doit supprimer ce lot
-                        should_delete = should_delete_lot(reference_text, lta_reference_base, lta_reference_with_dash)
+                        should_delete = should_delete_lot(reference_text, lta_reference_base)
                         
                         # Si lot à supprimer trouvé, supprimer IMMÉDIATEMENT et sortir de la boucle
                         if should_delete:
