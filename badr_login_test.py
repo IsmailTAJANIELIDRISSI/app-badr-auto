@@ -848,7 +848,7 @@ def detect_blocage_from_lta_file(lta_folder_path):
         # Calculer le poids corrigé
         corrected_weight = None
         if original_weight is not None and blocked_weight is not None:
-            corrected_weight = round(original_weight - blocked_weight, 2)
+            corrected_weight = round(original_weight - blocked_weight, 3)
             print(f"      🧮 Poids corrigé calculé: {original_weight} - {blocked_weight} = {corrected_weight} kg")
             
             if corrected_weight < 0:
@@ -2156,11 +2156,11 @@ def correct_blocage_weights(lta_folder_path, corrected_weight):
         
         # BC.2.3: Calculer la somme des DUM P,BRUT
         dum_sum = sum(dum['pbrut_value'] for dum in dum_pbrut_cells)
-        dum_sum = round(dum_sum, 2)
+        dum_sum = round(dum_sum, 3)
         print(f"         📊 Somme actuelle: {dum_sum} kg")
         
         # BC.2.4: Ajuster les DUMs si nécessaire
-        difference = round(dum_sum - corrected_weight, 2)
+        difference = round(dum_sum - corrected_weight, 3)
         
         if abs(difference) < 0.01:
             print(f"\n      ✅ Aucun ajustement nécessaire (différence: {difference} kg)")
@@ -2186,16 +2186,16 @@ def correct_blocage_weights(lta_folder_path, corrected_weight):
                     # Calculer la marge disponible: P,BRUT - P,NET
                     # Pour le dernier DUM, on accepte une marge minimale plus petite (0.01 au lieu de 1 kg)
                     min_margin_required = 0.01 if is_last_dum else 1.0
-                    available_margin = round(dum['pbrut_value'] - dum['pnet_value'] - min_margin_required, 2)
+                    available_margin = round(dum['pbrut_value'] - dum['pnet_value'] - min_margin_required, 3)
                     
                     # Pour le dernier DUM avec un ajustement très petit, forcer la soustraction
-                    if is_last_dum and remaining_to_subtract <= 0.1:
+                    if is_last_dum and remaining_to_subtract <= 0.3:
                         # Ajustement fin sur le dernier DUM : garantir que P,BRUT reste > P,NET
-                        max_safe_subtract = round(dum['pbrut_value'] - dum['pnet_value'] - 0.01, 2)
+                        max_safe_subtract = round(dum['pbrut_value'] - dum['pnet_value'] - 0.01, 3)
                         if max_safe_subtract >= remaining_to_subtract:
                             # On peut soustraire en toute sécurité
                             can_subtract = remaining_to_subtract
-                            new_pbrut = round(dum['pbrut_value'] - can_subtract, 2)
+                            new_pbrut = round(dum['pbrut_value'] - can_subtract, 3)
                             
                             # Vérifier que la règle P,BRUT > P,NET est respectée
                             if new_pbrut > dum['pnet_value']:
@@ -2211,9 +2211,9 @@ def correct_blocage_weights(lta_folder_path, corrected_weight):
                                 })
                                 
                                 print(f"         ✓ DUM {dum['dum_number']} ({dum['pbrut_cell']}): {dum['pbrut_value']} → {new_pbrut} kg (-{can_subtract} kg)")
-                                print(f"            Règle respectée: P,NET={dum['pnet_value']} < P,BRUT={new_pbrut} (marge: {round(new_pbrut - dum['pnet_value'], 2)} kg)")
+                                print(f"            Règle respectée: P,NET={dum['pnet_value']} < P,BRUT={new_pbrut} (marge: {round(new_pbrut - dum['pnet_value'], 3)} kg)")
                                 
-                                remaining_to_subtract = round(remaining_to_subtract - can_subtract, 2)
+                                remaining_to_subtract = round(remaining_to_subtract - can_subtract, 3)
                                 dum['pbrut_value'] = new_pbrut  # Mettre à jour pour le calcul final
                                 continue
                     
@@ -2221,7 +2221,7 @@ def correct_blocage_weights(lta_folder_path, corrected_weight):
                     if available_margin > 0.01:
                         # On peut soustraire de ce DUM (en gardant P,BRUT > P,NET)
                         can_subtract = min(available_margin, remaining_to_subtract)
-                        new_pbrut = round(dum['pbrut_value'] - can_subtract, 2)
+                        new_pbrut = round(dum['pbrut_value'] - can_subtract, 3)
                         
                         # Mettre à jour dans Excel
                         ws[dum['pbrut_cell']] = new_pbrut
@@ -2235,9 +2235,9 @@ def correct_blocage_weights(lta_folder_path, corrected_weight):
                         })
                         
                         print(f"         ✓ DUM {dum['dum_number']} ({dum['pbrut_cell']}): {dum['pbrut_value']} → {new_pbrut} kg (-{can_subtract} kg)")
-                        print(f"            Règle respectée: P,NET={dum['pnet_value']} < P,BRUT={new_pbrut} (marge: {round(new_pbrut - dum['pnet_value'], 2)} kg)")
+                        print(f"            Règle respectée: P,NET={dum['pnet_value']} < P,BRUT={new_pbrut} (marge: {round(new_pbrut - dum['pnet_value'], 3)} kg)")
                         
-                        remaining_to_subtract = round(remaining_to_subtract - can_subtract, 2)
+                        remaining_to_subtract = round(remaining_to_subtract - can_subtract, 3)
                         dum['pbrut_value'] = new_pbrut  # Mettre à jour pour le calcul final
                     else:
                         print(f"         ⚠️  DUM {dum['dum_number']}: Marge insuffisante (P,BRUT={dum['pbrut_value']}, P,NET={dum['pnet_value']}, disponible={max(0, available_margin)} kg)")
@@ -2253,7 +2253,7 @@ def correct_blocage_weights(lta_folder_path, corrected_weight):
                 
                 to_add = abs(difference)
                 last_dum = dum_pbrut_cells[-1]
-                new_pbrut = round(last_dum['pbrut_value'] + to_add, 2)
+                new_pbrut = round(last_dum['pbrut_value'] + to_add, 3)
                 
                 ws[last_dum['pbrut_cell']] = new_pbrut
                 print(f"         ✓ Dernier DUM ajusté ({last_dum['pbrut_cell']}): {last_dum['pbrut_value']} → {new_pbrut} kg (+{to_add} kg)")
@@ -2263,10 +2263,10 @@ def correct_blocage_weights(lta_folder_path, corrected_weight):
             
             # Vérifier la nouvelle somme
             new_sum = sum(dum['pbrut_value'] for dum in dum_pbrut_cells)
-            new_sum = round(new_sum, 2)
+            new_sum = round(new_sum, 3)
             print(f"         ✓ Nouvelle somme: {new_sum} kg")
             print(f"         ✓ Objectif: {corrected_weight} kg")
-            print(f"         ✓ Écart final: {round(abs(new_sum - corrected_weight), 2)} kg ✅")
+            print(f"         ✓ Écart final: {round(abs(new_sum - corrected_weight), 3)} kg ✅")
         
         # Sauvegarder generated_excel
         wb.save(generated_excel_path)
