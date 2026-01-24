@@ -1240,6 +1240,8 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
                     print(f"      ✓ Aucun lot trouvé sur cette page")
                     break
                 
+                print(f"      📊 {len(rows)} ligne(s) trouvée(s) dans le tableau")
+                
                 # Analyser chaque ligne
                 for row in rows:
                     try:
@@ -1254,8 +1256,13 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
                         # Colonne Référence (3ème colonne)
                         reference_text = cells[2].text.strip()
                         
+                        print(f"         🔍 Analyse lot N°{numero_text}: ref='{reference_text}'")
+                        
                         # Décider si on doit supprimer ce lot
                         should_delete = should_delete_lot(reference_text, lta_reference_base)
+                        
+                        if not should_delete:
+                            print(f"         ❌ Ne correspond pas (normalisé: '{normalize_reference(reference_text)}' vs base: '{lta_reference_base}')")
                         
                         # Si lot à supprimer trouvé, supprimer IMMÉDIATEMENT et sortir de la boucle
                         if should_delete:
