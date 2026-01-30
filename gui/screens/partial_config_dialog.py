@@ -11,8 +11,20 @@ import glob
 import logging
 from openpyxl import load_workbook
 from gui.utils.file_utils import get_lta_partial_info, save_lta_partial_config
+from gui.utils.validators import validate_ds_series, normalize_ds_series, validate_location
 
 logger = logging.getLogger(__name__)
+
+# Same predefined locations as preparation.py
+PARTIAL_LOCATIONS = [
+    "RYAD K.KHALED",
+    "ISTAMBOUL ATATUR",
+    "JEDDAH K/ABDUL A",
+    "BAHREIN MOHARRAQ",
+    "DOHA INT",
+    "ABOU DHABI INT",
+    "SHANGHAI PU DONG"
+]
 
 
 class PartialConfigDialog:
@@ -337,33 +349,65 @@ class PartialConfigDialog:
         positions_label = ttk.Label(frame, textvariable=positions_var, foreground="blue")
         positions_label.grid(row=0, column=3, sticky=tk.W, padx=5, pady=2)
         
-        # DS Serie
+        # DS Série (one field, format "XXXX Y" like preparation - validated on save)
+        _ser = (existing_data.get('ds_serie') or '').strip() if existing_data else ''
+        _cle = (existing_data.get('ds_cle') or '').strip() if existing_data else ''
+        _ds_initial = f"{_ser} {_cle}".strip() if (_ser or _cle) else ""
         ttk.Label(frame, text="DS Série:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
-        ds_serie_var = tk.StringVar(value=existing_data['ds_serie'] if existing_data else "")
-        ds_serie_entry = ttk.Entry(frame, textvariable=ds_serie_var, width=15)
+        ds_serie_var = tk.StringVar(value=_ds_initial)
+        ds_serie_entry = ttk.Entry(frame, textvariable=ds_serie_var, width=20, font=('Arial', 9))
         ds_serie_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(frame, text="(ex: 9913 G)", font=('Arial', 8, 'italic')).grid(row=1, column=2, sticky=tk.W, padx=5, pady=2)
         
-        # DS Cle
-        ttk.Label(frame, text="DS Clé:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
-        ds_cle_var = tk.StringVar(value=existing_data['ds_cle'] if existing_data else "")
-        ds_cle_entry = ttk.Entry(frame, textvariable=ds_cle_var, width=5)
-        ds_cle_entry.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+        # Loading Location: list select + "Autre" (same as preparation)
+        ttk.Label(frame, text="Lieu de Chargement:", font=('Arial', 9, 'bold')).grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
+        loc_frame = ttk.Frame(frame)
+        loc_frame.grid(row=2, column=1, columnspan=3, sticky=(tk.W, tk.E), pady=2, padx=5)
         
-        # Loading Location
-        ttk.Label(frame, text="Lieu de Chargement:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
-        location_var = tk.StringVar(value=existing_data['loading_location'] if existing_data else "")
-        location_entry = ttk.Entry(frame, textvariable=location_var, width=30)
-        location_entry.grid(row=3, column=1, columnspan=3, sticky=tk.W, padx=5, pady=2)
+        location_var = tk.StringVar(value=(existing_data.get('loading_location') or '') if existing_data else '')
+        loc_mode_var = tk.StringVar(value="select")
+        
+        loc_combo = ttk.Combobox(
+            loc_frame,
+            textvariable=location_var,
+            values=PARTIAL_LOCATIONS,
+            width=25,
+            font=('Arial', 9),
+            state="readonly"
+        )
+        loc_combo.grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+        
+        if location_var.get() and location_var.get() in PARTIAL_LOCATIONS:
+            loc_combo.set(location_var.get())
+        elif location_var.get():
+            loc_mode_var.set("custom")
+        
+        loc_custom_entry = ttk.Entry(loc_frame, textvariable=location_var, width=25, font=('Arial', 9))
+        
+        def _make_toggle_loc(mv, combo, custom):
+            def _toggle():
+                if mv.get() == "select":
+                    combo.grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+                    custom.grid_remove()
+                else:
+                    combo.grid_remove()
+                    custom.grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+            return _toggle
+        
+        _toggle_loc = _make_toggle_loc(loc_mode_var, loc_combo, loc_custom_entry)
+        
+        ttk.Radiobutton(loc_frame, text="Liste", variable=loc_mode_var, value="select", command=_toggle_loc).grid(row=0, column=1, padx=5)
+        ttk.Radiobutton(loc_frame, text="Autre", variable=loc_mode_var, value="custom", command=_toggle_loc).grid(row=0, column=2, padx=5)
+        _toggle_loc()
         
         # DUM Distribution Preview (read-only text widget)
-        ttk.Label(frame, text="Distribution DUMs (auto):").grid(row=4, column=0, sticky=tk.NW, padx=5, pady=2)
+        ttk.Label(frame, text="Distribution DUMs (auto):").grid(row=3, column=0, sticky=tk.NW, padx=5, pady=2)
         
         dums_text = tk.Text(frame, height=6, width=50, state='disabled', wrap=tk.WORD)
-        dums_text.grid(row=4, column=1, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=2)
+        dums_text.grid(row=3, column=1, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=2)
         
-        # Scrollbar for DUM distribution
         scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=dums_text.yview)
-        scrollbar.grid(row=4, column=4, sticky=(tk.N, tk.S))
+        scrollbar.grid(row=3, column=4, sticky=(tk.N, tk.S))
         dums_text.configure(yscrollcommand=scrollbar.set)
         
         self.partial_forms.append({
@@ -371,7 +415,6 @@ class PartialConfigDialog:
             'weight_var': weight_var,
             'positions_var': positions_var,
             'ds_serie_var': ds_serie_var,
-            'ds_cle_var': ds_cle_var,
             'location_var': location_var,
             'dums_text': dums_text
         })
@@ -804,15 +847,30 @@ class PartialConfigDialog:
                 
                 # Validate required fields
                 weight = form_data['weight_var'].get().strip()
-                ds_serie = form_data['ds_serie_var'].get().strip()
-                ds_cle = form_data['ds_cle_var'].get().strip()
+                ds_serie_full = form_data['ds_serie_var'].get().strip()
                 location = form_data['location_var'].get().strip()
                 
-                if not all([weight, ds_serie, ds_cle, location]):
+                if not all([weight, ds_serie_full, location]):
                     messagebox.showerror(
                         "Validation",
-                        f"Partiel {partial_num}: Tous les champs sont requis"
+                        f"Partiel {partial_num}: Tous les champs sont requis (Poids, DS Série, Lieu de Chargement)"
                     )
+                    return
+                
+                # Validate and parse DS Série (format "XXXX Y" like preparation)
+                ds_serie_normalized = normalize_ds_series(ds_serie_full)
+                is_valid, err_msg = validate_ds_series(ds_serie_normalized)
+                if not is_valid:
+                    messagebox.showerror("Validation", f"Partiel {partial_num}: DS Série - {err_msg}")
+                    return
+                parts = ds_serie_normalized.split()
+                ds_serie = parts[0] if parts else ""
+                ds_cle = parts[1] if len(parts) > 1 else ""
+                
+                # Validate location
+                is_valid, err_msg = validate_location(location)
+                if not is_valid:
+                    messagebox.showerror("Validation", f"Partiel {partial_num}: Lieu - {err_msg}")
                     return
                 
                 # Validate weight
