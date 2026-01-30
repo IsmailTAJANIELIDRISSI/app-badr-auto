@@ -1610,9 +1610,11 @@ def compress_pdf_if_needed(pdf_path, max_size_mb=1.5):
                     pass
         return pdf_path, False
 
-def rename_mawb_pdfs_and_create_bloc_note(dir_path, directory_name):
+def rename_mawb_pdfs_and_create_bloc_note(dir_path, directory_name, skip_rename=False):
     """Rename MAWB PDFs, compress if > 1.5 MB, and create bloc note file with shipper name
     Returns: (mawb_number, validation_passed)
+    
+    If skip_rename=True, only validates but doesn't rename/process the MAWB file
     """
     print("  Processing MAWB PDFs...")
     found_mawb = False
@@ -1647,6 +1649,11 @@ def rename_mawb_pdfs_and_create_bloc_note(dir_path, directory_name):
                     # Create warning report for this mismatch
                     create_mawb_mismatch_warning(directory_name, mawb_number, excel_mawb)
                     return None, False  # Return False to indicate validation failed
+            
+            # If skip_rename is True, don't rename - just return validation result
+            if skip_rename:
+                print(f"    ⏸️  MAWB rename deferred (pending other validations)")
+                return mawb_number, True
             
             # Rename to original format: "{directory_name} - {mawb_number}.pdf"
             new_name = os.path.join(dir_path, f"{directory_name} - {mawb_number}.pdf")
@@ -2912,25 +2919,30 @@ def process_directory(dir_path, directory_name):
     print(f"\nProcessing directory: '{directory_name}'")
     print(f"Path: {dir_path}")
     
-    # Step 1: Validate MAWB before doing anything else
-    mawb_number, validation_passed = rename_mawb_pdfs_and_create_bloc_note(dir_path, directory_name)
+    # ===========================================================================
+    # PHASE 1: VALIDATION ONLY (no file modifications)
+    # ===========================================================================
+    print("\n  📋 PHASE 1: Validating all requirements...")
+    
+    # Step 1.1: Validate MAWB match (without renaming)
+    mawb_number, mawb_validation_passed = rename_mawb_pdfs_and_create_bloc_note(dir_path, directory_name, skip_rename=True)
     
     # If MAWB validation failed, skip entire folder processing
-    if not validation_passed:
+    if not mawb_validation_passed:
         print(f"  ⚠️  SKIPPING ALL PROCESSING for '{directory_name}' due to MAWB mismatch")
         print(f"  ⚠️  Please fix the mismatch and re-run the script")
         return  # Exit early - do not process this folder at all
     
-    # Step 2: Validate that all required files (Sheet X.xlsx and mnX.pdf) are present
+    # Step 1.2: Validate that all required files (Sheet X.xlsx and Sheet X.pdf) are present
     files_valid, missing_files = validate_required_files_present(dir_path, directory_name)
     if not files_valid:
         expected_count, source_file, _ = count_expected_dums(dir_path)
         create_missing_files_error(dir_path, directory_name, missing_files, expected_count, source_file)
         print(f"  ⚠️  SKIPPING ALL PROCESSING for '{directory_name}' due to missing files")
-        print(f"  ⚠️  Please check the error report and add the missing files")
+        print(f"  ⚠️  MAWB file NOT renamed - please check the error report and add the missing files")
         return  # Exit early - do not process this folder at all
     
-    # Step 3: Validate logical values before processing
+    # Step 1.3: Validate logical values before processing
     all_errors = []
     
     # Check generated_excel
@@ -2955,10 +2967,18 @@ def process_directory(dir_path, directory_name):
     if all_errors:
         create_logical_error_warning(directory_name, all_errors)
         print(f"  ⚠️  SKIPPING ALL PROCESSING for '{directory_name}' due to illogical values")
-        print(f"  ⚠️  Please check the warning report and correct the values")
+        print(f"  ⚠️  MAWB file NOT renamed - please check the warning report and correct the values")
         return  # Exit early - do not process this folder at all
     
-    # Only proceed if validation passed
+    # ===========================================================================
+    # PHASE 2: ALL VALIDATIONS PASSED - NOW PROCESS FILES
+    # ===========================================================================
+    print("\n  ✅ PHASE 2: All validations passed - Processing files...")
+    
+    # Step 2.1: Now rename MAWB and create bloc note (validation already done)
+    mawb_number, _ = rename_mawb_pdfs_and_create_bloc_note(dir_path, directory_name, skip_rename=False)
+    
+    # Step 2.2: Continue with rest of processing
     find_and_remove_duplicates(dir_path)
     
     # Validate and correct article values in Sheet files BEFORE any processing
@@ -3007,7 +3027,7 @@ def process_directory(dir_path, directory_name):
             process_excel_file(file_path)
     else:
         print("  No summary files found for processing")
-    print(f"  Completed processing '{directory_name}'")
+    print(f"  ✅ Completed processing '{directory_name}'")
 
 def main():
     """Main function to orchestrate the entire process"""
