@@ -721,55 +721,84 @@ class PartialConfigDialog:
                         original_dum_weight_at_start = remaining_dum_weight  # Reset for new DUM
                 else:
                     # Split the DUM - this is the last DUM for this partial
-                    # Special case: If next partial is smallest partial (exception case), calculate differently
-                    next_partial_is_smallest = (smallest_partial_idx is not None and 
-                                                partial_idx + 1 == smallest_partial_idx and 
-                                                smallest_partial_positions is not None)
+                    # IMPORTANT: If this is the LAST partial, don't split - take entire remaining DUM
+                    # This prevents the last DUM from being incorrectly marked as split
+                    is_last_partial = (partial_idx == len(partial_weights) - 1)
                     
-                    if next_partial_is_smallest:
-                        # Exception case: Next partial is smallest with manual positions
-                        # This partial gets the remaining positions (total - manual positions)
-                        # The smallest partial will get the manual positions
-                        positions_for_split = remaining_dum_positions - smallest_partial_positions
-                        # Ensure non-negative
-                        positions_for_split = max(0, positions_for_split)
-                    else:
-                        # Normal case: Calculate positions proportionally to the REMAINING DUM's weight
-                        if remaining_dum_weight > 0:
-                            # Calculate positions based on weight ratio of remaining DUM part
-                            positions_for_split = round((weight_needed / remaining_dum_weight) * remaining_dum_positions)
-                        else:
-                            positions_for_split = 0
+                    if is_last_partial:
+                        # Last partial: take entire remaining DUM without splitting
+                        # (even if weight is slightly more due to floating point)
+                        rounded_weight = round(remaining_dum_weight, 1)
+                        rounded_positions = round(remaining_dum_positions)
                         
-                        # Ensure positions don't exceed remaining DUM positions
-                        positions_for_split = min(positions_for_split, remaining_dum_positions)
-                    
-                    # Ensure positions are non-negative
-                    positions_for_split = max(0, positions_for_split)
-                    
-                    # Round weight and positions to avoid floating point errors
-                    rounded_weight_needed = round(weight_needed, 1)
-                    rounded_positions_for_split = round(positions_for_split)
-                    
-                    partial_dums.append({
-                        'dum_number': dums[current_dum_idx]['number'],
-                        'weight': rounded_weight_needed,
-                        'positions': rounded_positions_for_split,
-                        'is_split': True,
-                        'split_id': f"{dums[current_dum_idx]['number']}/{partial_idx + 1}"
-                    })
-                    weight_accumulated += rounded_weight_needed
-                    positions_accumulated += rounded_positions_for_split
-                    
-                    # Update remaining DUM (round to avoid floating point errors)
-                    remaining_dum_weight = round(remaining_dum_weight - rounded_weight_needed, 1)
-                    if next_partial_is_smallest:
-                        # For exception case, remaining positions = manual positions
-                        remaining_dum_positions = smallest_partial_positions
+                        partial_dums.append({
+                            'dum_number': dums[current_dum_idx]['number'],
+                            'weight': rounded_weight,
+                            'positions': rounded_positions,
+                            'is_split': is_continuing_split,  # Only true if it was already split from previous partial
+                            'split_id': f"{dums[current_dum_idx]['number']}/{partial_idx + 1}" if is_continuing_split else ''
+                        })
+                        weight_accumulated += rounded_weight
+                        positions_accumulated += rounded_positions
+                        
+                        # Move to next DUM
+                        current_dum_idx += 1
+                        is_continuing_split = False
+                        if current_dum_idx < len(dums):
+                            remaining_dum_weight = round(dums[current_dum_idx]['weight'], 1)
+                            remaining_dum_positions = round(dums[current_dum_idx]['positions'])
+                            original_dum_weight_at_start = remaining_dum_weight
                     else:
-                        remaining_dum_positions = round(remaining_dum_positions - rounded_positions_for_split)
-                    is_continuing_split = True  # Mark that next partial continues this DUM
-                    break
+                        # Not last partial: split the DUM as before
+                        # Special case: If next partial is smallest partial (exception case), calculate differently
+                        next_partial_is_smallest = (smallest_partial_idx is not None and 
+                                                    partial_idx + 1 == smallest_partial_idx and 
+                                                    smallest_partial_positions is not None)
+                        
+                        if next_partial_is_smallest:
+                            # Exception case: Next partial is smallest with manual positions
+                            # This partial gets the remaining positions (total - manual positions)
+                            # The smallest partial will get the manual positions
+                            positions_for_split = remaining_dum_positions - smallest_partial_positions
+                            # Ensure non-negative
+                            positions_for_split = max(0, positions_for_split)
+                        else:
+                            # Normal case: Calculate positions proportionally to the REMAINING DUM's weight
+                            if remaining_dum_weight > 0:
+                                # Calculate positions based on weight ratio of remaining DUM part
+                                positions_for_split = round((weight_needed / remaining_dum_weight) * remaining_dum_positions)
+                            else:
+                                positions_for_split = 0
+                            
+                            # Ensure positions don't exceed remaining DUM positions
+                            positions_for_split = min(positions_for_split, remaining_dum_positions)
+                        
+                        # Ensure positions are non-negative
+                        positions_for_split = max(0, positions_for_split)
+                        
+                        # Round weight and positions to avoid floating point errors
+                        rounded_weight_needed = round(weight_needed, 1)
+                        rounded_positions_for_split = round(positions_for_split)
+                        
+                        partial_dums.append({
+                            'dum_number': dums[current_dum_idx]['number'],
+                            'weight': rounded_weight_needed,
+                            'positions': rounded_positions_for_split,
+                            'is_split': True,
+                            'split_id': f"{dums[current_dum_idx]['number']}/{partial_idx + 1}"
+                        })
+                        weight_accumulated += rounded_weight_needed
+                        positions_accumulated += rounded_positions_for_split
+                        
+                        # Update remaining DUM (round to avoid floating point errors)
+                        remaining_dum_weight = round(remaining_dum_weight - rounded_weight_needed, 1)
+                        if next_partial_is_smallest:
+                            # For exception case, remaining positions = manual positions
+                            remaining_dum_positions = smallest_partial_positions
+                        else:
+                            remaining_dum_positions = round(remaining_dum_positions - rounded_positions_for_split)
+                        is_continuing_split = True  # Mark that next partial continues this DUM
+                        break
             
             # For exception case: use manual positions for smallest partial
             if smallest_partial_idx is not None and partial_idx == smallest_partial_idx and smallest_partial_positions is not None:
