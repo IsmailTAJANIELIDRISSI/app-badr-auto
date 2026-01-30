@@ -1233,20 +1233,56 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
                 # pour éviter les erreurs "stale element"
                 lot_deleted_on_this_scan = False
                 
-                # Trouver toutes les lignes du tableau
-                rows = driver.find_elements(By.CSS_SELECTOR, "tbody#mainTab\\:j_id_ku_data tr[data-ri]")
+                # DEBUG: Essayer plusieurs sélecteurs pour trouver le tableau
+                print(f"      🔍 DEBUG: Recherche du tableau de lots...")
+                
+                # Essayer différents sélecteurs
+                selectors_to_try = [
+                    ("tbody#mainTab\\:j_id_ku_data tr[data-ri]", "avec tbody#mainTab:j_id_ku_data"),
+                    ("table[id*='j_id_ku'] tbody tr[data-ri]", "avec table[id*='j_id_ku']"),
+                    ("tbody tr[data-ri]", "avec tbody tr[data-ri]"),
+                    ("table tbody tr", "avec table tbody tr (tous)"),
+                ]
+                
+                rows = []
+                selector_used = None
+                
+                for selector, description in selectors_to_try:
+                    try:
+                        test_rows = driver.find_elements(By.CSS_SELECTOR, selector)
+                        print(f"         📊 Sélecteur '{description}': {len(test_rows)} ligne(s) trouvée(s)")
+                        if len(test_rows) > 0:
+                            rows = test_rows
+                            selector_used = selector
+                            break
+                    except Exception as e:
+                        print(f"         ⚠️  Erreur avec sélecteur '{description}': {e}")
                 
                 if not rows or len(rows) == 0:
-                    print(f"      ✓ Aucun lot trouvé sur cette page")
+                    print(f"      ⚠️  AUCUNE ligne trouvée avec aucun sélecteur!")
+                    print(f"      🔍 DEBUG: Vérification de la structure de la page...")
+                    
+                    # Essayer de trouver n'importe quel tableau
+                    all_tables = driver.find_elements(By.TAG_NAME, "table")
+                    print(f"         📊 {len(all_tables)} table(s) trouvée(s) sur la page")
+                    
+                    # Essayer de trouver n'importe quel tbody
+                    all_tbody = driver.find_elements(By.TAG_NAME, "tbody")
+                    print(f"         📊 {len(all_tbody)} tbody trouvé(s) sur la page")
+                    
+                    print(f"      ✓ Aucun lot trouvé sur cette page (structure introuvable)")
                     break
                 
-                print(f"      📊 {len(rows)} ligne(s) trouvée(s) dans le tableau")
+                print(f"      ✅ {len(rows)} ligne(s) trouvée(s) (sélecteur: {selector_used})")
                 
                 # Analyser chaque ligne
-                for row in rows:
+                for row_index, row in enumerate(rows, start=1):
                     try:
                         cells = row.find_elements(By.TAG_NAME, "td")
+                        print(f"         🔍 Ligne {row_index}: {len(cells)} cellule(s)")
+                        
                         if len(cells) < 3:
+                            print(f"         ⚠️  Ligne {row_index} ignorée (pas assez de cellules)")
                             continue
                         
                         # Colonne N° (1ère colonne)
