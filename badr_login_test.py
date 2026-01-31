@@ -1669,31 +1669,108 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
                 return_to_home_after_error(driver)
                 return False
             
-            # Nombre contenants - wait for element to be fresh after AJAX
-            try:
-                nombre_input = wait.until(
-                    EC.presence_of_element_located((By.ID, "mainTab:detailLot:ligne_section_form:nbrContenants"))
-                )
-                nombre_input.clear()
-                nombre_input.send_keys(str(dum_data['p']))
-                print(f"      ✓ Nombre contenants: {dum_data['p']}")
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"      ❌ Erreur nombre contenants: {e}")
+            # Nombre contenants - avec vérification robuste
+            from selenium.webdriver.common.keys import Keys
+            nbr_contenants_entered = False
+            for attempt in range(3):
+                try:
+                    nombre_input = wait.until(
+                        EC.presence_of_element_located((By.ID, "mainTab:detailLot:ligne_section_form:nbrContenants"))
+                    )
+                    
+                    # Clear multiple times to ensure field is empty
+                    nombre_input.clear()
+                    time.sleep(0.2)
+                    nombre_input.send_keys(Keys.CONTROL + "a")
+                    nombre_input.send_keys(Keys.DELETE)
+                    time.sleep(0.2)
+                    
+                    # Send the value
+                    nbr_contenants_value = str(int(dum_data['p']))  # Ensure integer
+                    nombre_input.send_keys(nbr_contenants_value)
+                    time.sleep(0.5)
+                    
+                    # Verify the value was entered correctly
+                    entered_value = nombre_input.get_attribute("value")
+                    if entered_value and int(entered_value) == int(dum_data['p']):
+                        print(f"      ✓ Nombre contenants: {entered_value} (vérifié)")
+                        nbr_contenants_entered = True
+                        break
+                    else:
+                        print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur entrée incorrecte ({entered_value} au lieu de {dum_data['p']})")
+                        if attempt < 2:
+                            time.sleep(0.5)
+                            continue
+                except Exception as e:
+                    if attempt < 2:
+                        print(f"      ⚠️  Tentative {attempt + 1}/3 échouée: {e}")
+                        time.sleep(0.5)
+                    else:
+                        print(f"      ❌ Erreur saisie nombre contenants après 3 tentatives: {e}")
+                        return_to_home_after_error(driver)
+                        return False
+            
+            if not nbr_contenants_entered:
+                print(f"      ❌ Impossible de saisir le nombre de contenants correctement")
                 return_to_home_after_error(driver)
                 return False
             
-            # Poids brut
-            try:
-                poids_input = wait.until(
-                    EC.presence_of_element_located((By.ID, "mainTab:detailLot:ligne_section_form:poidBru_input"))
-                )
-                poids_input.clear()
-                poids_input.send_keys(str(dum_data['p_brut']))
-                print(f"      ✓ Poids brut: {dum_data['p_brut']}")
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"      ❌ Erreur poids brut: {e}")
+            # Poids brut - avec vérification robuste
+            poids_brut_entered = False
+            for attempt in range(3):
+                try:
+                    poids_input = wait.until(
+                        EC.presence_of_element_located((By.ID, "mainTab:detailLot:ligne_section_form:poidBru_input"))
+                    )
+                    
+                    # Clear multiple times to ensure field is empty
+                    poids_input.clear()
+                    time.sleep(0.2)
+                    poids_input.send_keys(Keys.CONTROL + "a")
+                    poids_input.send_keys(Keys.DELETE)
+                    time.sleep(0.2)
+                    
+                    # Send the value (keep decimals)
+                    poids_brut_value = str(float(dum_data['p_brut']))  # Ensure float
+                    poids_input.send_keys(poids_brut_value)
+                    time.sleep(0.5)
+                    
+                    # Verify the value was entered correctly (allow small floating point differences)
+                    entered_value = poids_input.get_attribute("value")
+                    if entered_value:
+                        try:
+                            entered_float = float(entered_value)
+                            expected_float = float(dum_data['p_brut'])
+                            if abs(entered_float - expected_float) < 0.01:  # Allow 0.01 difference
+                                print(f"      ✓ Poids brut: {entered_value} (vérifié)")
+                                poids_brut_entered = True
+                                break
+                            else:
+                                print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur entrée incorrecte ({entered_value} au lieu de {dum_data['p_brut']})")
+                                if attempt < 2:
+                                    time.sleep(0.5)
+                                    continue
+                        except ValueError:
+                            print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur non numérique ({entered_value})")
+                            if attempt < 2:
+                                time.sleep(0.5)
+                                continue
+                    else:
+                        print(f"      ⚠️  Tentative {attempt + 1}/3: Champ vide après saisie")
+                        if attempt < 2:
+                            time.sleep(0.5)
+                            continue
+                except Exception as e:
+                    if attempt < 2:
+                        print(f"      ⚠️  Tentative {attempt + 1}/3 échouée: {e}")
+                        time.sleep(0.5)
+                    else:
+                        print(f"      ❌ Erreur saisie poids brut après 3 tentatives: {e}")
+                        return_to_home_after_error(driver)
+                        return False
+            
+            if not poids_brut_entered:
+                print(f"      ❌ Impossible de saisir le poids brut correctement")
                 return_to_home_after_error(driver)
                 return False
             
@@ -5932,32 +6009,111 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                 return_to_home_after_error(driver)
                 return False
             
-            # Nombre contenants
-            try:
-                nbr_contenants_input = wait.until(
-                    EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'nbrContenants')]"))
-                )
-                nbr_contenants_input.clear()
-                nbr_contenants_input.send_keys(str(dum_data['p']))
-                print(f"      ✓ Nombre contenants: {dum_data['p']}")
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"      ❌ Erreur nombre contenants: {e}")
+            # Nombre contenants - avec vérification robuste
+            from selenium.webdriver.common.keys import Keys
+            nbr_contenants_entered = False
+            for attempt in range(3):
+                try:
+                    nbr_contenants_input = wait.until(
+                        EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'nbrContenants')]"))
+                    )
+                    
+                    # Clear multiple times to ensure field is empty
+                    nbr_contenants_input.clear()
+                    time.sleep(0.2)
+                    nbr_contenants_input.send_keys(Keys.CONTROL + "a")
+                    nbr_contenants_input.send_keys(Keys.DELETE)
+                    time.sleep(0.2)
+                    
+                    # Send the value
+                    nbr_contenants_value = str(int(dum_data['p']))  # Ensure integer
+                    nbr_contenants_input.send_keys(nbr_contenants_value)
+                    time.sleep(0.5)
+                    
+                    # Verify the value was entered correctly
+                    entered_value = nbr_contenants_input.get_attribute("value")
+                    if entered_value and int(entered_value) == int(dum_data['p']):
+                        print(f"      ✓ Nombre contenants: {entered_value} (vérifié)")
+                        nbr_contenants_entered = True
+                        break
+                    else:
+                        print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur entrée incorrecte ({entered_value} au lieu de {dum_data['p']})")
+                        if attempt < 2:
+                            time.sleep(0.5)
+                            continue
+                except Exception as e:
+                    if attempt < 2:
+                        print(f"      ⚠️  Tentative {attempt + 1}/3 échouée: {e}")
+                        time.sleep(0.5)
+                    else:
+                        print(f"      ❌ Erreur saisie nombre contenants après 3 tentatives: {e}")
+                        driver.switch_to.default_content()
+                        return_to_home_after_error(driver)
+                        return False
+            
+            if not nbr_contenants_entered:
+                print(f"      ❌ Impossible de saisir le nombre de contenants correctement")
                 driver.switch_to.default_content()
                 return_to_home_after_error(driver)
                 return False
             
-            # Poids brut
-            try:
-                poids_brut_input = wait.until(
-                    EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'poidBru_input')]"))
-                )
-                poids_brut_input.clear()
-                poids_brut_input.send_keys(str(dum_data['p_brut']))
-                print(f"      ✓ Poids brut: {dum_data['p_brut']}")
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"      ❌ Erreur poids brut: {e}")
+            # Poids brut - avec vérification robuste
+            poids_brut_entered = False
+            for attempt in range(3):
+                try:
+                    poids_brut_input = wait.until(
+                        EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'poidBru_input')]"))
+                    )
+                    
+                    # Clear multiple times to ensure field is empty
+                    poids_brut_input.clear()
+                    time.sleep(0.2)
+                    poids_brut_input.send_keys(Keys.CONTROL + "a")
+                    poids_brut_input.send_keys(Keys.DELETE)
+                    time.sleep(0.2)
+                    
+                    # Send the value (keep decimals)
+                    poids_brut_value = str(float(dum_data['p_brut']))  # Ensure float
+                    poids_brut_input.send_keys(poids_brut_value)
+                    time.sleep(0.5)
+                    
+                    # Verify the value was entered correctly (allow small floating point differences)
+                    entered_value = poids_brut_input.get_attribute("value")
+                    if entered_value:
+                        try:
+                            entered_float = float(entered_value)
+                            expected_float = float(dum_data['p_brut'])
+                            if abs(entered_float - expected_float) < 0.01:  # Allow 0.01 difference
+                                print(f"      ✓ Poids brut: {entered_value} (vérifié)")
+                                poids_brut_entered = True
+                                break
+                            else:
+                                print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur entrée incorrecte ({entered_value} au lieu de {dum_data['p_brut']})")
+                                if attempt < 2:
+                                    time.sleep(0.5)
+                                    continue
+                        except ValueError:
+                            print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur non numérique ({entered_value})")
+                            if attempt < 2:
+                                time.sleep(0.5)
+                                continue
+                    else:
+                        print(f"      ⚠️  Tentative {attempt + 1}/3: Champ vide après saisie")
+                        if attempt < 2:
+                            time.sleep(0.5)
+                            continue
+                except Exception as e:
+                    if attempt < 2:
+                        print(f"      ⚠️  Tentative {attempt + 1}/3 échouée: {e}")
+                        time.sleep(0.5)
+                    else:
+                        print(f"      ❌ Erreur saisie poids brut après 3 tentatives: {e}")
+                        driver.switch_to.default_content()
+                        return_to_home_after_error(driver)
+                        return False
+            
+            if not poids_brut_entered:
+                print(f"      ❌ Impossible de saisir le poids brut correctement")
                 driver.switch_to.default_content()
                 return_to_home_after_error(driver)
                 return False
