@@ -3,6 +3,7 @@
 
 # Core Selenium and Web Automation
 selenium==4.15.2
+webdriver-manager>=4.0.0
 
 # Excel Processing
 openpyxl>=3.1.2
@@ -25,3 +26,6 @@ python-dotenv>=1.0.0
 
 # Executable Builder
 pyinstaller>=6.0.0
+
+# System Utilities
+psutil>=5.9.5

@@ -4,6 +4,7 @@ from selenium.webdriver.edge.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.microsoft import EdgeChromiumDriverManager
 import subprocess
 import time
 import os
@@ -49,6 +50,9 @@ load_dotenv()
 EDGE_PATH = os.getenv('EDGE_PATH', r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe")
 DRIVER_PATH = os.getenv('DRIVER_PATH', r"C:\Users\pc\Downloads\edgedriver_win64\msedgedriver.exe")
 BADR_PASSWORD = os.getenv('BADR_PASSWORD', '')
+
+# Cache for driver path to avoid repeated downloads
+_CACHED_DRIVER_PATH = None
 
 def _load_lta_license():
     """Load LTA license from config file"""
@@ -427,6 +431,54 @@ def start_fresh_edge():
     print("✓ Edge lancé avec un profil vierge")
     return profile_path, debug_port
 
+def _get_edge_driver_path():
+    """Get Edge driver path with caching and fallback strategy"""
+    global _CACHED_DRIVER_PATH
+    
+    # Return cached path if available
+    if _CACHED_DRIVER_PATH:
+        if os.path.exists(_CACHED_DRIVER_PATH):
+            return _CACHED_DRIVER_PATH
+    
+    # Strategy 1: Try manual driver path from .env (PRIORITÉ)
+    if DRIVER_PATH and os.path.exists(DRIVER_PATH):
+        print(f"   ✓ Utilisation driver manuel: {DRIVER_PATH}")
+        _CACHED_DRIVER_PATH = DRIVER_PATH
+        return DRIVER_PATH
+    
+    # Strategy 2: Search for msedgedriver.exe in common locations
+    common_paths = [
+        r"C:\Users\pc\Downloads\edgedriver_win64\msedgedriver.exe",
+        r"C:\WebDriver\msedgedriver.exe",
+        os.path.join(os.getcwd(), "msedgedriver.exe"),
+        os.path.join(os.path.expanduser("~"), "Downloads", "msedgedriver.exe")
+    ]
+    
+    for path in common_paths:
+        if os.path.exists(path):
+            print(f"   ✓ Driver trouvé: {path}")
+            _CACHED_DRIVER_PATH = path
+            return path
+    
+    # Strategy 3: Try webdriver-manager as last resort (offline fallback)
+    try:
+        print("   📥 Tentative téléchargement driver auto (webdriver-manager)...")
+        from webdriver_manager.microsoft import EdgeChromiumDriverManager
+        
+        # Set timeout for download
+        os.environ['WDM_TIMEOUT'] = '10'  # 10 seconds timeout
+        
+        driver_path = EdgeChromiumDriverManager().install()
+        if driver_path and os.path.exists(driver_path):
+            print(f"   ✓ Driver auto installé: {driver_path}")
+            _CACHED_DRIVER_PATH = driver_path
+            return driver_path
+    except Exception as e:
+        print(f"   ⚠️  Échec webdriver-manager: {str(e)[:100]}")
+    
+    print("   ❌ Aucun driver trouvé")
+    return None
+
 def connect_to_edge(debug_port):
     """Se connecte à l'instance Edge lancée avec vérifications"""
     
@@ -461,13 +513,19 @@ def connect_to_edge(debug_port):
         edge_options.add_argument('--allow-insecure-localhost')
         edge_options.accept_insecure_certs = True
         
-        if not os.path.exists(DRIVER_PATH):
-            print(f"❌ Driver introuvable: {DRIVER_PATH}")
+        # Get driver path with fallback strategy
+        print("🔗 Connexion à Edge...")
+        driver_path = _get_edge_driver_path()
+        
+        if not driver_path:
+            print("❌ Impossible de trouver ou télécharger le driver Edge")
+            print("💡 Solutions:")
+            print("   1. Télécharger manuellement: https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/")
+            print("   2. Placer msedgedriver.exe dans: C:\\WebDriver\\")
+            print("   3. Configurer DRIVER_PATH dans .env")
             return None
         
-        service = Service(executable_path=DRIVER_PATH)
-        
-        print("🔗 Connexion à Edge...")
+        service = Service(driver_path)
         driver = webdriver.Edge(service=service, options=edge_options)
         
         # Vérifier que la fenêtre est toujours ouverte
