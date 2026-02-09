@@ -3214,11 +3214,11 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
             # Format 1: Avec tirets ET /1 (ex: "235-94908726/1")
             ref_parts = lta_reference_raw.split("-")
             ref_parts[0] = str(int(ref_parts[0]))  # Enlever zéros initiaux
-            lta_reference_format1 = "-".join(ref_parts) + "/1"
+            lta_reference_format2 = "-".join(ref_parts) + "/1"
             
             # Format 2: Sans tirets, sans /1 (ex: "23594908726")
-            lta_reference_format2 = lta_reference_raw.replace("-", "")
-            lta_reference_format2 = str(int(lta_reference_format2))  # Enlever zéros initiaux
+            lta_reference_format1 = lta_reference_raw.replace("-", "")
+            lta_reference_format1 = str(int(lta_reference_format2))  # Enlever zéros initiaux
             
             # Format 3: Avec tirets, SANS /1 (ex: "235-94908726")
             lta_reference_format3 = "-".join(ref_parts)
@@ -4559,13 +4559,18 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                             return_to_home_after_error(driver)
                             raise Exception("Lot creation error")
                         
-                        # ED.11.2c: Poids brut (P,BRUT du DUM) - avec vérification
+                        # ED.11.2c: Poids brut (P,BRUT du DUM) - avec vérification et gestion stale element
                         poids_brut_entered = False
                         for attempt in range(3):
                             try:
+                                # Re-find element on each attempt to avoid stale element
                                 poids_brut_input = wait.until(
                                     EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'poidBru_input')]"))
                                 )
+                                
+                                # Wait for element to be interactable
+                                wait_for_ui_blocker_disappear(driver, timeout=3)
+                                time.sleep(0.2)
                                 
                                 # Clear multiple times to ensure field is empty
                                 poids_brut_input.clear()
@@ -4579,8 +4584,10 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                                 poids_brut_input.send_keys(poids_brut_value)
                                 time.sleep(0.5)
                                 
-                                # Verify the value was entered correctly (allow small floating point differences)
-                                entered_value = poids_brut_input.get_attribute("value")
+                                # Re-find element before verification to avoid stale element
+                                poids_brut_input_verify = driver.find_element(By.XPATH, "//input[contains(@name, 'poidBru_input')]")
+                                entered_value = poids_brut_input_verify.get_attribute("value")
+                                
                                 if entered_value:
                                     try:
                                         entered_float = float(entered_value)
@@ -4593,6 +4600,7 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                                             print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur entrée incorrecte ({entered_value} au lieu de {dum_data['p_brut']})")
                                             if attempt < 2:
                                                 time.sleep(0.5)
+                                                continue
                                                 continue
                                     except ValueError:
                                         print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur non numérique ({entered_value})")
@@ -4607,18 +4615,19 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                             except Exception as e:
                                 if attempt < 2:
                                     print(f"      ⚠️  Tentative {attempt + 1}/3 échouée: {e}")
+                                    # Check if stale element - don't fail immediately
+                                    if "stale element" in str(e).lower():
+                                        print(f"      ℹ️  Stale element détecté - retry saisie poids brut")
                                     time.sleep(0.5)
                                 else:
                                     print(f"      ❌ Erreur saisie poids brut après 3 tentatives: {e}")
-                                    driver.switch_to.default_content()
-                                    return_to_home_after_error(driver)
-                                    raise Exception("Lot creation error")
+                                    # Don't go to accueil, let outer retry handle it
+                                    raise Exception("Field entry error")
                         
                         if not poids_brut_entered:
-                            print(f"      ❌ Impossible de saisir le poids brut correctement")
-                            driver.switch_to.default_content()
-                            return_to_home_after_error(driver)
-                            raise Exception("Lot creation error")
+                            print(f"      ❌ Impossible de saisir le poids brut correctement après 3 tentatives")
+                            # Don't go to accueil, let outer retry handle it
+                            raise Exception("Field entry error")
                         
                         # ED.11.2d: Marque (référence LTA validée)
                         try:
@@ -4631,9 +4640,7 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                             time.sleep(0.5)
                         except Exception as e:
                             print(f"      ❌ Erreur saisie marque: {e}")
-                            driver.switch_to.default_content()
-                            return_to_home_after_error(driver)
-                            raise Exception("Lot creation error")
+                            raise Exception("Field entry error")
                         
                         # ED.11.2e: Nature marchandise (constant)
                         try:
@@ -4646,24 +4653,9 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                             time.sleep(0.5)
                         except Exception as e:
                             print(f"      ❌ Erreur saisie nature marchandise: {e}")
-                            driver.switch_to.default_content()
-                            return_to_home_after_error(driver)
-                            raise Exception("Lot creation error")
-                        
-                        # ED.11.2f: Code NGP (9999)
-                        try:
-                            ngp_input = wait.until(
-                                EC.presence_of_element_located((By.XPATH, "//input[contains(@name, ':ngp') and @type='text']"))
-                            )
-                            ngp_input.clear()
-                            ngp_input.send_keys("9999")
-                            print(f"      ✓ Code NGP: 9999")
-                            time.sleep(0.5)
-                        except Exception as e:
+                            raise Exception("Field entry error")
                             print(f"      ❌ Erreur saisie NGP: {e}")
-                            driver.switch_to.default_content()
-                            return_to_home_after_error(driver)
-                            raise Exception("Lot creation error")
+                            raise Exception("Field entry error")
                         
                         # ED.11.2g: Ajouter le code NGP (bouton >>)
                         try:
@@ -4675,45 +4667,79 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                             time.sleep(1)
                         except Exception as e:
                             print(f"      ❌ Erreur ajout NGP: {e}")
-                            driver.switch_to.default_content()
-                            return_to_home_after_error(driver)
-                            raise Exception("Lot creation error")
+                            raise Exception("Field entry error")
                         
                         # ==================================================================
-                        # ÉTAPE ED.11.2h: Vérification finale avant validation
+                        # ÉTAPE ED.11.2h: Vérification finale avant validation avec retry
                         # ==================================================================
                         print(f"      🔍 Vérification finale des champs avant validation...")
-                        try:
-                            # Vérifier nombre de contenants
-                            nbr_contenants_final = wait.until(
-                                EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'nbrContenants')]"))
-                            )
-                            nbr_contenants_value_final = nbr_contenants_final.get_attribute("value")
-                            if not nbr_contenants_value_final or int(nbr_contenants_value_final) == 0:
-                                print(f"      ❌ ERREUR CRITIQUE: Nombre de contenants = 0 ou vide avant validation!")
-                                driver.switch_to.default_content()
-                                return_to_home_after_error(driver)
-                                raise Exception("Lot creation error")
-                            print(f"      ✓ Nombre contenants vérifié: {nbr_contenants_value_final}")
-                            
-                            # Vérifier poids brut
-                            poids_brut_final = wait.until(
-                                EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'poidBru_input')]"))
-                            )
-                            poids_brut_value_final = poids_brut_final.get_attribute("value")
-                            if not poids_brut_value_final or float(poids_brut_value_final) == 0:
-                                print(f"      ❌ ERREUR CRITIQUE: Poids brut = 0 ou vide avant validation!")
-                                driver.switch_to.default_content()
-                                return_to_home_after_error(driver)
-                                raise Exception("Lot creation error")
-                            print(f"      ✓ Poids brut vérifié: {poids_brut_value_final}")
-                            
-                            print(f"      ✅ Tous les champs critiques sont remplis correctement")
-                            time.sleep(0.5)
-                        except Exception as e:
-                            print(f"      ⚠️  Erreur lors de la vérification finale: {e}")
-                            # Continuer quand même, mais avec un avertissement
-                            print(f"      ⚠️  Continuation malgré l'erreur de vérification...")
+                        fields_valid = False
+                        for verify_attempt in range(3):
+                            try:
+                                # Vérifier nombre de contenants
+                                nbr_contenants_final = wait.until(
+                                    EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'nbrContenants')]"))
+                                )
+                                nbr_contenants_value_final = nbr_contenants_final.get_attribute("value")
+                                
+                                if not nbr_contenants_value_final or int(nbr_contenants_value_final) == 0:
+                                    if verify_attempt < 2:
+                                        print(f"      ⚠️  Tentative {verify_attempt + 1}/3: Nombre de contenants = 0, re-remplissage...")
+                                        # Refill the field
+                                        nbr_contenants_final.clear()
+                                        time.sleep(0.2)
+                                        nbr_contenants_final.send_keys(Keys.CONTROL + "a")
+                                        nbr_contenants_final.send_keys(Keys.DELETE)
+                                        time.sleep(0.2)
+                                        nbr_contenants_final.send_keys(str(int(dum_data['p'])))
+                                        time.sleep(0.5)
+                                        continue
+                                    else:
+                                        print(f"      ❌ ERREUR CRITIQUE: Nombre de contenants = 0 après 3 tentatives!")
+                                        raise Exception("Empty field after retries")
+                                
+                                print(f"      ✓ Nombre contenants vérifié: {nbr_contenants_value_final}")
+                                
+                                # Vérifier poids brut
+                                poids_brut_final = wait.until(
+                                    EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'poidBru_input')]"))
+                                )
+                                poids_brut_value_final = poids_brut_final.get_attribute("value")
+                                
+                                if not poids_brut_value_final or float(poids_brut_value_final) == 0:
+                                    if verify_attempt < 2:
+                                        print(f"      ⚠️  Tentative {verify_attempt + 1}/3: Poids brut = 0, re-remplissage...")
+                                        # Refill the field
+                                        poids_brut_final.clear()
+                                        time.sleep(0.2)
+                                        poids_brut_final.send_keys(Keys.CONTROL + "a")
+                                        poids_brut_final.send_keys(Keys.DELETE)
+                                        time.sleep(0.2)
+                                        poids_brut_final.send_keys(str(float(dum_data['p_brut'])))
+                                        time.sleep(0.5)
+                                        continue
+                                    else:
+                                        print(f"      ❌ ERREUR CRITIQUE: Poids brut = 0 après 3 tentatives!")
+                                        raise Exception("Empty field after retries")
+                                
+                                print(f"      ✓ Poids brut vérifié: {poids_brut_value_final}")
+                                print(f"      ✅ Tous les champs critiques sont remplis correctement")
+                                fields_valid = True
+                                break
+                                
+                            except Exception as e:
+                                if verify_attempt < 2:
+                                    print(f"      ⚠️  Tentative {verify_attempt + 1}/3 échouée: {e}")
+                                    time.sleep(0.5)
+                                else:
+                                    print(f"      ❌ Erreur vérification finale après 3 tentatives: {e}")
+                                    raise
+                        
+                        if not fields_valid:
+                            print(f"      ❌ Impossible de valider les champs après 3 tentatives")
+                            raise Exception("Field validation error")
+                        
+                        time.sleep(0.5)
                         
                         # ==================================================================
                         # ÉTAPE ED.11.3: Valider la ligne marchandise
@@ -4731,7 +4757,7 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                                 wait_for_ui_blocker_disappear(driver, timeout=10)
                                 time.sleep(0.5)
                                 
-                                # Chercher le bouton
+                                # Re-chercher le bouton à chaque tentative (évite stale element)
                                 valider_ligne_btn = wait.until(
                                     EC.presence_of_element_located((By.XPATH, "//button[contains(@name, 'btn_confirmer_ligne')]"))
                                 )
@@ -4748,7 +4774,9 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                                     if val_attempt == 0:
                                         print(f"         🖱️  Tentative clic Selenium standard...")
                                     WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_confirmer_ligne')]")))
-                                    valider_ligne_btn.click()
+                                    # Re-find button before click to avoid stale element
+                                    fresh_btn = driver.find_element(By.XPATH, "//button[contains(@name, 'btn_confirmer_ligne')]")
+                                    fresh_btn.click()
                                     print(f"         ✅ SUCCÈS: Ligne validée (méthode Selenium, tentative {val_attempt + 1})")
                                     ligne_validated = True
                                     break
@@ -4756,7 +4784,9 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                                     if val_attempt < 2:
                                         print(f"         ⚠️  Clic Selenium échoué: {click_err}")
                                         print(f"         🔄 Passage à JavaScript fallback...")
-                                    driver.execute_script("arguments[0].click();", valider_ligne_btn)
+                                    # Re-find for JavaScript click too
+                                    fresh_btn_js = driver.find_element(By.XPATH, "//button[contains(@name, 'btn_confirmer_ligne')]")
+                                    driver.execute_script("arguments[0].click();", fresh_btn_js)
                                     print(f"         ✅ SUCCÈS: Ligne validée (méthode JavaScript, tentative {val_attempt + 1})")
                                     ligne_validated = True
                                     break
@@ -4764,14 +4794,16 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                             except Exception as e:
                                 if val_attempt < 2:
                                     print(f"         ❌ Tentative {val_attempt + 1} échouée: {e}")
+                                    # Check if stale element - if so, just retry without going home
+                                    if "stale element" in str(e).lower():
+                                        print(f"         ℹ️  Stale element détecté - retry sans quitter formulaire")
                                 else:
                                     print(f"         ❌ Erreur validation ligne après 3 tentatives: {e}")
                         
                         if not ligne_validated:
-                            print(f"      ❌ Impossible de valider la ligne marchandise")
-                            driver.switch_to.default_content()
-                            return_to_home_after_error(driver)
-                            raise Exception("Lot creation error")
+                            print(f"      ❌ Impossible de valider la ligne marchandise après 3 tentatives")
+                            # Don't go to accueil, let outer retry handle it
+                            raise Exception("Validation failed after retries")
                         
                         # Attendre que le blocker disparaisse après validation
                         wait_for_ui_blocker_disappear(driver, timeout=10)
@@ -4784,28 +4816,74 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                     # Error occurred during lot creation
                     retry_attempt += 1
                     
-                    # Check if it's a Selenium error using the existing function
-                    if is_selenium_error(lot_error):
-                        if retry_attempt < MAX_LOT_RETRIES:
-                            print(f"      ⚠️ Erreur Selenium détectée: {lot_error}")
-                            print(f"      🔄 Retry automatique du lot {dum_index}...")
-                            driver.switch_to.default_content()
-                            # Try to stabilize
+                    error_message = str(lot_error)
+                    
+                    # Categorize the error type
+                    is_field_error = "Field entry error" in error_message or "Field validation error" in error_message or "Empty field" in error_message
+                    is_validation_error = "Validation failed" in error_message
+                    is_selenium_error_bool = is_selenium_error(lot_error)
+                    
+                    # Decision: Should we retry?
+                    if retry_attempt < MAX_LOT_RETRIES:
+                        # Determine recovery strategy based on error type
+                        if is_field_error:
+                            print(f"      ⚠️ Erreur champ détectée: {error_message}")
+                            print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - Les champs seront re-remplis...")
+                            # No need to go to accueil or recreate lot - fields will be refilled in next attempt
+                            # Just ensure we're in a stable state
                             try:
                                 wait_for_ui_blocker_disappear(driver, timeout=5)
                                 time.sleep(1)
                             except:
                                 pass
                             continue  # Retry the lot in while loop
+                            
+                        elif is_validation_error:
+                            print(f"      ⚠️ Erreur validation détectée: {error_message}")
+                            print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - La validation sera retentée...")
+                            # No need to recreate lot - validation will be retried
+                            try:
+                                wait_for_ui_blocker_disappear(driver, timeout=5)
+                                time.sleep(1)
+                            except:
+                                pass
+                            continue  # Retry the lot in while loop
+                            
+                        elif is_selenium_error_bool:
+                            print(f"      ⚠️ Erreur Selenium détectée: {error_message}")
+                            print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - Le lot sera recréé depuis le début...")
+                            # For Selenium errors early in process, we may need to recreate lot
+                            # Exit iframe and stabilize
+                            driver.switch_to.default_content()
+                            try:
+                                wait_for_ui_blocker_disappear(driver, timeout=5)
+                                time.sleep(1)
+                                # Return to iframe
+                                iframe = wait.until(EC.presence_of_element_located((By.TAG_NAME, "iframe")))
+                                driver.switch_to.frame(iframe)
+                                time.sleep(1)
+                            except:
+                                pass
+                            continue  # Retry the lot in while loop
                         else:
-                            # Max retries reached for Selenium error
-                            print(f"      ❌ Échec après {MAX_LOT_RETRIES} tentatives pour lot {dum_index}")
-                            print(f"      Dernière erreur: {lot_error}")
-                            return_to_home_after_error(driver)
-                            return False
+                            # Unknown error type - treat as Selenium error
+                            print(f"      ⚠️ Erreur inconnue: {error_message}")
+                            print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES}...")
+                            driver.switch_to.default_content()
+                            try:
+                                wait_for_ui_blocker_disappear(driver, timeout=5)
+                                time.sleep(1)
+                                # Return to iframe
+                                iframe = wait.until(EC.presence_of_element_located((By.TAG_NAME, "iframe")))
+                                driver.switch_to.frame(iframe)
+                                time.sleep(1)
+                            except:
+                                pass
+                            continue  # Retry the lot in while loop
                     else:
-                        # Business/logical error - don't retry, fail immediately
-                        print(f"      ❌ Erreur logique (pas de retry): {lot_error}")
+                        # Max retries reached
+                        print(f"      ❌ Échec après {MAX_LOT_RETRIES} tentatives pour lot {dum_index}")
+                        print(f"      Dernière erreur: {error_message}")
                         return_to_home_after_error(driver)
                         return False
         
