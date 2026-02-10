@@ -1503,450 +1503,554 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
         # ==================================================================
         print("\n   📦 Création des nouveaux lots...")
         
+        MAX_LOT_RETRIES = 3
         for dum_index, dum_data in enumerate(dum_lots_data, start=1):
-            print(f"\n   🔹 Création lot {dum_index}/{len(dum_lots_data)} ({dum_data['dum_name']})...")
+            lot_creation_successful = False
+            retry_attempt = 0
             
-            # MED.6.1: Cliquer sur "Nouveau"
-            try:
-                nouveau_lot_btn = wait.until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_new_lot')]"))
-                )
-                nouveau_lot_btn.click()
-                print(f"      ✓ Bouton 'Nouveau' cliqué")
-                time.sleep(2)
-            except Exception as e:
-                print(f"      ❌ Erreur clic 'Nouveau': {e}")
-                return_to_home_after_error(driver)
-                return False
+            while not lot_creation_successful and retry_attempt < MAX_LOT_RETRIES:
+                if retry_attempt > 0:
+                    print(f"\n   🔄 RETRY lot {dum_index} - Tentative {retry_attempt + 1}/{MAX_LOT_RETRIES}...")
+                    time.sleep(2)  # Pause before retry
+                
+                try:  # Outer try for entire lot creation with retry
+                    print(f"\n   🔹 Création lot {dum_index}/{len(dum_lots_data)} ({dum_data['dum_name']})...")
             
-            # MED.6.2: Remplir l'en-tête du lot
-            
-            # Référence: {lta_reference}/N (toujours ajouter /N, ne jamais remplacer) - avec retry et robustesse
-            try:
-                # Toujours ajouter /N à la fin
-                # "235-94908936/1" → "235-94908936/1/2" pour DUM 2
-                # "23594908936" → "23594908936/2" pour DUM 2
-                lot_reference = f"{lta_reference_existing}/{dum_index}"
-                
-                # Attendre que le blocker UI disparaisse après le clic "Nouveau"
-                wait_for_ui_blocker_disappear(driver, timeout=10)
-                time.sleep(0.5)
-                
-                # Retry avec plusieurs tentatives pour saisir la référence
-                reference_entered = False
-                max_ref_attempts = 5
-                
-                for ref_attempt in range(max_ref_attempts):
+                    # MED.6.1: Cliquer sur "Nouveau"
                     try:
-                        if ref_attempt > 0:
-                            print(f"         🔄 Tentative saisie référence {ref_attempt + 1}/{max_ref_attempts}...")
-                            time.sleep(1)
-                            wait_for_ui_blocker_disappear(driver, timeout=5)
-                        
-                        # Attendre que le champ soit présent ET interactable
-                        ref_lot_input = wait.until(
-                            EC.element_to_be_clickable((By.XPATH, "//input[contains(@name, 'referenceLot_IT_id')]"))
+                        nouveau_lot_btn = wait.until(
+                            EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_new_lot')]"))
                         )
+                        nouveau_lot_btn.click()
+                        print(f"      ✓ Bouton 'Nouveau' cliqué")
+                        time.sleep(2)
+                    except Exception as e:
+                        print(f"      ❌ Erreur clic 'Nouveau': {e}")
+                        raise Exception("Lot creation error")
+            
+                    # MED.6.2: Remplir l'en-tête du lot
+                    
+                    # Référence: {lta_reference}/N (toujours ajouter /N, ne jamais remplacer) - avec retry et robustesse
+                    try:
+                        # Toujours ajouter /N à la fin
+                        # "235-94908936/1" → "235-94908936/1/2" pour DUM 2
+                        # "23594908936" → "23594908936/2" pour DUM 2
+                        lot_reference = f"{lta_reference_existing}/{dum_index}"
                         
-                        # Vérifier que le champ est visible et enabled
-                        if not ref_lot_input.is_displayed():
-                            raise Exception("Champ référence non visible")
-                        if not ref_lot_input.is_enabled():
-                            raise Exception("Champ référence non activé")
+                        # Attendre que le blocker UI disparaisse après le clic "Nouveau"
+                        wait_for_ui_blocker_disappear(driver, timeout=10)
+                        time.sleep(0.5)
                         
-                        # Scroll vers l'élément pour s'assurer qu'il est visible
-                        driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", ref_lot_input)
-                        time.sleep(0.3)
+                        # Retry avec plusieurs tentatives pour saisir la référence
+                        reference_entered = False
+                        max_ref_attempts = 5
                         
-                        # Attendre que le blocker disparaisse avant de saisir
-                        wait_for_ui_blocker_disappear(driver, timeout=3)
-                        
-                        # Essayer de saisir avec Selenium
-                        try:
-                            ref_lot_input.clear()
-                            time.sleep(0.2)
-                            ref_lot_input.send_keys(lot_reference)
-                            
-                            # Vérifier que la valeur a été saisie correctement
-                            entered_value = ref_lot_input.get_attribute("value")
-                            if entered_value and lot_reference in entered_value:
-                                print(f"      ✓ Référence: {lot_reference} (vérifiée)")
-                                reference_entered = True
-                                break
-                            else:
-                                print(f"         ⚠️  Valeur saisie incorrecte: '{entered_value}' au lieu de '{lot_reference}'")
-                                if ref_attempt < max_ref_attempts - 1:
-                                    continue
-                        except Exception as selenium_err:
-                            if ref_attempt < max_ref_attempts - 1:
-                                print(f"         ⚠️  Saisie Selenium échouée: {selenium_err}")
-                                # Essayer avec JavaScript comme fallback
+                        for ref_attempt in range(max_ref_attempts):
+                            try:
+                                if ref_attempt > 0:
+                                    print(f"         🔄 Tentative saisie référence {ref_attempt + 1}/{max_ref_attempts}...")
+                                    time.sleep(1)
+                                    wait_for_ui_blocker_disappear(driver, timeout=5)
+                                
+                                # Attendre que le champ soit présent ET interactable
+                                ref_lot_input = wait.until(
+                                    EC.element_to_be_clickable((By.XPATH, "//input[contains(@name, 'referenceLot_IT_id')]"))
+                                )
+                                
+                                # Vérifier que le champ est visible et enabled
+                                if not ref_lot_input.is_displayed():
+                                    raise Exception("Champ référence non visible")
+                                if not ref_lot_input.is_enabled():
+                                    raise Exception("Champ référence non activé")
+                                
+                                # Scroll vers l'élément pour s'assurer qu'il est visible
+                                driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", ref_lot_input)
+                                time.sleep(0.3)
+                                
+                                # Attendre que le blocker disparaisse avant de saisir
+                                wait_for_ui_blocker_disappear(driver, timeout=3)
+                                
+                                # Essayer de saisir avec Selenium
                                 try:
-                                    driver.execute_script("""
-                                        var input = arguments[0];
-                                        input.value = arguments[1];
-                                        input.dispatchEvent(new Event('input', { bubbles: true }));
-                                        input.dispatchEvent(new Event('change', { bubbles: true }));
-                                    """, ref_lot_input, lot_reference)
+                                    ref_lot_input.clear()
+                                    time.sleep(0.2)
+                                    ref_lot_input.send_keys(lot_reference)
                                     
-                                    # Vérifier la valeur
+                                    # Vérifier que la valeur a été saisie correctement
                                     entered_value = ref_lot_input.get_attribute("value")
                                     if entered_value and lot_reference in entered_value:
-                                        print(f"      ✓ Référence: {lot_reference} (via JavaScript)")
+                                        print(f"      ✓ Référence: {lot_reference} (vérifiée)")
                                         reference_entered = True
                                         break
-                                except Exception as js_err:
-                                    if ref_attempt < max_ref_attempts - 1:
-                                        print(f"         ⚠️  JavaScript fallback échoué: {js_err}")
-                                        continue
                                     else:
-                                        raise js_err
-                            else:
-                                raise selenium_err
-                                
-                    except Exception as e:
-                        if ref_attempt < max_ref_attempts - 1:
-                            print(f"         ⚠️  Tentative {ref_attempt + 1} échouée: {e}")
-                            time.sleep(1)
-                        else:
-                            print(f"      ❌ Erreur saisie référence après {max_ref_attempts} tentatives: {e}")
-                            raise
-                
-                if not reference_entered:
-                    raise Exception(f"Impossible de saisir la référence après {max_ref_attempts} tentatives")
-                
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"      ❌ Erreur saisie référence: {e}")
-                return_to_home_after_error(driver)
-                return False
-            
-            # Ligne dépotée: 1
-            try:
-                ligne_input = wait.until(
-                    EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'ligneDepotee_IT_id')]"))
-                )
-                ligne_input.clear()
-                ligne_input.send_keys("1")
-                print(f"      ✓ Ligne dépotée: 1")
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"      ❌ Erreur saisie ligne: {e}")
-                return_to_home_after_error(driver)
-                return False
-            
-            # Radio ICE
-            try:
-                ice_radio = wait.until(
-                    EC.presence_of_element_located((By.ID, "mainTab:detailLot:entete_section_form:radioChoixDestinataire:1"))
-                )
-                radio_box = driver.find_element(By.XPATH, "//input[@id='mainTab:detailLot:entete_section_form:radioChoixDestinataire:1']/parent::div/following-sibling::div[@class='ui-radiobutton-box ui-widget ui-corner-all ui-state-default']")
-                radio_box.click()
-                print(f"      ✓ ICE sélectionné")
-                time.sleep(2)
-            except Exception as e:
-                print(f"      ⚠️  Erreur radio ICE: {e}")
-                # Méthode JS alternative
-                try:
-                    driver.execute_script("""
-                        var radio = document.getElementById('mainTab:detailLot:entete_section_form:radioChoixDestinataire:1');
-                        radio.checked = true;
-                        var event = new Event('change', { bubbles: true });
-                        radio.dispatchEvent(event);
-                    """)
-                    time.sleep(2)
-                    print(f"      ✓ ICE sélectionné (JS)")
-                except:
-                    pass
-            
-            # Numéro ICE
-            try:
-                ice_input = wait.until(
-                    EC.presence_of_element_located((By.ID, "mainTab:detailLot:entete_section_form:id_ice"))
-                )
-                wait.until(EC.element_to_be_clickable((By.ID, "mainTab:detailLot:entete_section_form:id_ice")))
-                ice_input.clear()
-                ice_input.send_keys("000230731000088")
-                print(f"      ✓ ICE: 000230731000088")
-                
-                # Tab pour déclencher validation
-                from selenium.webdriver.common.keys import Keys
-                ice_input.send_keys(Keys.TAB)
-                time.sleep(3)
-            except Exception as e:
-                print(f"      ❌ Erreur saisie ICE: {e}")
-                return_to_home_after_error(driver)
-                return False
-            
-            # Valider en-tête
-            try:
-                valider_lot_btn = wait.until(
-                    EC.element_to_be_clickable((By.ID, "mainTab:detailLot:entete_section_form:btn_confirmer_lot"))
-                )
-                valider_lot_btn.click()
-                print(f"      ✓ En-tête validé")
-                time.sleep(4)
-            except Exception as e:
-                print(f"      ❌ Erreur validation en-tête: {e}")
-                return_to_home_after_error(driver)
-                return False
-            
-            # MED.6.3: Créer ligne marchandise
-            
-            # Nouveau ligne
-            try:
-                nouveau_ligne_btn = wait.until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_new_ligne')]"))
-                )
-                nouveau_ligne_btn.click()
-                print(f"      ✓ Bouton 'Nouveau' ligne cliqué")
-                time.sleep(2)
-            except Exception as e:
-                print(f"      ❌ Erreur 'Nouveau' ligne: {e}")
-                return_to_home_after_error(driver)
-                return False
-            
-            # Type contenant: colis
-            try:
-                contenant_input = wait.until(
-                    EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'typeContenant') and contains(@id, '_input')]"))
-                )
-                contenant_input.clear()
-                contenant_input.send_keys("colis")
-                time.sleep(1)
-                
-                contenant_suggestion = wait.until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, "li.ui-autocomplete-item"))
-                )
-                contenant_suggestion.click()
-                print(f"      ✓ Type contenant: colis")
-                # Wait for AJAX update after type contenant selection
-                time.sleep(2)
-            except Exception as e:
-                print(f"      ❌ Erreur type contenant: {e}")
-                return_to_home_after_error(driver)
-                return False
-            
-            # Nombre contenants - avec vérification robuste
-            from selenium.webdriver.common.keys import Keys
-            nbr_contenants_entered = False
-            for attempt in range(3):
-                try:
-                    nombre_input = wait.until(
-                        EC.presence_of_element_located((By.ID, "mainTab:detailLot:ligne_section_form:nbrContenants"))
-                    )
-                    
-                    # Clear multiple times to ensure field is empty
-                    nombre_input.clear()
-                    time.sleep(0.2)
-                    nombre_input.send_keys(Keys.CONTROL + "a")
-                    nombre_input.send_keys(Keys.DELETE)
-                    time.sleep(0.2)
-                    
-                    # Send the value
-                    nbr_contenants_value = str(int(dum_data['p']))  # Ensure integer
-                    nombre_input.send_keys(nbr_contenants_value)
-                    time.sleep(0.5)
-                    
-                    # Verify the value was entered correctly
-                    entered_value = nombre_input.get_attribute("value")
-                    if entered_value and int(entered_value) == int(dum_data['p']):
-                        print(f"      ✓ Nombre contenants: {entered_value} (vérifié)")
-                        nbr_contenants_entered = True
-                        break
-                    else:
-                        print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur entrée incorrecte ({entered_value} au lieu de {dum_data['p']})")
-                        if attempt < 2:
-                            time.sleep(0.5)
-                            continue
-                except Exception as e:
-                    if attempt < 2:
-                        print(f"      ⚠️  Tentative {attempt + 1}/3 échouée: {e}")
+                                        print(f"         ⚠️  Valeur saisie incorrecte: '{entered_value}' au lieu de '{lot_reference}'")
+                                        if ref_attempt < max_ref_attempts - 1:
+                                            continue
+                                except Exception as selenium_err:
+                                    if ref_attempt < max_ref_attempts - 1:
+                                        print(f"         ⚠️  Saisie Selenium échouée: {selenium_err}")
+                                        # Essayer avec JavaScript comme fallback
+                                        try:
+                                            driver.execute_script("""
+                                                var input = arguments[0];
+                                                input.value = arguments[1];
+                                                input.dispatchEvent(new Event('input', { bubbles: true }));
+                                                input.dispatchEvent(new Event('change', { bubbles: true }));
+                                            """, ref_lot_input, lot_reference)
+                                            
+                                            # Vérifier la valeur
+                                            entered_value = ref_lot_input.get_attribute("value")
+                                            if entered_value and lot_reference in entered_value:
+                                                print(f"      ✓ Référence: {lot_reference} (via JavaScript)")
+                                                reference_entered = True
+                                                break
+                                        except Exception as js_err:
+                                            if ref_attempt < max_ref_attempts - 1:
+                                                print(f"         ⚠️  JavaScript fallback échoué: {js_err}")
+                                                continue
+                                            else:
+                                                raise js_err
+                                    else:
+                                        raise selenium_err
+                                        
+                            except Exception as e:
+                                if ref_attempt < max_ref_attempts - 1:
+                                    print(f"         ⚠️  Tentative {ref_attempt + 1} échouée: {e}")
+                                    time.sleep(1)
+                                else:
+                                    print(f"      ❌ Erreur saisie référence après {max_ref_attempts} tentatives: {e}")
+                                    raise
+                        
+                        if not reference_entered:
+                            raise Exception(f"Impossible de saisir la référence après {max_ref_attempts} tentatives")
+                        
                         time.sleep(0.5)
-                    else:
-                        print(f"      ❌ Erreur saisie nombre contenants après 3 tentatives: {e}")
-                        return_to_home_after_error(driver)
-                        return False
+                    except Exception as e:
+                        print(f"      ❌ Erreur saisie référence: {e}")
+                        raise Exception("Field entry error")
             
-            if not nbr_contenants_entered:
-                print(f"      ❌ Impossible de saisir le nombre de contenants correctement")
-                return_to_home_after_error(driver)
-                return False
+                    # Ligne dépotée: 1
+                    try:
+                        ligne_input = wait.until(
+                            EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'ligneDepotee_IT_id')]"))
+                        )
+                        ligne_input.clear()
+                        ligne_input.send_keys("1")
+                        print(f"      ✓ Ligne dépotée: 1")
+                        time.sleep(0.5)
+                    except Exception as e:
+                        print(f"      ❌ Erreur saisie ligne: {e}")
+                        raise Exception("Field entry error")
             
-            # Poids brut - avec vérification robuste
-            poids_brut_entered = False
-            for attempt in range(3):
-                try:
-                    poids_input = wait.until(
-                        EC.presence_of_element_located((By.ID, "mainTab:detailLot:ligne_section_form:poidBru_input"))
-                    )
-                    
-                    # Clear multiple times to ensure field is empty
-                    poids_input.clear()
-                    time.sleep(0.2)
-                    poids_input.send_keys(Keys.CONTROL + "a")
-                    poids_input.send_keys(Keys.DELETE)
-                    time.sleep(0.2)
-                    
-                    # Send the value (keep decimals)
-                    poids_brut_value = str(float(dum_data['p_brut']))  # Ensure float
-                    poids_input.send_keys(poids_brut_value)
-                    time.sleep(0.5)
-                    
-                    # Verify the value was entered correctly (allow small floating point differences)
-                    entered_value = poids_input.get_attribute("value")
-                    if entered_value:
+                    # Radio ICE
+                    try:
+                        ice_radio = wait.until(
+                            EC.presence_of_element_located((By.ID, "mainTab:detailLot:entete_section_form:radioChoixDestinataire:1"))
+                        )
+                        radio_box = driver.find_element(By.XPATH, "//input[@id='mainTab:detailLot:entete_section_form:radioChoixDestinataire:1']/parent::div/following-sibling::div[@class='ui-radiobutton-box ui-widget ui-corner-all ui-state-default']")
+                        radio_box.click()
+                        print(f"      ✓ ICE sélectionné")
+                        time.sleep(2)
+                    except Exception as e:
+                        print(f"      ⚠️  Erreur radio ICE: {e}")
+                        # Méthode JS alternative
                         try:
-                            entered_float = float(entered_value)
-                            expected_float = float(dum_data['p_brut'])
-                            if abs(entered_float - expected_float) < 0.01:  # Allow 0.01 difference
-                                print(f"      ✓ Poids brut: {entered_value} (vérifié)")
-                                poids_brut_entered = True
+                            driver.execute_script("""
+                                var radio = document.getElementById('mainTab:detailLot:entete_section_form:radioChoixDestinataire:1');
+                                radio.checked = true;
+                                var event = new Event('change', { bubbles: true });
+                                radio.dispatchEvent(event);
+                            """)
+                            time.sleep(2)
+                            print(f"      ✓ ICE sélectionné (JS)")
+                        except:
+                            pass
+            
+                    # Numéro ICE with stale element handling
+                    from selenium.webdriver.common.keys import Keys
+                    ice_entered = False
+                    for ice_attempt in range(3):
+                        try:
+                            if ice_attempt > 0:
+                                print(f"         🔄 Tentative ICE {ice_attempt + 1}/3...")
+                                time.sleep(1)
+                                wait_for_ui_blocker_disappear(driver, timeout=3)
+                            
+                            # Re-find element on each attempt to avoid stale element
+                            ice_input = wait.until(
+                                EC.presence_of_element_located((By.ID, "mainTab:detailLot:entete_section_form:id_ice"))
+                            )
+                            wait.until(EC.element_to_be_clickable((By.ID, "mainTab:detailLot:entete_section_form:id_ice")))
+                            
+                            wait_for_ui_blocker_disappear(driver, timeout=3)
+                            time.sleep(0.2)
+                            
+                            ice_input.clear()
+                            ice_input.send_keys("000230731000088")
+                            print(f"      ✓ ICE: 000230731000088")
+                            
+                            # Tab pour déclencher validation
+                            ice_input.send_keys(Keys.TAB)
+                            time.sleep(3)
+                            ice_entered = True
+                            break
+                            
+                        except Exception as e:
+                            if ice_attempt < 2:
+                                print(f"         ⚠️  Tentative {ice_attempt + 1} échouée: {e}")
+                                if "stale element" in str(e).lower():
+                                    print(f"         ℹ️  Stale element - retry saisie ICE")
+                            else:
+                                print(f"      ❌ Erreur saisie ICE après 3 tentatives: {e}")
+                                raise Exception("Field entry error")
+                    
+                    if not ice_entered:
+                        raise Exception("Impossible de saisir ICE après 3 tentatives")
+            
+                    # Valider en-tête
+                    try:
+                        valider_lot_btn = wait.until(
+                            EC.element_to_be_clickable((By.ID, "mainTab:detailLot:entete_section_form:btn_confirmer_lot"))
+                        )
+                        valider_lot_btn.click()
+                        print(f"      ✓ En-tête validé")
+                        time.sleep(4)
+                    except Exception as e:
+                        print(f"      ❌ Erreur validation en-tête: {e}")
+                        raise Exception("Validation error")
+            
+                    # MED.6.3: Créer ligne marchandise
+                    
+                    # Nouveau ligne
+                    try:
+                        nouveau_ligne_btn = wait.until(
+                            EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_new_ligne')]"))
+                        )
+                        nouveau_ligne_btn.click()
+                        print(f"      ✓ Bouton 'Nouveau' ligne cliqué")
+                        time.sleep(2)
+                    except Exception as e:
+                        print(f"      ❌ Erreur 'Nouveau' ligne: {e}")
+                        raise Exception("Field entry error")
+            
+                    # Type contenant: colis
+                    try:
+                        contenant_input = wait.until(
+                            EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'typeContenant') and contains(@id, '_input')]"))
+                        )
+                        contenant_input.clear()
+                        contenant_input.send_keys("colis")
+                        time.sleep(1)
+                        
+                        contenant_suggestion = wait.until(
+                            EC.element_to_be_clickable((By.CSS_SELECTOR, "li.ui-autocomplete-item"))
+                        )
+                        contenant_suggestion.click()
+                        print(f"      ✓ Type contenant: colis")
+                        # Wait for AJAX update after type contenant selection
+                        time.sleep(2)
+                    except Exception as e:
+                        print(f"      ❌ Erreur type contenant: {e}")
+                        raise Exception("Field entry error")
+            
+                    # Nombre contenants - avec vérification robuste et stale element handling
+                    from selenium.webdriver.common.keys import Keys
+                    nbr_contenants_entered = False
+                    for attempt in range(3):
+                        try:
+                            if attempt > 0:
+                                time.sleep(0.5)
+                                wait_for_ui_blocker_disappear(driver, timeout=3)
+                            
+                            # Re-find element on each attempt
+                            nombre_input = wait.until(
+                                EC.presence_of_element_located((By.ID, "mainTab:detailLot:ligne_section_form:nbrContenants"))
+                            )
+                            
+                            # Clear multiple times to ensure field is empty
+                            nombre_input.clear()
+                            time.sleep(0.2)
+                            nombre_input.send_keys(Keys.CONTROL + "a")
+                            nombre_input.send_keys(Keys.DELETE)
+                            time.sleep(0.2)
+                            
+                            # Send the value
+                            nbr_contenants_value = str(int(dum_data['p']))  # Ensure integer
+                            nombre_input.send_keys(nbr_contenants_value)
+                            time.sleep(0.5)
+                            
+                            # Re-find element before verification to avoid stale element
+                            nombre_input_verify = driver.find_element(By.ID, "mainTab:detailLot:ligne_section_form:nbrContenants")
+                            entered_value = nombre_input_verify.get_attribute("value")
+                            
+                            if entered_value and int(entered_value) == int(dum_data['p']):
+                                print(f"      ✓ Nombre contenants: {entered_value} (vérifié)")
+                                nbr_contenants_entered = True
                                 break
                             else:
-                                print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur entrée incorrecte ({entered_value} au lieu de {dum_data['p_brut']})")
+                                print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur entrée incorrecte ({entered_value} au lieu de {dum_data['p']})")
                                 if attempt < 2:
-                                    time.sleep(0.5)
                                     continue
-                        except ValueError:
-                            print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur non numérique ({entered_value})")
+                        except Exception as e:
                             if attempt < 2:
+                                print(f"      ⚠️  Tentative {attempt + 1}/3 échouée: {e}")
+                                if "stale element" in str(e).lower():
+                                    print(f"      ℹ️  Stale element - retry saisie nombre contenants")
+                            else:
+                                print(f"      ❌ Erreur saisie nombre contenants après 3 tentatives: {e}")
+                                raise Exception("Field entry error")
+                    
+                    if not nbr_contenants_entered:
+                        print(f"      ❌ Impossible de saisir le nombre de contenants correctement")
+                        raise Exception("Field entry error")
+            
+                    # Poids brut - avec vérification robuste et stale element handling
+                    poids_brut_entered = False
+                    for attempt in range(3):
+                        try:
+                            if attempt > 0:
                                 time.sleep(0.5)
-                                continue
-                    else:
-                        print(f"      ⚠️  Tentative {attempt + 1}/3: Champ vide après saisie")
-                        if attempt < 2:
+                                wait_for_ui_blocker_disappear(driver, timeout=3)
+                            
+                            # Re-find element on each attempt
+                            poids_input = wait.until(
+                                EC.presence_of_element_located((By.ID, "mainTab:detailLot:ligne_section_form:poidBru_input"))
+                            )
+                            
+                            wait_for_ui_blocker_disappear(driver, timeout=3)
+                            time.sleep(0.2)
+                            
+                            # Clear multiple times to ensure field is empty
+                            poids_input.clear()
+                            time.sleep(0.2)
+                            poids_input.send_keys(Keys.CONTROL + "a")
+                            poids_input.send_keys(Keys.DELETE)
+                            time.sleep(0.2)
+                            
+                            # Send the value (keep decimals)
+                            poids_brut_value = str(float(dum_data['p_brut']))  # Ensure float
+                            poids_input.send_keys(poids_brut_value)
                             time.sleep(0.5)
-                            continue
-                except Exception as e:
-                    if attempt < 2:
-                        print(f"      ⚠️  Tentative {attempt + 1}/3 échouée: {e}")
+                            
+                            # Re-find element before verification to avoid stale element
+                            poids_input_verify = driver.find_element(By.ID, "mainTab:detailLot:ligne_section_form:poidBru_input")
+                            entered_value = poids_input_verify.get_attribute("value")
+                            
+                            if entered_value:
+                                try:
+                                    entered_float = float(entered_value)
+                                    expected_float = float(dum_data['p_brut'])
+                                    if abs(entered_float - expected_float) < 0.01:  # Allow 0.01 difference
+                                        print(f"      ✓ Poids brut: {entered_value} (vérifié)")
+                                        poids_brut_entered = True
+                                        break
+                                    else:
+                                        print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur entrée incorrecte ({entered_value} au lieu de {dum_data['p_brut']})")
+                                        if attempt < 2:
+                                            continue
+                                except ValueError:
+                                    print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur non numérique ({entered_value})")
+                                    if attempt < 2:
+                                        continue
+                            else:
+                                print(f"      ⚠️  Tentative {attempt + 1}/3: Champ vide après saisie")
+                                if attempt < 2:
+                                    continue
+                        except Exception as e:
+                            if attempt < 2:
+                                print(f"      ⚠️  Tentative {attempt + 1}/3 échouée: {e}")
+                                if "stale element" in str(e).lower():
+                                    print(f"      ℹ️  Stale element - retry saisie poids brut")
+                            else:
+                                print(f"      ❌ Erreur saisie poids brut après 3 tentatives: {e}")
+                                raise Exception("Field entry error")
+                    
+                    if not poids_brut_entered:
+                        print(f"      ❌ Impossible de saisir le poids brut correctement")
+                        raise Exception("Field entry error")
+            
+                    # Marque
+                    try:
+                        marque_input = wait.until(
+                            EC.presence_of_element_located((By.ID, "mainTab:detailLot:ligne_section_form:marqueLib"))
+                        )
+                        marque_input.clear()
+                        marque_input.send_keys(lta_reference_existing)
+                        print(f"      ✓ Marque: {lta_reference_existing}")
                         time.sleep(0.5)
+                    except Exception as e:
+                        print(f"      ❌ Erreur marque: {e}")
+                        raise Exception("Field entry error")
+                    
+                    # Nature marchandise
+                    try:
+                        nature_input = wait.until(
+                            EC.presence_of_element_located((By.ID, "mainTab:detailLot:ligne_section_form:marchand"))
+                        )
+                        nature_input.clear()
+                        nature_input.send_keys("courrier e-commerce")
+                        print(f"      ✓ Nature: courrier e-commerce")
+                        time.sleep(0.5)
+                    except Exception as e:
+                        print(f"      ❌ Erreur nature: {e}")
+                        raise Exception("Field entry error")
+                    
+                    # Code NGP
+                    try:
+                        ngp_input = wait.until(
+                            EC.presence_of_element_located((By.ID, "mainTab:detailLot:ligne_section_form:ngp"))
+                        )
+                        ngp_input.clear()
+                        ngp_input.send_keys("9999")
+                        print(f"      ✓ Code NGP: 9999")
+                        time.sleep(0.5)
+                    except Exception as e:
+                        print(f"      ❌ Erreur NGP: {e}")
+                        raise Exception("Field entry error")
+                    
+                    # Ajouter NGP (>>)
+                    try:
+                        ajouter_ngp_btn = wait.until(
+                            EC.element_to_be_clickable((By.ID, "mainTab:detailLot:ligne_section_form:btn_add_ngp"))
+                        )
+                        ajouter_ngp_btn.click()
+                        print(f"      ✓ NGP ajouté")
+                        time.sleep(1)
+                    except Exception as e:
+                        print(f"      ❌ Erreur ajout NGP: {e}")
+                        raise Exception("Field entry error")
+            
+                    # Valider ligne avec retry et gestion blocker UI + stale element
+                    print(f"      🔄 Validation de la ligne...")
+                    ligne_validated = False
+                    
+                    for val_attempt in range(3):
+                        try:
+                            if val_attempt > 0:
+                                print(f"         🔄 Tentative validation {val_attempt + 1}/3...")
+                                time.sleep(1)
+                            
+                            # Attendre que le blocker UI disparaisse
+                            wait_for_ui_blocker_disappear(driver, timeout=10)
+                            time.sleep(0.5)
+                            
+                            # Re-chercher le bouton à chaque tentative (évite stale element)
+                            valider_ligne_btn = wait.until(
+                                EC.presence_of_element_located((By.ID, "mainTab:detailLot:ligne_section_form:btn_confirmer_ligne"))
+                            )
+                            
+                            # Scroll into view
+                            driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", valider_ligne_btn)
+                            time.sleep(0.3)
+                            
+                            # Attendre que le blocker disparaisse avant de cliquer
+                            wait_for_ui_blocker_disappear(driver, timeout=5)
+                            
+                            # Essayer clic normal puis JavaScript
+                            try:
+                                if val_attempt == 0:
+                                    print(f"         🖱️  Tentative clic Selenium standard...")
+                                WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.ID, "mainTab:detailLot:ligne_section_form:btn_confirmer_ligne")))
+                                # Re-find button before click to avoid stale element
+                                fresh_btn = driver.find_element(By.ID, "mainTab:detailLot:ligne_section_form:btn_confirmer_ligne")
+                                fresh_btn.click()
+                                print(f"         ✅ SUCCÈS: Ligne validée (méthode Selenium, tentative {val_attempt + 1})")
+                                ligne_validated = True
+                                break
+                            except Exception as click_err:
+                                if val_attempt < 2:
+                                    print(f"         ⚠️  Clic Selenium échoué: {click_err}")
+                                    print(f"         🔄 Passage à JavaScript fallback...")
+                                # Re-find for JavaScript click too
+                                fresh_btn_js = driver.find_element(By.ID, "mainTab:detailLot:ligne_section_form:btn_confirmer_ligne")
+                                driver.execute_script("arguments[0].click();", fresh_btn_js)
+                                print(f"         ✅ SUCCÈS: Ligne validée (méthode JavaScript, tentative {val_attempt + 1})")
+                                ligne_validated = True
+                                break
+                            
+                        except Exception as e:
+                            if val_attempt < 2:
+                                print(f"         ❌ Tentative {val_attempt + 1} échouée: {e}")
+                                # Check if stale element - if so, just retry without going home
+                                if "stale element" in str(e).lower():
+                                    print(f"         ℹ️  Stale element détecté - retry sans quitter formulaire")
+                            else:
+                                print(f"         ❌ Erreur validation ligne après 3 tentatives: {e}")
+                    
+                    if not ligne_validated:
+                        print(f"      ❌ Impossible de valider la ligne après 3 tentatives")
+                        # Don't go to accueil, let outer retry handle it
+                        raise Exception("Validation failed after retries")
+                    
+                    # Attendre que le blocker disparaisse après validation
+                    wait_for_ui_blocker_disappear(driver, timeout=10)
+                    time.sleep(2)
+                    
+                    print(f"   ✅ Lot {dum_index} créé!")
+                    lot_creation_successful = True  # Mark success - exit while loop
+                    
+                except Exception as lot_error:
+                    # Error occurred during lot creation
+                    retry_attempt += 1
+                    
+                    error_message = str(lot_error)
+                    
+                    # Categorize the error type
+                    is_field_error = "Field entry error" in error_message or "Field validation error" in error_message or "Empty field" in error_message
+                    is_validation_error = "Validation failed" in error_message or "Validation error" in error_message
+                    is_selenium_error_bool = is_selenium_error(lot_error)
+                    
+                    # Decision: Should we retry?
+                    if retry_attempt < MAX_LOT_RETRIES:
+                        # Determine recovery strategy based on error type
+                        if is_field_error:
+                            print(f"      ⚠️ Erreur champ détectée: {error_message}")
+                            print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - Les champs seront re-remplis...")
+                            # No need to recreate lot - fields will be refilled in next attempt
+                            try:
+                                wait_for_ui_blocker_disappear(driver, timeout=5)
+                                time.sleep(1)
+                            except:
+                                pass
+                            continue  # Retry the lot in while loop
+                            
+                        elif is_validation_error:
+                            print(f"      ⚠️ Erreur validation détectée: {error_message}")
+                            print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - La validation sera retentée...")
+                            # No need to recreate lot - validation will be retried
+                            try:
+                                wait_for_ui_blocker_disappear(driver, timeout=5)
+                                time.sleep(1)
+                            except:
+                                pass
+                            continue  # Retry the lot in while loop
+                            
+                        elif is_selenium_error_bool:
+                            print(f"      ⚠️ Erreur Selenium détectée: {error_message}")
+                            print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - Le lot sera recréé...")
+                            # For Selenium errors, stabilize but stay in iframe
+                            try:
+                                wait_for_ui_blocker_disappear(driver, timeout=5)
+                                time.sleep(1)
+                            except:
+                                pass
+                            continue  # Retry the lot in while loop
+                        else:
+                            # Unknown error type - treat cautiously
+                            print(f"      ⚠️ Erreur inconnue: {error_message}")
+                            print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES}...")
+                            try:
+                                wait_for_ui_blocker_disappear(driver, timeout=5)
+                                time.sleep(1)
+                            except:
+                                pass
+                            continue  # Retry the lot in while loop
                     else:
-                        print(f"      ❌ Erreur saisie poids brut après 3 tentatives: {e}")
+                        # Max retries reached
+                        print(f"      ❌ Échec après {MAX_LOT_RETRIES} tentatives pour lot {dum_index}")
+                        print(f"      Dernière erreur: {error_message}")
                         return_to_home_after_error(driver)
                         return False
-            
-            if not poids_brut_entered:
-                print(f"      ❌ Impossible de saisir le poids brut correctement")
-                return_to_home_after_error(driver)
-                return False
-            
-            # Marque
-            try:
-                marque_input = wait.until(
-                    EC.presence_of_element_located((By.ID, "mainTab:detailLot:ligne_section_form:marqueLib"))
-                )
-                marque_input.clear()
-                marque_input.send_keys(lta_reference_existing)
-                print(f"      ✓ Marque: {lta_reference_existing}")
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"      ❌ Erreur marque: {e}")
-                return_to_home_after_error(driver)
-                return False
-            
-            # Nature marchandise
-            try:
-                nature_input = wait.until(
-                    EC.presence_of_element_located((By.ID, "mainTab:detailLot:ligne_section_form:marchand"))
-                )
-                nature_input.clear()
-                nature_input.send_keys("courrier e-commerce")
-                print(f"      ✓ Nature: courrier e-commerce")
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"      ❌ Erreur nature: {e}")
-                return_to_home_after_error(driver)
-                return False
-            
-            # Code NGP
-            try:
-                ngp_input = wait.until(
-                    EC.presence_of_element_located((By.ID, "mainTab:detailLot:ligne_section_form:ngp"))
-                )
-                ngp_input.clear()
-                ngp_input.send_keys("9999")
-                print(f"      ✓ Code NGP: 9999")
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"      ❌ Erreur NGP: {e}")
-                return_to_home_after_error(driver)
-                return False
-            
-            # Ajouter NGP (>>)
-            try:
-                ajouter_ngp_btn = wait.until(
-                    EC.element_to_be_clickable((By.ID, "mainTab:detailLot:ligne_section_form:btn_add_ngp"))
-                )
-                ajouter_ngp_btn.click()
-                print(f"      ✓ NGP ajouté")
-                time.sleep(1)
-            except Exception as e:
-                print(f"      ❌ Erreur ajout NGP: {e}")
-                return_to_home_after_error(driver)
-                return False
-            
-            # Valider ligne avec retry et gestion blocker UI
-            print(f"      🔄 Validation de la ligne...")
-            ligne_validated = False
-            
-            for val_attempt in range(3):
-                try:
-                    if val_attempt > 0:
-                        print(f"         🔄 Tentative validation {val_attempt + 1}/3...")
-                        time.sleep(1)
-                    
-                    # Attendre que le blocker UI disparaisse
-                    wait_for_ui_blocker_disappear(driver, timeout=10)
-                    time.sleep(0.5)
-                    
-                    # Chercher le bouton
-                    valider_ligne_btn = wait.until(
-                        EC.presence_of_element_located((By.ID, "mainTab:detailLot:ligne_section_form:btn_confirmer_ligne"))
-                    )
-                    
-                    # Scroll into view
-                    driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", valider_ligne_btn)
-                    time.sleep(0.3)
-                    
-                    # Attendre que le blocker disparaisse avant de cliquer
-                    wait_for_ui_blocker_disappear(driver, timeout=5)
-                    
-                    # Essayer clic normal puis JavaScript
-                    try:
-                        if val_attempt == 0:
-                            print(f"         🖱️  Tentative clic Selenium standard...")
-                        WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.ID, "mainTab:detailLot:ligne_section_form:btn_confirmer_ligne")))
-                        valider_ligne_btn.click()
-                        print(f"         ✅ SUCCÈS: Ligne validée (méthode Selenium, tentative {val_attempt + 1})")
-                        ligne_validated = True
-                        break
-                    except Exception as click_err:
-                        if val_attempt < 2:
-                            print(f"         ⚠️  Clic Selenium échoué: {click_err}")
-                            print(f"         🔄 Passage à JavaScript fallback...")
-                        driver.execute_script("arguments[0].click();", valider_ligne_btn)
-                        print(f"         ✅ SUCCÈS: Ligne validée (méthode JavaScript, tentative {val_attempt + 1})")
-                        ligne_validated = True
-                        break
-                    
-                except Exception as e:
-                    if val_attempt < 2:
-                        print(f"         ❌ Tentative {val_attempt + 1} échouée: {e}")
-                    else:
-                        print(f"         ❌ Erreur validation ligne après 3 tentatives: {e}")
-            
-            if not ligne_validated:
-                print(f"      ❌ Impossible de valider la ligne")
-                return_to_home_after_error(driver)
-                return False
-            
-            # Attendre que le blocker disparaisse après validation
-            wait_for_ui_blocker_disappear(driver, timeout=10)
-            time.sleep(2)
-            
-            print(f"   ✅ Lot {dum_index} créé!")
         
         print(f"\n   ✅ Tous les lots ({len(dum_lots_data)}) créés!")
         
@@ -2204,7 +2308,18 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
         # FIN - Retour à l'accueil
         # ==================================================================
         print("\n   🏠 Retour à l'accueil...")
-        return_to_home_after_error(driver)
+        try:
+            driver.switch_to.default_content()
+            accueil_btn = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.ID, "quitter"))
+            )
+            try:
+                accueil_btn.click()
+            except:
+                driver.execute_script("arguments[0].click();", accueil_btn)
+            time.sleep(2)
+        except:
+            pass
         
         print("\n" + "="*70)
         print("✅ MODIFICATION ED BLOCAGE TERMINÉE AVEC SUCCÈS")
@@ -3005,34 +3120,84 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
         print("="*70)
         
         # ==================================================================
-        # ÉTAPE ED.0: Navigation vers "Etat de Dépotage - Voyage Aérien"
+        # ÉTAPE ED.0a: Vérification stabilité de la page d'accueil
+        # ==================================================================
+        print("\n⏳ Vérification que la page est prête...")
+        try:
+            # Attendre que la page soit stable (pas de chargement en cours)
+            time.sleep(2)
+            
+            # Vérifier que le menu principal est présent
+            wait.until(
+                EC.presence_of_element_located((By.XPATH, "//h3[contains(@class, 'ui-panelmenu-header')]"))
+            )
+            print("   ✓ Page d'accueil prête")
+        except Exception as e:
+            print(f"   ⚠️  Page pas complètement chargée: {e}")
+            time.sleep(2)
+        
+        # ==================================================================
+        # ÉTAPE ED.0b: Navigation vers "Etat de Dépotage - Voyage Aérien"
         # ==================================================================
         print("\n📂 Navigation: MISE EN DOUANE → Etat de Dépotage → Voyage Aérien...")
         
-        # Ouvrir le menu "MISE EN DOUANE"
-        try:
-            mise_en_douane_link = wait.until(
-                EC.element_to_be_clickable((By.XPATH, "//h3[contains(@class, 'ui-panelmenu-header')]//a[contains(text(), 'MISE EN DOUANE')]"))
-            )
-            driver.execute_script("arguments[0].scrollIntoView(true);", mise_en_douane_link)
-            time.sleep(0.5)
-            mise_en_douane_link.click()
-            print("   ✓ Menu 'MISE EN DOUANE' ouvert")
-            time.sleep(2)
-        except Exception as e:
-            print(f"   ⚠️  Menu 'MISE EN DOUANE' déjà ouvert ou erreur: {e}")
-            # Continuer car le menu peut déjà être ouvert
+        # Ouvrir le menu "MISE EN DOUANE" avec retry
+        menu_opened = False
+        for menu_attempt in range(3):
+            try:
+                if menu_attempt > 0:
+                    print(f"   🔄 Tentative ouverture menu {menu_attempt + 1}/3...")
+                    time.sleep(1)
+                
+                mise_en_douane_link = wait.until(
+                    EC.element_to_be_clickable((By.XPATH, "//h3[contains(@class, 'ui-panelmenu-header')]//a[contains(text(), 'MISE EN DOUANE')]"))
+                )
+                driver.execute_script("arguments[0].scrollIntoView(true);", mise_en_douane_link)
+                time.sleep(0.5)
+                mise_en_douane_link.click()
+                print("   ✓ Menu 'MISE EN DOUANE' ouvert")
+                time.sleep(2)
+                menu_opened = True
+                break
+            except Exception as e:
+                if menu_attempt < 2:
+                    print(f"   ⚠️  Tentative {menu_attempt + 1}/3 échouée: {e}")
+                else:
+                    print(f"   ❌ Erreur ouverture menu après 3 tentatives: {e}")
+                    return_to_home_after_error(driver)
+                    return False
         
-        # Ouvrir le sous-menu "Créer une Déclaration" (ID: _151)
-        try:
-            creer_declaration_link = wait.until(
-                EC.element_to_be_clickable((By.ID, "_151"))
-            )
-            creer_declaration_link.click()
-            print("   ✓ Sous-menu 'Créer une Déclaration' ouvert")
-            time.sleep(1)
-        except Exception as e:
-            print(f"   ❌ Erreur ouverture 'Créer une Déclaration': {e}")
+        if not menu_opened:
+            print(f"   ❌ Impossible d'ouvrir le menu 'MISE EN DOUANE'")
+            return_to_home_after_error(driver)
+            return False
+        
+        # Ouvrir le sous-menu "Créer une Déclaration" (ID: _151) avec retry
+        submenu_opened = False
+        for submenu_attempt in range(3):
+            try:
+                if submenu_attempt > 0:
+                    print(f"   🔄 Tentative ouverture sous-menu {submenu_attempt + 1}/3...")
+                    time.sleep(1)
+                
+                creer_declaration_link = wait.until(
+                    EC.element_to_be_clickable((By.ID, "_151"))
+                )
+                creer_declaration_link.click()
+                print("   ✓ Sous-menu 'Créer une Déclaration' ouvert")
+                time.sleep(1.5)
+                submenu_opened = True
+                break
+            except Exception as e:
+                if submenu_attempt < 2:
+                    print(f"   ⚠️  Tentative {submenu_attempt + 1}/3 échouée: {e}")
+                else:
+                    print(f"   ❌ Erreur ouverture 'Créer une Déclaration' après 3 tentatives: {e}")
+                    return_to_home_after_error(driver)
+                    return False
+        
+        if not submenu_opened:
+            print(f"   ❌ Impossible d'ouvrir 'Créer une Déclaration'")
             return_to_home_after_error(driver)
             return False
         
@@ -3218,7 +3383,7 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
             
             # Format 2: Sans tirets, sans /1 (ex: "23594908726")
             lta_reference_format1 = lta_reference_raw.replace("-", "")
-            lta_reference_format1 = str(int(lta_reference_format2))  # Enlever zéros initiaux
+            lta_reference_format1 = str(int(lta_reference_format1))  # Enlever zéros initiaux
             
             # Format 3: Avec tirets, SANS /1 (ex: "235-94908726")
             lta_reference_format3 = "-".join(ref_parts)
@@ -4654,19 +4819,71 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                         except Exception as e:
                             print(f"      ❌ Erreur saisie nature marchandise: {e}")
                             raise Exception("Field entry error")
-                            print(f"      ❌ Erreur saisie NGP: {e}")
+                        
+                        # ED.11.2f: Saisir le code NGP avec retry et stale element handling
+                        ngp_entered = False
+                        for ngp_attempt in range(3):
+                            try:
+                                if ngp_attempt > 0:
+                                    print(f"      🔄 Tentative NGP {ngp_attempt + 1}/3...")
+                                    time.sleep(0.5)
+                                
+                                # Re-find element on each attempt to avoid stale element
+                                ngp_input = wait.until(
+                                    EC.presence_of_element_located((By.XPATH, "//input[contains(@name, ':ngp') and @type='text']"))
+                                )
+                                ngp_input.clear()
+                                time.sleep(0.2)
+                                ngp_input.send_keys("9999")
+                                
+                                if ngp_attempt == 0:
+                                    print(f"      ✓ Code NGP: 9999")
+                                ngp_entered = True
+                                time.sleep(0.5)
+                                break
+                            except Exception as e:
+                                if ngp_attempt < 2:
+                                    print(f"      ⚠️  Tentative {ngp_attempt + 1}/3 échouée: {e}")
+                                    if "stale element" in str(e).lower():
+                                        print(f"      ℹ️  Stale element - retry saisie NGP")
+                                else:
+                                    print(f"      ❌ Erreur saisie NGP après 3 tentatives: {e}")
+                                    raise Exception("Field entry error")
+                        
+                        if not ngp_entered:
+                            print(f"      ❌ Impossible de saisir le code NGP")
                             raise Exception("Field entry error")
                         
-                        # ED.11.2g: Ajouter le code NGP (bouton >>)
-                        try:
-                            add_ngp_btn = wait.until(
-                                EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_add_ngp')]"))
-                            )
-                            add_ngp_btn.click()
-                            print(f"      ✓ Code NGP ajouté")
-                            time.sleep(1)
-                        except Exception as e:
-                            print(f"      ❌ Erreur ajout NGP: {e}")
+                        # ED.11.2g: Ajouter le code NGP (bouton >>) avec retry
+                        ngp_added = False
+                        for add_attempt in range(3):
+                            try:
+                                if add_attempt > 0:
+                                    print(f"      🔄 Tentative ajout NGP {add_attempt + 1}/3...")
+                                    time.sleep(0.5)
+                                
+                                # Re-find button on each attempt to avoid stale element
+                                add_ngp_btn = wait.until(
+                                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_add_ngp')]"))
+                                )
+                                add_ngp_btn.click()
+                                
+                                if add_attempt == 0:
+                                    print(f"      ✓ Code NGP ajouté")
+                                ngp_added = True
+                                time.sleep(1)
+                                break
+                            except Exception as e:
+                                if add_attempt < 2:
+                                    print(f"      ⚠️  Tentative {add_attempt + 1}/3 échouée: {e}")
+                                    if "stale element" in str(e).lower():
+                                        print(f"      ℹ️  Stale element - retry ajout NGP")
+                                else:
+                                    print(f"      ❌ Erreur ajout NGP après 3 tentatives: {e}")
+                                    raise Exception("Field entry error")
+                        
+                        if not ngp_added:
+                            print(f"      ❌ Impossible d'ajouter le code NGP")
                             raise Exception("Field entry error")
                         
                         # ==================================================================
@@ -5804,9 +6021,9 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
         # ==================================================================
         total_p = partial_data['positions']
         total_p_brut = partial_data['weight']
-        
+
         print(f"\n   ⚖️  Totaux du partiel: P={total_p}, P,BRUT={total_p_brut}")
-        
+
         # Poids brut total (CORRECT ID from create_etat_depotage)
         try:
             poids_brut_input = wait.until(
@@ -5821,7 +6038,7 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
             driver.switch_to.default_content()
             return_to_home_after_error(driver)
             return False
-        
+
         # Nombre total de contenants (CORRECT ID from create_etat_depotage)
         try:
             nombre_contenants_input = wait.until(
@@ -5836,7 +6053,7 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
             driver.switch_to.default_content()
             return_to_home_after_error(driver)
             return False
-        
+
         # Navigate to LTA tab
         print("\n📦 Navigation vers l'onglet LTA...")
         try:
@@ -5851,532 +6068,590 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
             driver.switch_to.default_content()
             return_to_home_after_error(driver)
             return False
-        
+
         # Create lots for DUMs in this partial
         dum_lots_data = get_dum_lots_for_partial(partial_data, partial_config)
         print(f"\n📦 Création de {len(dum_lots_data)} lot(s) pour ce partiel...")
-        
+
+        MAX_LOT_RETRIES = 3
         for dum_index, dum_data in enumerate(dum_lots_data, start=1):
-            print(f"\n   🔹 Création lot {dum_index}/{len(dum_lots_data)} ({dum_data['dum_name']})...")
+            lot_creation_successful = False
+            retry_attempt = 0
             
-            # ==================================================================
-            # ÉTAPE LOT.1: Cliquer "Nouveau" pour créer un lot
-            # ==================================================================
-            try:
-                nouveau_lot_btn = wait.until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_new_lot')]"))
-                )
-                nouveau_lot_btn.click()
-                print(f"      ✓ Bouton 'Nouveau' lot cliqué")
-                time.sleep(2)
-            except Exception as e:
-                print(f"      ❌ Erreur clic 'Nouveau' lot: {e}")
-                driver.switch_to.default_content()
-                return_to_home_after_error(driver)
-                return False
+            while not lot_creation_successful and retry_attempt < MAX_LOT_RETRIES:
+                if retry_attempt > 0:
+                    print(f"\n   🔄 RETRY lot {dum_index} - Tentative {retry_attempt + 1}/{MAX_LOT_RETRIES}...")
+                    time.sleep(2)  # Pause before retry
+                
+                try:  # Outer try for entire lot creation with retry
+                    print(f"\n   🔹 Création lot {dum_index}/{len(dum_lots_data)} ({dum_data['dum_name']})...")
             
-            # ==================================================================
-            # ÉTAPE LOT.2: Remplir l'en-tête du lot
-            # ==================================================================
-            
-            # LOT.2a: Référence du lot (LTA ref + /DUM_NUMBER ou /DUM_NUMBER/SPLIT_ID) - avec retry et robustesse
-            try:
-                # Construire référence selon si DUM est split ou non
-                if dum_data.get('is_split', False) and dum_data.get('split_id'):
-                    # DUM split: 157-54326451/2/1 ou 157-54326451/2/2
-                    lot_reference = f"{lta_reference_format1}/{dum_data['split_id']}"
-                else:
-                    # DUM normal: 157-54326451/1 ou 157-54326451/3
-                    lot_reference = f"{lta_reference_format1}/{dum_data['dum_number']}"
-                
-                # Attendre que le blocker UI disparaisse après le clic "Nouveau"
-                wait_for_ui_blocker_disappear(driver, timeout=10)
-                time.sleep(0.5)
-                
-                # Retry avec plusieurs tentatives pour saisir la référence
-                reference_entered = False
-                max_ref_attempts = 5
-                
-                for ref_attempt in range(max_ref_attempts):
+                    # ==================================================================
+                    # ÉTAPE LOT.1: Cliquer "Nouveau" pour créer un lot
+                    # ==================================================================
                     try:
-                        if ref_attempt > 0:
-                            print(f"         🔄 Tentative saisie référence {ref_attempt + 1}/{max_ref_attempts}...")
-                            time.sleep(1)
-                            wait_for_ui_blocker_disappear(driver, timeout=5)
-                        
-                        # Attendre que le champ soit présent ET interactable
-                        ref_lot_input = wait.until(
-                            EC.element_to_be_clickable((By.XPATH, "//input[contains(@name, 'referenceLot_IT_id')]"))
+                        nouveau_lot_btn = wait.until(
+                            EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_new_lot')]"))
                         )
-                        
-                        # Vérifier que le champ est visible et enabled
-                        if not ref_lot_input.is_displayed():
-                            raise Exception("Champ référence non visible")
-                        if not ref_lot_input.is_enabled():
-                            raise Exception("Champ référence non activé")
-                        
-                        # Scroll vers l'élément pour s'assurer qu'il est visible
-                        driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", ref_lot_input)
-                        time.sleep(0.3)
-                        
-                        # Attendre que le blocker disparaisse avant de saisir
-                        wait_for_ui_blocker_disappear(driver, timeout=3)
-                        
-                        # Essayer de saisir avec Selenium
-                        try:
-                            ref_lot_input.clear()
-                            time.sleep(0.2)
-                            ref_lot_input.send_keys(lot_reference)
-                            
-                            # Vérifier que la valeur a été saisie correctement
-                            entered_value = ref_lot_input.get_attribute("value")
-                            if entered_value and lot_reference in entered_value:
-                                print(f"      ✓ Référence lot: {lot_reference} (vérifiée)")
-                                reference_entered = True
-                                break
-                            else:
-                                print(f"         ⚠️  Valeur saisie incorrecte: '{entered_value}' au lieu de '{lot_reference}'")
-                                if ref_attempt < max_ref_attempts - 1:
-                                    continue
-                        except Exception as selenium_err:
-                            if ref_attempt < max_ref_attempts - 1:
-                                print(f"         ⚠️  Saisie Selenium échouée: {selenium_err}")
-                                # Essayer avec JavaScript comme fallback
-                                try:
-                                    driver.execute_script("""
-                                        var input = arguments[0];
-                                        input.value = arguments[1];
-                                        input.dispatchEvent(new Event('input', { bubbles: true }));
-                                        input.dispatchEvent(new Event('change', { bubbles: true }));
-                                    """, ref_lot_input, lot_reference)
-                                    
-                                    # Vérifier la valeur
-                                    entered_value = ref_lot_input.get_attribute("value")
-                                    if entered_value and lot_reference in entered_value:
-                                        print(f"      ✓ Référence lot: {lot_reference} (via JavaScript)")
-                                        reference_entered = True
-                                        break
-                                except Exception as js_err:
-                                    if ref_attempt < max_ref_attempts - 1:
-                                        print(f"         ⚠️  JavaScript fallback échoué: {js_err}")
-                                        continue
-                                    else:
-                                        raise js_err
-                            else:
-                                raise selenium_err
-                                
+                        nouveau_lot_btn.click()
+                        print(f"      ✓ Bouton 'Nouveau' lot cliqué")
+                        time.sleep(2)
                     except Exception as e:
-                        if ref_attempt < max_ref_attempts - 1:
-                            print(f"         ⚠️  Tentative {ref_attempt + 1} échouée: {e}")
-                            time.sleep(1)
-                        else:
-                            print(f"      ❌ Erreur saisie référence lot après {max_ref_attempts} tentatives: {e}")
-                            raise
-                
-                if not reference_entered:
-                    raise Exception(f"Impossible de saisir la référence après {max_ref_attempts} tentatives")
-                
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"      ❌ Erreur saisie référence lot: {e}")
-                driver.switch_to.default_content()
-                return_to_home_after_error(driver)
-                return False
+                        print(f"      ❌ Erreur clic 'Nouveau' lot: {e}")
+                        raise Exception("Lot creation error")
             
-            # LOT.2b: Ligne dépotée (toujours 1)
-            try:
-                ligne_input = wait.until(
-                    EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'ligneDepotee_IT_id')]"))
-                )
-                ligne_input.clear()
-                ligne_input.send_keys("1")
-                print(f"      ✓ Ligne dépotée: 1")
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"      ❌ Erreur saisie ligne dépotée: {e}")
-                driver.switch_to.default_content()
-                return_to_home_after_error(driver)
-                return False
-            
-            # LOT.2c: Sélectionner le radio button ICE (valeur 02)
-            try:
-                ice_radio = wait.until(
-                    EC.presence_of_element_located((By.ID, "mainTab:detailLot:entete_section_form:radioChoixDestinataire:1"))
-                )
-                radio_box = driver.find_element(By.XPATH, "//input[@id='mainTab:detailLot:entete_section_form:radioChoixDestinataire:1']/parent::div/following-sibling::div[@class='ui-radiobutton-box ui-widget ui-corner-all ui-state-default']")
-                radio_box.click()
-                print(f"      ✓ Option ICE sélectionnée")
-                time.sleep(2)
-            except Exception as e:
-                print(f"      ⚠️  Erreur sélection radio ICE (méthode 1): {e}")
-                try:
-                    print(f"      🔄 Tentative avec JavaScript...")
-                    js_code = """
-                    var radio = document.getElementById('mainTab:detailLot:entete_section_form:radioChoixDestinataire:1');
-                    if (radio) {
-                        radio.checked = true;
-                        var event = new Event('change', { bubbles: true });
-                        radio.dispatchEvent(event);
-                    }
-                    """
-                    driver.execute_script(js_code)
-                    time.sleep(2)
-                    print(f"      ✓ Option ICE sélectionnée via JavaScript")
-                except Exception as e2:
-                    print(f"      ❌ Erreur sélection radio ICE: {e2}")
-                    driver.switch_to.default_content()
-                    return_to_home_after_error(driver)
-                    return False
-            
-            # Attendre que le blocker UI disparaisse
-            try:
-                WebDriverWait(driver, 5).until(
-                    EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
-                )
-                print(f"      ✓ Page stabilisée après sélection ICE")
-            except:
-                pass
-            
-            # LOT.2d: Numéro ICE (constant)
-            try:
-                ice_input = wait.until(
-                    EC.presence_of_element_located((By.ID, "mainTab:detailLot:entete_section_form:id_ice"))
-                )
-                wait.until(EC.element_to_be_clickable((By.ID, "mainTab:detailLot:entete_section_form:id_ice")))
-                
-                ice_input.clear()
-                ice_input.send_keys("000230731000088")
-                print(f"      ✓ ICE: 000230731000088")
-                
-                from selenium.webdriver.common.keys import Keys
-                ice_input.send_keys(Keys.TAB)
-                time.sleep(1)
-                
-                print(f"      ⏳ Attente du chargement des informations ICE...")
-                time.sleep(3)
-                
-                try:
-                    WebDriverWait(driver, 5).until(
-                        EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
-                    )
-                    print(f"      ✓ Informations ICE chargées")
-                except:
-                    pass
+                    # ==================================================================
+                    # ÉTAPE LOT.2: Remplir l'en-tête du lot
+                    # ==================================================================
                     
-            except Exception as e:
-                print(f"      ❌ Erreur saisie ICE: {e}")
-                driver.switch_to.default_content()
-                return_to_home_after_error(driver)
-                return False
-            
-            # ==================================================================
-            # ÉTAPE LOT.3: Valider l'en-tête du lot
-            # ==================================================================
-            try:
-                valider_lot_btn = wait.until(
-                    EC.element_to_be_clickable((By.ID, "mainTab:detailLot:entete_section_form:btn_confirmer_lot"))
-                )
-                valider_lot_btn.click()
-                print(f"      ✓ En-tête lot validé")
-                
-                print(f"      ⏳ Attente du traitement de la validation...")
-                time.sleep(4)
-                
-                try:
-                    WebDriverWait(driver, 5).until(
-                        EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
-                    )
-                    print(f"      ✓ Validation traitée")
-                except:
-                    pass
-                
-            except Exception as e:
-                print(f"      ❌ Erreur validation en-tête lot: {e}")
-                driver.switch_to.default_content()
-                return_to_home_after_error(driver)
-                return False
-            
-            # ==================================================================
-            # ÉTAPE LOT.4: Cliquer "Nouveau" pour créer une ligne
-            # ==================================================================
-            try:
-                print(f"      🔍 Recherche du bouton 'Nouveau' ligne...")
-                nouveau_ligne_btn = wait.until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_new_ligne')]"))
-                )
-                nouveau_ligne_btn.click()
-                print(f"      ✓ Bouton 'Nouveau' ligne cliqué")
-                time.sleep(2)
-            except Exception as e:
-                print(f"      ❌ Erreur clic 'Nouveau' ligne: {e}")
-                print(f"      🔍 Tentative de recherche alternative...")
-                try:
-                    nouveau_ligne_btn_alt = wait.until(
-                        EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Nouveau') or contains(@value, 'Nouveau')]"))
-                    )
-                    driver.execute_script("arguments[0].click();", nouveau_ligne_btn_alt)
-                    print(f"      ✓ Bouton 'Nouveau' ligne cliqué (méthode alternative)")
-                    time.sleep(2)
-                except Exception as e2:
-                    print(f"      ❌ Erreur clic 'Nouveau' ligne (alternative): {e2}")
-                    driver.switch_to.default_content()
-                    return_to_home_after_error(driver)
-                    return False
-            
-            # Fill line form
-            # Type Contenant
-            try:
-                type_contenant_input = wait.until(
-                    EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'typeContenantId_INPUT_input')]"))
-                )
-                type_contenant_input.clear()
-                type_contenant_input.send_keys("colis")
-                time.sleep(2)
-                
-                colis_suggestion = wait.until(
-                    EC.element_to_be_clickable((By.XPATH, "//li[contains(@data-item-label, 'COLIS(216)')]"))
-                )
-                colis_suggestion.click()
-                print(f"      ✓ COLIS(216) sélectionné")
-                time.sleep(1)
-            except Exception as e:
-                print(f"      ❌ Erreur type contenant: {e}")
-                driver.switch_to.default_content()
-                return_to_home_after_error(driver)
-                return False
-            
-            # Nombre contenants - avec vérification robuste
-            from selenium.webdriver.common.keys import Keys
-            nbr_contenants_entered = False
-            for attempt in range(3):
-                try:
-                    nbr_contenants_input = wait.until(
-                        EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'nbrContenants')]"))
-                    )
-                    
-                    # Clear multiple times to ensure field is empty
-                    nbr_contenants_input.clear()
-                    time.sleep(0.2)
-                    nbr_contenants_input.send_keys(Keys.CONTROL + "a")
-                    nbr_contenants_input.send_keys(Keys.DELETE)
-                    time.sleep(0.2)
-                    
-                    # Send the value
-                    nbr_contenants_value = str(int(dum_data['p']))  # Ensure integer
-                    nbr_contenants_input.send_keys(nbr_contenants_value)
-                    time.sleep(0.5)
-                    
-                    # Verify the value was entered correctly
-                    entered_value = nbr_contenants_input.get_attribute("value")
-                    if entered_value and int(entered_value) == int(dum_data['p']):
-                        print(f"      ✓ Nombre contenants: {entered_value} (vérifié)")
-                        nbr_contenants_entered = True
-                        break
+                    # LOT.2a: Référence du lot (LTA ref + /DUM_NUMBER ou /DUM_NUMBER/SPLIT_ID)
+                    # Construire référence selon si DUM est split ou non
+                    if dum_data.get('is_split', False) and dum_data.get('split_id'):
+                        # DUM split: 157-54326451/2/1 ou 157-54326451/2/2
+                        lot_reference = f"{lta_reference_format1}/{dum_data['split_id']}"
                     else:
-                        print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur entrée incorrecte ({entered_value} au lieu de {dum_data['p']})")
-                        if attempt < 2:
-                            time.sleep(0.5)
-                            continue
-                except Exception as e:
-                    if attempt < 2:
-                        print(f"      ⚠️  Tentative {attempt + 1}/3 échouée: {e}")
-                        time.sleep(0.5)
-                    else:
-                        print(f"      ❌ Erreur saisie nombre contenants après 3 tentatives: {e}")
-                        driver.switch_to.default_content()
-                        return_to_home_after_error(driver)
-                        return False
-            
-            if not nbr_contenants_entered:
-                print(f"      ❌ Impossible de saisir le nombre de contenants correctement")
-                driver.switch_to.default_content()
-                return_to_home_after_error(driver)
-                return False
-            
-            # Poids brut - avec vérification robuste
-            poids_brut_entered = False
-            for attempt in range(3):
-                try:
-                    poids_brut_input = wait.until(
-                        EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'poidBru_input')]"))
-                    )
+                        # DUM normal: 157-54326451/1 ou 157-54326451/3
+                        lot_reference = f"{lta_reference_format1}/{dum_data['dum_number']}"
                     
-                    # Clear multiple times to ensure field is empty
-                    poids_brut_input.clear()
-                    time.sleep(0.2)
-                    poids_brut_input.send_keys(Keys.CONTROL + "a")
-                    poids_brut_input.send_keys(Keys.DELETE)
-                    time.sleep(0.2)
-                    
-                    # Send the value (keep decimals)
-                    poids_brut_value = str(float(dum_data['p_brut']))  # Ensure float
-                    poids_brut_input.send_keys(poids_brut_value)
-                    time.sleep(0.5)
-                    
-                    # Verify the value was entered correctly (allow small floating point differences)
-                    entered_value = poids_brut_input.get_attribute("value")
-                    if entered_value:
-                        try:
-                            entered_float = float(entered_value)
-                            expected_float = float(dum_data['p_brut'])
-                            if abs(entered_float - expected_float) < 0.01:  # Allow 0.01 difference
-                                print(f"      ✓ Poids brut: {entered_value} (vérifié)")
-                                poids_brut_entered = True
-                                break
-                            else:
-                                print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur entrée incorrecte ({entered_value} au lieu de {dum_data['p_brut']})")
-                                if attempt < 2:
-                                    time.sleep(0.5)
-                                    continue
-                        except ValueError:
-                            print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur non numérique ({entered_value})")
-                            if attempt < 2:
-                                time.sleep(0.5)
-                                continue
-                    else:
-                        print(f"      ⚠️  Tentative {attempt + 1}/3: Champ vide après saisie")
-                        if attempt < 2:
-                            time.sleep(0.5)
-                            continue
-                except Exception as e:
-                    if attempt < 2:
-                        print(f"      ⚠️  Tentative {attempt + 1}/3 échouée: {e}")
-                        time.sleep(0.5)
-                    else:
-                        print(f"      ❌ Erreur saisie poids brut après 3 tentatives: {e}")
-                        driver.switch_to.default_content()
-                        return_to_home_after_error(driver)
-                        return False
-            
-            if not poids_brut_entered:
-                print(f"      ❌ Impossible de saisir le poids brut correctement")
-                driver.switch_to.default_content()
-                return_to_home_after_error(driver)
-                return False
-            
-            # Marque (référence LTA validée)
-            try:
-                marque_textarea = wait.until(
-                    EC.presence_of_element_located((By.XPATH, "//textarea[contains(@name, 'marqueLib')]"))
-                )
-                marque_textarea.clear()
-                marque_textarea.send_keys(lta_reference_format1)
-                print(f"      ✓ Marque: {lta_reference_format1}")
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"      ❌ Erreur marque: {e}")
-                driver.switch_to.default_content()
-                return_to_home_after_error(driver)
-                return False
-            
-            # Nature marchandise
-            try:
-                nature_textarea = wait.until(
-                    EC.presence_of_element_located((By.XPATH, "//textarea[contains(@name, 'marchand')]"))
-                )
-                nature_textarea.clear()
-                nature_textarea.send_keys("courrier e-commerce")
-                print(f"      ✓ Nature marchandise: courrier e-commerce")
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"      ❌ Erreur nature marchandise: {e}")
-                driver.switch_to.default_content()
-                return_to_home_after_error(driver)
-                return False
-            
-            # Code NGP
-            try:
-                ngp_input = wait.until(
-                    EC.presence_of_element_located((By.XPATH, "//input[contains(@name, ':ngp') and @type='text']"))
-                )
-                ngp_input.clear()
-                ngp_input.send_keys("9999")
-                print(f"      ✓ Code NGP: 9999")
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"      ❌ Erreur NGP: {e}")
-                driver.switch_to.default_content()
-                return_to_home_after_error(driver)
-                return False
-            
-            # Add NGP
-            try:
-                add_ngp_btn = wait.until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_add_ngp')]"))
-                )
-                add_ngp_btn.click()
-                print(f"      ✓ Code NGP ajouté")
-                time.sleep(1)
-            except Exception as e:
-                print(f"      ❌ Erreur ajout NGP: {e}")
-                driver.switch_to.default_content()
-                return_to_home_after_error(driver)
-                return False
-            
-            # Validate line with retry and blocker UI handling
-            print(f"      🔄 Validation de la ligne marchandise...")
-            ligne_validated = False
-            
-            for val_attempt in range(3):
-                try:
-                    if val_attempt > 0:
-                        print(f"         🔄 Tentative validation {val_attempt + 1}/3...")
-                        time.sleep(1)
-                    
-                    # Attendre que le blocker UI disparaisse
+                    # Attendre que le blocker UI disparaisse après le clic "Nouveau"
                     wait_for_ui_blocker_disappear(driver, timeout=10)
                     time.sleep(0.5)
                     
-                    # Chercher le bouton
-                    valider_ligne_btn = wait.until(
-                        EC.presence_of_element_located((By.XPATH, "//button[contains(@name, 'btn_confirmer_ligne')]"))
-                    )
+                    # Retry avec plusieurs tentatives pour saisir la référence
+                    reference_entered = False
+                    max_ref_attempts = 5
                     
-                    # Scroll into view
-                    driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", valider_ligne_btn)
-                    time.sleep(0.3)
+                    for ref_attempt in range(max_ref_attempts):
+                        try:
+                            if ref_attempt > 0:
+                                print(f"         🔄 Tentative saisie référence {ref_attempt + 1}/{max_ref_attempts}...")
+                                time.sleep(1)
+                                wait_for_ui_blocker_disappear(driver, timeout=5)
+                            
+                            # Attendre que le champ soit présent ET interactable
+                            ref_lot_input = wait.until(
+                                EC.element_to_be_clickable((By.XPATH, "//input[contains(@name, 'referenceLot_IT_id')]"))
+                            )
+                            
+                            # Vérifier que le champ est visible et enabled
+                            if not ref_lot_input.is_displayed():
+                                raise Exception("Champ référence non visible")
+                            if not ref_lot_input.is_enabled():
+                                raise Exception("Champ référence non activé")
+                            
+                            # Scroll vers l'élément pour s'assurer qu'il est visible
+                            driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", ref_lot_input)
+                            time.sleep(0.3)
+                            
+                            # Attendre que le blocker disparaisse avant de saisir
+                            wait_for_ui_blocker_disappear(driver, timeout=3)
+                            
+                            # Essayer de saisir avec Selenium
+                            try:
+                                ref_lot_input.clear()
+                                time.sleep(0.2)
+                                ref_lot_input.send_keys(lot_reference)
+                                
+                                # Vérifier que la valeur a été saisie correctement
+                                entered_value = ref_lot_input.get_attribute("value")
+                                if entered_value and lot_reference in entered_value:
+                                    print(f"      ✓ Référence lot: {lot_reference} (vérifiée)")
+                                    reference_entered = True
+                                    break
+                                else:
+                                    print(f"         ⚠️  Valeur saisie incorrecte: '{entered_value}' au lieu de '{lot_reference}'")
+                                    if ref_attempt < max_ref_attempts - 1:
+                                        continue
+                            except Exception as selenium_err:
+                                if ref_attempt < max_ref_attempts - 1:
+                                    print(f"         ⚠️  Saisie Selenium échouée: {selenium_err}")
+                                    # Essayer avec JavaScript comme fallback
+                                    try:
+                                        driver.execute_script("""
+                                            var input = arguments[0];
+                                            input.value = arguments[1];
+                                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                                            input.dispatchEvent(new Event('change', { bubbles: true }));
+                                        """, ref_lot_input, lot_reference)
+                                        
+                                        # Vérifier la valeur
+                                        entered_value = ref_lot_input.get_attribute("value")
+                                        if entered_value and lot_reference in entered_value:
+                                            print(f"      ✓ Référence lot: {lot_reference} (via JavaScript)")
+                                            reference_entered = True
+                                            break
+                                    except Exception as js_err:
+                                        if ref_attempt < max_ref_attempts - 1:
+                                            print(f"         ⚠️  JavaScript fallback échoué: {js_err}")
+                                            continue
+                                        else:
+                                            raise js_err
+                                else:
+                                    raise selenium_err
+                                        
+                        except Exception as e:
+                            if ref_attempt < max_ref_attempts - 1:
+                                print(f"         ⚠️  Tentative {ref_attempt + 1} échouée: {e}")
+                                time.sleep(1)
+                            else:
+                                print(f"      ❌ Erreur saisie référence lot après {max_ref_attempts} tentatives: {e}")
+                                raise
                     
-                    # Attendre que le blocker disparaisse avant de cliquer
-                    wait_for_ui_blocker_disappear(driver, timeout=5)
+                    if not reference_entered:
+                        raise Exception(f"Impossible de saisir la référence après {max_ref_attempts} tentatives")
                     
-                    # Essayer clic normal puis JavaScript
+                    time.sleep(0.5)
+                    
+                    # LOT.2b: Ligne dépotée (toujours 1)
                     try:
-                        if val_attempt == 0:
-                            print(f"         🖱️  Tentative clic Selenium standard...")
-                        WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_confirmer_ligne')]")))
-                        valider_ligne_btn.click()
-                        print(f"         ✅ SUCCÈS: Ligne validée (méthode Selenium, tentative {val_attempt + 1})")
-                        ligne_validated = True
-                        break
-                    except Exception as click_err:
-                        if val_attempt < 2:
-                            print(f"         ⚠️  Clic Selenium échoué: {click_err}")
-                            print(f"         🔄 Passage à JavaScript fallback...")
-                        driver.execute_script("arguments[0].click();", valider_ligne_btn)
-                        print(f"         ✅ SUCCÈS: Ligne validée (méthode JavaScript, tentative {val_attempt + 1})")
-                        ligne_validated = True
-                        break
+                        ligne_input = wait.until(
+                            EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'ligneDepotee_IT_id')]"))
+                        )
+                        ligne_input.clear()
+                        ligne_input.send_keys("1")
+                        print(f"      ✓ Ligne dépotée: 1")
+                        time.sleep(0.5)
+                    except Exception as e:
+                        print(f"      ❌ Erreur saisie ligne dépotée: {e}")
+                        raise Exception("Field entry error")
                     
-                except Exception as e:
-                    if val_attempt < 2:
-                        print(f"         ❌ Tentative {val_attempt + 1} échouée: {e}")
+                    # LOT.2c: Sélectionner le radio button ICE (valeur 02)
+                    try:
+                        ice_radio = wait.until(
+                            EC.presence_of_element_located((By.ID, "mainTab:detailLot:entete_section_form:radioChoixDestinataire:1"))
+                        )
+                        radio_box = driver.find_element(By.XPATH, "//input[@id='mainTab:detailLot:entete_section_form:radioChoixDestinataire:1']/parent::div/following-sibling::div[@class='ui-radiobutton-box ui-widget ui-corner-all ui-state-default']")
+                        radio_box.click()
+                        print(f"      ✓ Option ICE sélectionnée")
+                        time.sleep(2)
+                    except Exception as e:
+                        print(f"      ⚠️  Erreur sélection radio ICE (méthode 1): {e}")
+                        try:
+                            print(f"      🔄 Tentative avec JavaScript...")
+                            js_code = """
+                            var radio = document.getElementById('mainTab:detailLot:entete_section_form:radioChoixDestinataire:1');
+                            if (radio) {
+                                radio.checked = true;
+                                var event = new Event('change', { bubbles: true });
+                                radio.dispatchEvent(event);
+                            }
+                            """
+                            driver.execute_script(js_code)
+                            time.sleep(2)
+                            print(f"      ✓ Option ICE sélectionnée via JavaScript")
+                        except Exception as e2:
+                            print(f"      ❌ Erreur sélection radio ICE: {e2}")
+                            raise Exception("Field entry error")
+                    
+                    # Attendre que le blocker UI disparaisse
+                    try:
+                        WebDriverWait(driver, 5).until(
+                            EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
+                        )
+                        print(f"      ✓ Page stabilisée après sélection ICE")
+                    except:
+                        pass
+                    
+                    # LOT.2d: Numéro ICE (constant) - with stale element retry
+                    ice_filled = False
+                    for ice_attempt in range(3):
+                        try:
+                            # Re-find element on each attempt to avoid stale reference
+                            ice_input = wait.until(
+                                EC.presence_of_element_located((By.ID, "mainTab:detailLot:entete_section_form:id_ice"))
+                            )
+                            wait.until(EC.element_to_be_clickable((By.ID, "mainTab:detailLot:entete_section_form:id_ice")))
+                            
+                            ice_input.clear()
+                            ice_input.send_keys("000230731000088")
+                            print(f"      ✓ ICE: 000230731000088")
+                            
+                            from selenium.webdriver.common.keys import Keys
+                            ice_input.send_keys(Keys.TAB)
+                            time.sleep(1)
+                            
+                            print(f"      ⏳ Attente du chargement des informations ICE...")
+                            time.sleep(3)
+                            
+                            try:
+                                WebDriverWait(driver, 5).until(
+                                    EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
+                                )
+                                print(f"      ✓ Informations ICE chargées")
+                            except:
+                                pass
+                            
+                            ice_filled = True
+                            break
+                            
+                        except Exception as e:
+                            if ice_attempt < 2:
+                                print(f"      ⚠️  Tentative {ice_attempt + 1}/3 ICE échouée: {e}")
+                                time.sleep(1)
+                            else:
+                                print(f"      ❌ Erreur saisie ICE après 3 tentatives: {e}")
+                                raise Exception("Field entry error")
+                    
+                    if not ice_filled:
+                        raise Exception("Field entry error")
+                    
+                    # ==================================================================
+                    # ÉTAPE LOT.3: Valider l'en-tête du lot
+                    # ==================================================================
+                    try:
+                        valider_lot_btn = wait.until(
+                            EC.element_to_be_clickable((By.ID, "mainTab:detailLot:entete_section_form:btn_confirmer_lot"))
+                        )
+                        valider_lot_btn.click()
+                        print(f"      ✓ En-tête lot validé")
+                        
+                        print(f"      ⏳ Attente du traitement de la validation...")
+                        time.sleep(4)
+                        
+                        try:
+                            WebDriverWait(driver, 5).until(
+                                EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
+                            )
+                            print(f"      ✓ Validation traitée")
+                        except:
+                            pass
+                        
+                    except Exception as e:
+                        print(f"      ❌ Erreur validation en-tête lot: {e}")
+                        raise Exception("Validation error")
+                    
+                    # ==================================================================
+                    # ÉTAPE LOT.4: Cliquer "Nouveau" pour créer une ligne
+                    # ==================================================================
+                    try:
+                        print(f"      🔍 Recherche du bouton 'Nouveau' ligne...")
+                        nouveau_ligne_btn = wait.until(
+                            EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_new_ligne')]"))
+                        )
+                        nouveau_ligne_btn.click()
+                        print(f"      ✓ Bouton 'Nouveau' ligne cliqué")
+                        time.sleep(2)
+                    except Exception as e:
+                        print(f"      ❌ Erreur clic 'Nouveau' ligne: {e}")
+                        print(f"      🔍 Tentative de recherche alternative...")
+                        try:
+                            nouveau_ligne_btn_alt = wait.until(
+                                EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Nouveau') or contains(@value, 'Nouveau')]"))
+                            )
+                            driver.execute_script("arguments[0].click();", nouveau_ligne_btn_alt)
+                            print(f"      ✓ Bouton 'Nouveau' ligne cliqué (méthode alternative)")
+                            time.sleep(2)
+                        except Exception as e2:
+                            print(f"      ❌ Erreur clic 'Nouveau' ligne (alternative): {e2}")
+                            raise Exception("Field entry error")
+                    
+                    # Fill line form
+                    # Type Contenant
+                    try:
+                        type_contenant_input = wait.until(
+                            EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'typeContenantId_INPUT_input')]"))
+                        )
+                        type_contenant_input.clear()
+                        type_contenant_input.send_keys("colis")
+                        time.sleep(2)
+                        
+                        colis_suggestion = wait.until(
+                            EC.element_to_be_clickable((By.XPATH, "//li[contains(@data-item-label, 'COLIS(216)')]"))
+                        )
+                        colis_suggestion.click()
+                        print(f"      ✓ COLIS(216) sélectionné")
+                        time.sleep(1)
+                    except Exception as e:
+                        print(f"      ❌ Erreur type contenant: {e}")
+                        raise Exception("Field entry error")
+                    
+                    # Nombre contenants - avec vérification robuste
+                    from selenium.webdriver.common.keys import Keys
+                    nbr_contenants_entered = False
+                    for attempt in range(3):
+                        try:
+                            nbr_contenants_input = wait.until(
+                                EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'nbrContenants')]"))
+                            )
+                            
+                            # Clear multiple times to ensure field is empty
+                            nbr_contenants_input.clear()
+                            time.sleep(0.2)
+                            nbr_contenants_input.send_keys(Keys.CONTROL + "a")
+                            nbr_contenants_input.send_keys(Keys.DELETE)
+                            time.sleep(0.2)
+                            
+                            # Send the value
+                            nbr_contenants_value = str(int(dum_data['p']))  # Ensure integer
+                            nbr_contenants_input.send_keys(nbr_contenants_value)
+                            time.sleep(0.5)
+                            
+                            # Verify the value was entered correctly
+                            entered_value = nbr_contenants_input.get_attribute("value")
+                            if entered_value and int(entered_value) == int(dum_data['p']):
+                                print(f"      ✓ Nombre contenants: {entered_value} (vérifié)")
+                                nbr_contenants_entered = True
+                                break
+                            else:
+                                print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur entrée incorrecte ({entered_value} au lieu de {dum_data['p']})")
+                                if attempt < 2:
+                                    time.sleep(0.5)
+                                    continue
+                        except Exception as e:
+                            if attempt < 2:
+                                print(f"      ⚠️  Tentative {attempt + 1}/3 échouée: {e}")
+                                time.sleep(0.5)
+                            else:
+                                print(f"      ❌ Erreur saisie nombre contenants après 3 tentatives: {e}")
+                                raise Exception("Field entry error")
+                    
+                    if not nbr_contenants_entered:
+                        print(f"      ❌ Impossible de saisir le nombre de contenants correctement")
+                        raise Exception("Field entry error")
+                    
+                    # Poids brut - avec vérification robuste
+                    poids_brut_entered = False
+                    for attempt in range(3):
+                        try:
+                            poids_brut_input = wait.until(
+                                EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'poidBru_input')]"))
+                            )
+                            
+                            # Clear multiple times to ensure field is empty
+                            poids_brut_input.clear()
+                            time.sleep(0.2)
+                            poids_brut_input.send_keys(Keys.CONTROL + "a")
+                            poids_brut_input.send_keys(Keys.DELETE)
+                            time.sleep(0.2)
+                            
+                            # Send the value (keep decimals)
+                            poids_brut_value = str(float(dum_data['p_brut']))  # Ensure float
+                            poids_brut_input.send_keys(poids_brut_value)
+                            time.sleep(0.5)
+                            
+                            # Verify the value was entered correctly (allow small floating point differences)
+                            entered_value = poids_brut_input.get_attribute("value")
+                            if entered_value:
+                                try:
+                                    entered_float = float(entered_value)
+                                    expected_float = float(dum_data['p_brut'])
+                                    if abs(entered_float - expected_float) < 0.01:  # Allow 0.01 difference
+                                        print(f"      ✓ Poids brut: {entered_value} (vérifié)")
+                                        poids_brut_entered = True
+                                        break
+                                    else:
+                                        print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur entrée incorrecte ({entered_value} au lieu de {dum_data['p_brut']})")
+                                        if attempt < 2:
+                                            time.sleep(0.5)
+                                            continue
+                                except ValueError:
+                                    print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur non numérique ({entered_value})")
+                                    if attempt < 2:
+                                        time.sleep(0.5)
+                                        continue
+                            else:
+                                print(f"      ⚠️  Tentative {attempt + 1}/3: Champ vide après saisie")
+                                if attempt < 2:
+                                    time.sleep(0.5)
+                                    continue
+                        except Exception as e:
+                            if attempt < 2:
+                                print(f"      ⚠️  Tentative {attempt + 1}/3 échouée: {e}")
+                                time.sleep(0.5)
+                            else:
+                                print(f"      ❌ Erreur saisie poids brut après 3 tentatives: {e}")
+                                raise Exception("Field entry error")
+                    
+                    if not poids_brut_entered:
+                        print(f"      ❌ Impossible de saisir le poids brut correctement")
+                        raise Exception("Field entry error")
+                    
+                    # Marque (référence LTA validée)
+                    try:
+                        marque_textarea = wait.until(
+                            EC.presence_of_element_located((By.XPATH, "//textarea[contains(@name, 'marqueLib')]"))
+                        )
+                        marque_textarea.clear()
+                        marque_textarea.send_keys(lta_reference_format1)
+                        print(f"      ✓ Marque: {lta_reference_format1}")
+                        time.sleep(0.5)
+                    except Exception as e:
+                        print(f"      ❌ Erreur marque: {e}")
+                        raise Exception("Field entry error")
+                    
+                    # Nature marchandise
+                    try:
+                        nature_textarea = wait.until(
+                            EC.presence_of_element_located((By.XPATH, "//textarea[contains(@name, 'marchand')]"))
+                        )
+                        nature_textarea.clear()
+                        nature_textarea.send_keys("courrier e-commerce")
+                        print(f"      ✓ Nature marchandise: courrier e-commerce")
+                        time.sleep(0.5)
+                    except Exception as e:
+                        print(f"      ❌ Erreur nature marchandise: {e}")
+                        raise Exception("Field entry error")
+                    
+                    # Code NGP
+                    try:
+                        ngp_input = wait.until(
+                            EC.presence_of_element_located((By.XPATH, "//input[contains(@name, ':ngp') and @type='text']"))
+                        )
+                        ngp_input.clear()
+                        ngp_input.send_keys("9999")
+                        print(f"      ✓ Code NGP: 9999")
+                        time.sleep(0.5)
+                    except Exception as e:
+                        print(f"      ❌ Erreur NGP: {e}")
+                        raise Exception("Field entry error")
+                    
+                    # Add NGP
+                    try:
+                        add_ngp_btn = wait.until(
+                            EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_add_ngp')]"))
+                        )
+                        add_ngp_btn.click()
+                        print(f"      ✓ Code NGP ajouté")
+                        time.sleep(1)
+                    except Exception as e:
+                        print(f"      ❌ Erreur ajout NGP: {e}")
+                        raise Exception("Field entry error")
+                    
+                    # Validate line with retry and blocker UI handling
+                    print(f"      🔄 Validation de la ligne marchandise...")
+                    ligne_validated = False
+                    
+                    for val_attempt in range(3):
+                        try:
+                            if val_attempt > 0:
+                                print(f"         🔄 Tentative validation {val_attempt + 1}/3...")
+                                time.sleep(1)
+                            
+                            # Attendre que le blocker UI disparaisse
+                            wait_for_ui_blocker_disappear(driver, timeout=10)
+                            time.sleep(0.5)
+                            
+                            # Chercher le bouton
+                            valider_ligne_btn = wait.until(
+                                EC.presence_of_element_located((By.XPATH, "//button[contains(@name, 'btn_confirmer_ligne')]"))
+                            )
+                            
+                            # Scroll into view
+                            driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", valider_ligne_btn)
+                            time.sleep(0.3)
+                            
+                            # Attendre que le blocker disparaisse avant de cliquer
+                            wait_for_ui_blocker_disappear(driver, timeout=5)
+                            
+                            # Essayer clic normal puis JavaScript
+                            try:
+                                if val_attempt == 0:
+                                    print(f"         🖱️  Tentative clic Selenium standard...")
+                                WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_confirmer_ligne')]")))
+                                valider_ligne_btn.click()
+                                print(f"         ✅ SUCCÈS: Ligne validée (méthode Selenium, tentative {val_attempt + 1})")
+                                ligne_validated = True
+                                break
+                            except Exception as click_err:
+                                if val_attempt < 2:
+                                    print(f"         ⚠️  Clic Selenium échoué: {click_err}")
+                                    print(f"         🔄 Passage à JavaScript fallback...")
+                                driver.execute_script("arguments[0].click();", valider_ligne_btn)
+                                print(f"         ✅ SUCCÈS: Ligne validée (méthode JavaScript, tentative {val_attempt + 1})")
+                                ligne_validated = True
+                                break
+                            
+                        except Exception as e:
+                            if val_attempt < 2:
+                                print(f"         ❌ Tentative {val_attempt + 1} échouée: {e}")
+                            else:
+                                print(f"         ❌ Erreur validation ligne après 3 tentatives: {e}")
+                    
+                    if not ligne_validated:
+                        print(f"      ❌ Impossible de valider la ligne marchandise")
+                        raise Exception("Validation error")
+                    
+                    # Attendre que le blocker disparaisse après validation
+                    wait_for_ui_blocker_disappear(driver, timeout=10)
+                    time.sleep(2)
+                    
+                    print(f"   ✅ Lot {dum_index} créé avec succès!")
+                    lot_creation_successful = True  # Mark success - exit while loop
+                    
+                except Exception as lot_error:
+                    # Error occurred during lot creation
+                    retry_attempt += 1
+                    
+                    error_message = str(lot_error)
+                    
+                    # Categorize the error type
+                    is_field_error = "Field entry error" in error_message or "Field validation error" in error_message or "Empty field" in error_message
+                    is_validation_error = "Validation failed" in error_message or "Validation error" in error_message
+                    is_selenium_error_bool = is_selenium_error(lot_error)
+                    
+                    # Decision: Should we retry?
+                    if retry_attempt < MAX_LOT_RETRIES:
+                        # Determine recovery strategy based on error type
+                        if is_field_error:
+                            print(f"      ⚠️ Erreur champ détectée: {error_message}")
+                            print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - Les champs seront re-remplis...")
+                            # No need to go to accueil or recreate lot - fields will be refilled in next attempt
+                            try:
+                                wait_for_ui_blocker_disappear(driver, timeout=5)
+                                time.sleep(1)
+                            except:
+                                pass
+                            continue  # Retry the lot in while loop
+                            
+                        elif is_validation_error:
+                            print(f"      ⚠️ Erreur validation détectée: {error_message}")
+                            print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - La validation sera retentée...")
+                            # No need to recreate lot - validation will be retried
+                            try:
+                                wait_for_ui_blocker_disappear(driver, timeout=5)
+                                time.sleep(1)
+                            except:
+                                pass
+                            continue  # Retry the lot in while loop
+                            
+                        elif is_selenium_error_bool:
+                            print(f"      ⚠️ Erreur Selenium détectée: {error_message}")
+                            print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - Recréation du lot...")
+                            # For Selenium errors early in lot creation, recreate the lot
+                            try:
+                                driver.switch_to.default_content()
+                                time.sleep(1)
+                                # Re-enter iframe for next attempt
+                                iframe = WebDriverWait(driver, 10).until(
+                                    EC.presence_of_element_located((By.CSS_SELECTOR, "iframe.w-full.h-screen"))
+                                )
+                                driver.switch_to.frame(iframe)
+                                time.sleep(1)
+                            except:
+                                pass
+                            continue  # Retry the lot in while loop
+                        
+                        else:
+                            # Unknown error - retry with general recovery
+                            print(f"      ⚠️ Erreur inconnue: {error_message}")
+                            print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES}...")
+                            try:
+                                wait_for_ui_blocker_disappear(driver, timeout=5)
+                                time.sleep(1)
+                            except:
+                                pass
+                            continue  # Retry the lot in while loop
+                    
                     else:
-                        print(f"         ❌ Erreur validation ligne après 3 tentatives: {e}")
-            
-            if not ligne_validated:
-                print(f"      ❌ Impossible de valider la ligne marchandise")
-                driver.switch_to.default_content()
-                return_to_home_after_error(driver)
-                return False
-            
-            # Attendre que le blocker disparaisse après validation
-            wait_for_ui_blocker_disappear(driver, timeout=10)
-            time.sleep(2)
-            
-            print(f"   ✅ Lot {dum_index} créé avec succès!")
-        
+                        # Max retries reached - go to accueil and fail
+                        print(f"      ❌ ÉCHEC DÉFINITIF du lot {dum_index} après {MAX_LOT_RETRIES} tentatives")
+                        print(f"      🏠 Retour à l'accueil...")
+                        driver.switch_to.default_content()
+                        return_to_home_after_error(driver)
+                        return False
+
         print(f"\n   ✅ Tous les lots ({len(dum_lots_data)}) créés avec succès!")
-        
+
         # Save ED
         print("\n💾 Sauvegarde de l'Etat de Dépotage...")
         try:
@@ -6388,10 +6663,8 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
             time.sleep(3)
         except Exception as e:
             print(f"   ❌ Erreur sauvegarde: {e}")
-            driver.switch_to.default_content()
-            return_to_home_after_error(driver)
-            return False
-        
+            raise Exception("Validation error")
+
         # Validate ED
         print("\n✅ Validation de l'Etat de Dépotage...")
         try:
@@ -6403,10 +6676,8 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
             time.sleep(4)
         except Exception as e:
             print(f"   ❌ Erreur validation: {e}")
-            driver.switch_to.default_content()
-            return_to_home_after_error(driver)
-            return False
-        
+            raise Exception("Validation error")
+
         # Check validation result
         print("\n🔍 Vérification du résultat de validation...")
         try:
@@ -6418,9 +6689,7 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                 if error_details and len(error_details) > 0:
                     error_message = error_details[0].text.strip()
                     print(f"   ❌ Erreur validation: {error_message}")
-                    driver.switch_to.default_content()
-                    return_to_home_after_error(driver)
-                    return False
+                    raise Exception("Validation error")
             
             print("   ✓ Validation réussie!")
             
@@ -6451,16 +6720,14 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
             
         except Exception as e:
             print(f"   ❌ Erreur vérification validation: {e}")
-            driver.switch_to.default_content()
-            return_to_home_after_error(driver)
-            return False
-        
+            raise Exception("Validation error")
+
         # Exit iframe
         driver.switch_to.default_content()
         print("   ✓ Sorti de l'iframe")
-        
+
         return True
-        
+
     except Exception as e:
         print(f"\n❌ Erreur création ED partiel: {e}")
         traceback.print_exc()
