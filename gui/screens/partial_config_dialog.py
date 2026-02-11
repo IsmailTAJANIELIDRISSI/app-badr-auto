@@ -220,7 +220,7 @@ class PartialConfigDialog:
         
         exception_info = ttk.Label(
             self.exception_frame,
-            text="Un partiel a un poids inférieur au plus petit DUM.\n"
+            text="Un partiel a un poids inférieur au DUM 1.\n"
                  "Veuillez renseigner les informations de référence ci-dessous:",
             foreground="red",
             font=('Arial', 9, 'bold')
@@ -452,9 +452,10 @@ class PartialConfigDialog:
                 except ValueError:
                     partial_weights.append(0)
             
-            # Detect exception case: check if any partial weight < smallest DUM weight
-            smallest_dum_weight = min(dum['weight'] for dum in self.lta_data['dums'])
-            is_exception_case = any(w > 0 and w < smallest_dum_weight for w in partial_weights)
+            # Detect exception case: check if smallest partial weight < DUM 1 weight
+            dum1_weight = self.lta_data['dums'][0]['weight']  # First DUM
+            smallest_partial_weight = min(w for w in partial_weights if w > 0) if any(w > 0 for w in partial_weights) else 0
+            is_exception_case = smallest_partial_weight > 0 and smallest_partial_weight < dum1_weight
             
             if is_exception_case:
                 # Show exception frame if hidden
@@ -850,8 +851,9 @@ class PartialConfigDialog:
             # Get exception case positions if provided (same logic as in _update_distribution_preview)
             smallest_partial_positions = None
             smallest_partial_idx = None
-            smallest_dum_weight = min(dum['weight'] for dum in self.lta_data['dums'])
-            is_exception_case = any(w > 0 and w < smallest_dum_weight for w in partial_weights)
+            dum1_weight = self.lta_data['dums'][0]['weight']  # First DUM
+            smallest_partial_weight = min(w for w in partial_weights if w > 0) if any(w > 0 for w in partial_weights) else 0
+            is_exception_case = smallest_partial_weight > 0 and smallest_partial_weight < dum1_weight
             
             if is_exception_case:
                 try:
@@ -978,10 +980,10 @@ class PartialConfigDialog:
                             'positions': dum['positions']
                         })
             
-            # Detect exception case
-            smallest_dum_weight = min(dum['weight'] for dum in self.lta_data['dums'])
-            smallest_partial_weight = min(partial_weights)
-            is_exception_case = smallest_partial_weight < smallest_dum_weight
+            # Detect exception case: check if smallest partial < DUM 1 (not smallest DUM)
+            dum1_weight = self.lta_data['dums'][0]['weight']  # First DUM
+            smallest_partial_weight = min(w for w in partial_weights if w > 0) if any(w > 0 for w in partial_weights) else 0
+            is_exception_case = smallest_partial_weight > 0 and smallest_partial_weight < dum1_weight
             
             # For exception case, validate additional fields
             smallest_partial_number = None

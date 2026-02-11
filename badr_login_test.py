@@ -4697,8 +4697,10 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                                 nbr_contenants_input.send_keys(nbr_contenants_value)
                                 time.sleep(0.5)
                                 
+                                # Re-find element before verification to avoid stale element
+                                nbr_contenants_input_verify = driver.find_element(By.XPATH, "//input[contains(@name, 'nbrContenants')]")
                                 # Verify the value was entered correctly
-                                entered_value = nbr_contenants_input.get_attribute("value")
+                                entered_value = nbr_contenants_input_verify.get_attribute("value")
                                 if entered_value and int(entered_value) == int(dum_data['p']):
                                     print(f"      ✓ Nombre contenants: {entered_value} (vérifié)")
                                     nbr_contenants_entered = True
@@ -4711,6 +4713,8 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                             except Exception as e:
                                 if attempt < 2:
                                     print(f"      ⚠️  Tentative {attempt + 1}/3 échouée: {e}")
+                                    if "stale element" in str(e).lower():
+                                        print(f"      ℹ️  Stale element - retry saisie nombre contenants")
                                     time.sleep(0.5)
                                 else:
                                     print(f"      ❌ Erreur saisie nombre contenants après 3 tentatives: {e}")
@@ -4765,7 +4769,6 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                                             print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur entrée incorrecte ({entered_value} au lieu de {dum_data['p_brut']})")
                                             if attempt < 2:
                                                 time.sleep(0.5)
-                                                continue
                                                 continue
                                     except ValueError:
                                         print(f"      ⚠️  Tentative {attempt + 1}/3: Valeur non numérique ({entered_value})")
@@ -6386,8 +6389,10 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                             nbr_contenants_input.send_keys(nbr_contenants_value)
                             time.sleep(0.5)
                             
+                            # Re-find element before verification to avoid stale element
+                            nbr_contenants_input_verify = driver.find_element(By.XPATH, "//input[contains(@name, 'nbrContenants')]")
                             # Verify the value was entered correctly
-                            entered_value = nbr_contenants_input.get_attribute("value")
+                            entered_value = nbr_contenants_input_verify.get_attribute("value")
                             if entered_value and int(entered_value) == int(dum_data['p']):
                                 print(f"      ✓ Nombre contenants: {entered_value} (vérifié)")
                                 nbr_contenants_entered = True
@@ -6400,6 +6405,8 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                         except Exception as e:
                             if attempt < 2:
                                 print(f"      ⚠️  Tentative {attempt + 1}/3 échouée: {e}")
+                                if "stale element" in str(e).lower():
+                                    print(f"      ℹ️  Stale element - retry saisie nombre contenants")
                                 time.sleep(0.5)
                             else:
                                 print(f"      ❌ Erreur saisie nombre contenants après 3 tentatives: {e}")
@@ -6429,8 +6436,10 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                             poids_brut_input.send_keys(poids_brut_value)
                             time.sleep(0.5)
                             
+                            # Re-find element before verification to avoid stale element
+                            poids_brut_input_verify = driver.find_element(By.XPATH, "//input[contains(@name, 'poidBru_input')]")
                             # Verify the value was entered correctly (allow small floating point differences)
-                            entered_value = poids_brut_input.get_attribute("value")
+                            entered_value = poids_brut_input_verify.get_attribute("value")
                             if entered_value:
                                 try:
                                     entered_float = float(entered_value)
@@ -6457,6 +6466,8 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                         except Exception as e:
                             if attempt < 2:
                                 print(f"      ⚠️  Tentative {attempt + 1}/3 échouée: {e}")
+                                if "stale element" in str(e).lower():
+                                    print(f"      ℹ️  Stale element - retry saisie poids brut")
                                 time.sleep(0.5)
                             else:
                                 print(f"      ❌ Erreur saisie poids brut après 3 tentatives: {e}")
@@ -6517,6 +6528,83 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                         print(f"      ❌ Erreur ajout NGP: {e}")
                         raise Exception("Field entry error")
                     
+                    # ==================================================================
+                    # ÉTAPE: Vérification finale avant validation avec retry
+                    # ==================================================================
+                    print(f"      🔍 Vérification finale des champs avant validation...")
+                    fields_valid = False
+                    for verify_attempt in range(3):
+                        try:
+                            # Vérifier nombre de contenants
+                            nbr_contenants_final = wait.until(
+                                EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'nbrContenants')]"))
+                            )
+                            nbr_contenants_value_final = nbr_contenants_final.get_attribute("value")
+                            
+                            if not nbr_contenants_value_final or int(nbr_contenants_value_final) == 0:
+                                if verify_attempt < 2:
+                                    print(f"      ⚠️  Tentative {verify_attempt + 1}/3: Nombre de contenants = 0, re-remplissage...")
+                                    # Refill the field
+                                    nbr_contenants_final.clear()
+                                    time.sleep(0.2)
+                                    nbr_contenants_final.send_keys(Keys.CONTROL + "a")
+                                    nbr_contenants_final.send_keys(Keys.DELETE)
+                                    time.sleep(0.2)
+                                    nbr_contenants_final.send_keys(str(int(dum_data['p'])))
+                                    time.sleep(0.5)
+                                    continue
+                                else:
+                                    print(f"      ❌ ERREUR CRITIQUE: Nombre de contenants = 0 après 3 tentatives!")
+                                    raise Exception("Empty field after retries")
+                            
+                            print(f"      ✓ Nombre contenants vérifié: {nbr_contenants_value_final}")
+                            
+                            # Vérifier poids brut
+                            poids_brut_final = wait.until(
+                                EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'poidBru_input')]"))
+                            )
+                            poids_brut_value_final = poids_brut_final.get_attribute("value")
+                            
+                            if not poids_brut_value_final or float(poids_brut_value_final) == 0:
+                                if verify_attempt < 2:
+                                    print(f"      ⚠️  Tentative {verify_attempt + 1}/3: Poids brut = 0, re-remplissage...")
+                                    # Refill the field
+                                    poids_brut_final.clear()
+                                    time.sleep(0.2)
+                                    poids_brut_final.send_keys(Keys.CONTROL + "a")
+                                    poids_brut_final.send_keys(Keys.DELETE)
+                                    time.sleep(0.2)
+                                    poids_brut_final.send_keys(str(float(dum_data['p_brut'])))
+                                    time.sleep(0.5)
+                                    continue
+                                else:
+                                    print(f"      ❌ ERREUR CRITIQUE: Poids brut = 0 après 3 tentatives!")
+                                    raise Exception("Empty field after retries")
+                            
+                            print(f"      ✓ Poids brut vérifié: {poids_brut_value_final}")
+                            
+                            # All fields valid
+                            print(f"      ✅ Tous les champs critiques sont remplis correctement")
+                            fields_valid = True
+                            break
+                            
+                        except Exception as e:
+                            if verify_attempt < 2:
+                                print(f"      ⚠️  Tentative {verify_attempt + 1}/3 échouée: {e}")
+                                time.sleep(0.5)
+                            else:
+                                print(f"      ❌ Erreur vérification finale après 3 tentatives: {e}")
+                                raise
+                    
+                    if not fields_valid:
+                        print(f"      ❌ Impossible de valider les champs après 3 tentatives")
+                        raise Exception("Field validation error")
+                    
+                    time.sleep(0.5)
+                    
+                    # ==================================================================
+                    # ÉTAPE: Valider la ligne marchandise
+                    # ==================================================================
                     # Validate line with retry and blocker UI handling
                     print(f"      🔄 Validation de la ligne marchandise...")
                     ligne_validated = False
