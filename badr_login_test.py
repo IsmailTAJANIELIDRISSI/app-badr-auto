@@ -2086,35 +2086,44 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
         # MED.7.2: Extraire la référence "sauvegardée" (avant validation)
         # Cette référence sera utilisée en cas d'échec de validation
         sauvegarde_reference = None
-        try:
-            time.sleep(2)  # Attendre que la référence s'affiche
-            
-            # Chercher la table de référence
-            reference_table = driver.find_element(By.CSS_SELECTOR, "table.reference")
-            
-            # Extraire les cellules de la deuxième ligne (index 1)
-            rows = reference_table.find_elements(By.TAG_NAME, "tr")
-            if len(rows) >= 2:
-                data_row = rows[1]
-                cells = data_row.find_elements(By.TAG_NAME, "td")
+        for extract_attempt in range(3):
+            try:
+                if extract_attempt > 0:
+                    time.sleep(1)
                 
-                if len(cells) >= 5:
-                    # Extraire Série (colonne 4, index 3) et Clé (colonne 5, index 4)
-                    serie_value = cells[3].text.strip()
-                    cle_value = cells[4].text.strip()
+                time.sleep(2)  # Attendre que la référence s'affiche
+                
+                # Re-find reference table on each attempt
+                reference_table = driver.find_element(By.CSS_SELECTOR, "table.reference")
+                
+                # Re-find rows to avoid stale element
+                rows = reference_table.find_elements(By.TAG_NAME, "tr")
+                if len(rows) >= 2:
+                    # Re-find cells immediately
+                    data_row_cells = rows[1].find_elements(By.TAG_NAME, "td")
                     
-                    # Enlever les zéros initiaux de la série
-                    serie_clean = str(int(serie_value)) if serie_value.isdigit() else serie_value
-                    
-                    # Combiner: [Série][Clé]
-                    sauvegarde_reference = f"{serie_clean}{cle_value}"
-                    
-                    print(f"      ✓ Référence sauvegardée extraite: {sauvegarde_reference}")
-                    print(f"         (Série={serie_value} → {serie_clean}, Clé={cle_value})")
-        except Exception as e:
-            print(f"      ⚠️  Impossible d'extraire la référence sauvegardée: {e}")
-            print(f"         (Continuera avec extraction après validation)")
-            # Continuer quand même - on essaiera après validation
+                    if len(data_row_cells) >= 5:
+                        # Extract data immediately
+                        serie_value = data_row_cells[3].text.strip()
+                        cle_value = data_row_cells[4].text.strip()
+                        
+                        # Enlever les zéros initiaux de la série
+                        serie_clean = str(int(serie_value)) if serie_value.isdigit() else serie_value
+                        
+                        # Combiner: [Série][Clé]
+                        sauvegarde_reference = f"{serie_clean}{cle_value}"
+                        
+                        print(f"      ✓ Référence sauvegardée extraite: {sauvegarde_reference}")
+                        print(f"         (Série={serie_value} → {serie_clean}, Clé={cle_value})")
+                        break
+            except Exception as e:
+                if extract_attempt < 2:
+                    if "stale element" in str(e).lower():
+                        continue  # Retry on stale element
+                else:
+                    print(f"      ⚠️  Impossible d'extraire la référence sauvegardée après 3 tentatives: {e}")
+                    print(f"         (Continuera avec extraction après validation)")
+                    # Continuer quand même - on essaiera après validation
         
         # ==================================================================
         # ÉTAPE MED.8: Valider l'ED modifié
@@ -2210,48 +2219,74 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
             # MED.9.1: Extraire la référence validée
             print("      ✓ Extraction de la référence validée...")
             
-            try:
-                # Chercher la table de référence
-                reference_table = wait.until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "table.reference"))
-                )
-                
-                # Extraire les cellules de la deuxième ligne (index 1)
-                rows = reference_table.find_elements(By.TAG_NAME, "tr")
-                if len(rows) < 2:
-                    print("      ⚠️  Table de référence incomplète")
-                    # Utiliser la référence sauvegardée si disponible
-                    if sauvegarde_reference:
-                        ds_reference = sauvegarde_reference
-                        print(f"      ✓ Utilisation référence sauvegardée: {ds_reference}")
-                    else:
-                        print("      ⚠️  Aucune référence disponible")
-                        ds_reference = None
-                else:
-                    data_row = rows[1]
-                    cells = data_row.find_elements(By.TAG_NAME, "td")
+            ds_reference = None
+            for extract_attempt in range(3):
+                try:
+                    if extract_attempt > 0:
+                        time.sleep(1)
                     
-                    if len(cells) < 5:
-                        print("      ⚠️  Données de référence incomplètes")
+                    # Re-find reference table on each attempt
+                    reference_table = wait.until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "table.reference"))
+                    )
+                    
+                    # Re-find rows to avoid stale element
+                    rows = reference_table.find_elements(By.TAG_NAME, "tr")
+                    if len(rows) < 2:
+                        if extract_attempt < 2:
+                            continue
+                        print("      ⚠️  Table de référence incomplète")
+                        # Utiliser la référence sauvegardée si disponible
+                        if sauvegarde_reference:
+                            ds_reference = sauvegarde_reference
+                            print(f"      ✓ Utilisation référence sauvegardée: {ds_reference}")
+                        else:
+                            print("      ⚠️  Aucune référence disponible")
+                            ds_reference = None
+                        break
+                    else:
+                        # Re-find cells immediately
+                        data_row_cells = rows[1].find_elements(By.TAG_NAME, "td")
+                        
+                        if len(data_row_cells) < 5:
+                            if extract_attempt < 2:
+                                continue
+                            print("      ⚠️  Données de référence incomplètes")
+                            # Utiliser la référence sauvegardée si disponible
+                            if sauvegarde_reference:
+                                ds_reference = sauvegarde_reference
+                                print(f"      ✓ Utilisation référence sauvegardée: {ds_reference}")
+                            else:
+                                ds_reference = None
+                            break
+                        else:
+                            # Extract data immediately
+                            serie_value = data_row_cells[3].text.strip()
+                            cle_value = data_row_cells[4].text.strip()
+                            
+                            # Enlever les zéros initiaux de la série
+                            serie_clean = str(int(serie_value)) if serie_value.isdigit() else serie_value
+                            
+                            # Combiner: [Série][Clé]
+                            ds_reference = f"{serie_clean}{cle_value}"
+                            
+                            print(f"      ✓ Référence extraite: Série={serie_value} → {serie_clean}, Clé={cle_value}")
+                            print(f"      ✓ Référence DS complète: {ds_reference}")
+                            break
+                    
+                except Exception as e:
+                    if extract_attempt < 2:
+                        if "stale element" in str(e).lower():
+                            print(f"      ℹ️  Stale element - retry extraction référence (tentative {extract_attempt + 1}/3)")
+                            continue
+                    else:
+                        print(f"      ⚠️  Erreur extraction référence après 3 tentatives: {e}")
                         # Utiliser la référence sauvegardée si disponible
                         if sauvegarde_reference:
                             ds_reference = sauvegarde_reference
                             print(f"      ✓ Utilisation référence sauvegardée: {ds_reference}")
                         else:
                             ds_reference = None
-                    else:
-                        # Extraire Série (colonne 4, index 3) et Clé (colonne 5, index 4)
-                        serie_value = cells[3].text.strip()
-                        cle_value = cells[4].text.strip()
-                        
-                        # Enlever les zéros initiaux de la série
-                        serie_clean = str(int(serie_value)) if serie_value.isdigit() else serie_value
-                        
-                        # Combiner: [Série][Clé]
-                        ds_reference = f"{serie_clean}{cle_value}"
-                        
-                        print(f"      ✓ Référence extraite: Série={serie_value} → {serie_clean}, Clé={cle_value}")
-                        print(f"      ✓ Référence DS complète: {ds_reference}")
                 
                 # MED.9.2: Enregistrer la référence dans le fichier shipper (ligne 4)
                 if ds_reference:
@@ -2296,13 +2331,9 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
                     
                     except Exception as e:
                         print(f"      ⚠️  Erreur mise à jour fichier shipper: {e}")
-                
-            except Exception as e:
-                print(f"      ⚠️  Erreur extraction référence: {e}")
-                # Pas critique, continuer
         
         except Exception as e:
-            print(f"      ⚠️  Erreur vérification messages: {e}")
+            print(f"      ⚠️  Erreur vérification validation: {e}")
         
         # ==================================================================
         # FIN - Retour à l'accueil
@@ -6782,27 +6813,37 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
             print("   ✓ Validation réussie!")
             
             # Extract DS reference and save to config
-            try:
-                reference_table = wait.until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "table.reference"))
-                )
-                rows = reference_table.find_elements(By.TAG_NAME, "tr")
-                if len(rows) >= 2:
-                    data_row = rows[1]
-                    cells = data_row.find_elements(By.TAG_NAME, "td")
-                    if len(cells) >= 5:
-                        serie_value = cells[3].text.strip()
-                        cle_value = cells[4].text.strip()
-                        serie_clean = str(int(serie_value)) if serie_value.isdigit() else serie_value
-                        ds_reference = f"{serie_clean}{cle_value}"
-                        print(f"   ✓ Référence DS: {ds_reference}")
-                        
-                        # Sauvegarder le DS validé dans le config partiel
-                        lta_name = os.path.basename(lta_folder_path)
-                        parent_dir = os.path.dirname(lta_folder_path) or "."
-                        save_ds_validated_to_partial_config(parent_dir, lta_name, partial_number, ds_reference)
-            except Exception as e:
-                print(f"   ⚠️  Erreur extraction référence: {e}")
+            for extract_attempt in range(3):
+                try:
+                    if extract_attempt > 0:
+                        time.sleep(1)
+                    
+                    reference_table = wait.until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "table.reference"))
+                    )
+                    # Re-find rows to avoid stale element
+                    rows = reference_table.find_elements(By.TAG_NAME, "tr")
+                    if len(rows) >= 2:
+                        # Re-find cells immediately
+                        data_row_cells = rows[1].find_elements(By.TAG_NAME, "td")
+                        if len(data_row_cells) >= 5:
+                            serie_value = data_row_cells[3].text.strip()
+                            cle_value = data_row_cells[4].text.strip()
+                            serie_clean = str(int(serie_value)) if serie_value.isdigit() else serie_value
+                            ds_reference = f"{serie_clean}{cle_value}"
+                            print(f"   ✓ Référence DS: {ds_reference}")
+                            
+                            # Sauvegarder le DS validé dans le config partiel
+                            lta_name = os.path.basename(lta_folder_path)
+                            parent_dir = os.path.dirname(lta_folder_path) or "."
+                            save_ds_validated_to_partial_config(parent_dir, lta_name, partial_number, ds_reference)
+                            break
+                except Exception as e:
+                    if extract_attempt < 2:
+                        if "stale element" in str(e).lower():
+                            continue
+                    else:
+                        print(f"   ⚠️  Erreur extraction référence après 3 tentatives: {e}")
             
             print(f"\n✅ Etat de Dépotage PARTIEL {partial_number} créé avec succès!")
             
@@ -7721,11 +7762,11 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         validated_lta_reference = None
         loading_location = None
         
-        # FOR PARTIAL LTAs: Check if any partial has ds_validated
+        # FOR PARTIAL LTAs: Check if any partial has ds_validated or signed_series
         if partial_config:
             print(f"\n   📦 LTA partiel détecté - vérification des DS validés...")
-            # Check if at least one partial has ds_validated
-            has_validated_ds = any(p.get('ds_validated') for p in partial_config.get('partials', []))
+            # Check if at least one partial has ds_validated or signed_series
+            has_validated_ds = any(p.get('ds_validated') or p.get('signed_series') for p in partial_config.get('partials', []))
             
             if has_validated_ds:
                 preapurement_required = True
@@ -7736,13 +7777,14 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 loading_location = first_partial.get('loading_location')
                 validated_lta_reference = partial_config.get('lta_reference')
                 
-                print(f"      ✅ Préapurement DS requis (partiels avec DS validés)")
+                print(f"      ✅ Préapurement DS requis (partiels avec DS validés ou série signée)")
                 print(f"      Référence LTA: {validated_lta_reference}")
                 print(f"      Lieu de chargement: {loading_location}")
                 for p in partial_config['partials']:
-                    print(f"      Partiel {p['partial_number']}: DS {p['ds_serie']} {p['ds_cle']} - Validé: {p.get('ds_validated', 'N/A')}")
+                    ds_status = p.get('ds_validated') or p.get('signed_series', 'N/A')
+                    print(f"      Partiel {p['partial_number']}: DS {p['ds_serie']} {p['ds_cle']} - Statut: {ds_status}")
             else:
-                print(f"      ⏭️ Aucun DS validé trouvé pour les partiels")
+                print(f"      ⏭️ Aucun DS validé ou série signée trouvé pour les partiels")
                 print(f"      ℹ️  Assurez-vous d'avoir exécuté Phase 1 (Etat de Dépotage) pour tous les partiels")
         else:
             # FOR STANDARD LTAs: Check LTA file for signed series (line 8)
@@ -9726,21 +9768,30 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 # ==================================================================
                 # La série peut être visible dans la table même si la validation a échoué
                 dum_series = None
-                try:
-                    # Chercher la table de référence
-                    reference_table = driver.find_element(By.ID, "mainTab:form0:j_id_3p_d")
-                    rows = reference_table.find_elements(By.TAG_NAME, "tr")
-                    if len(rows) >= 2:
-                        data_row = rows[1]
-                        cells = data_row.find_elements(By.TAG_NAME, "td")
-                        if len(cells) >= 5:
-                            serie = cells[3].text.strip()
-                            cle = cells[4].text.strip()
-                            if serie and cle:
-                                dum_series = f"{serie}{cle}"
-                                print(f"      ℹ️  Série extraite malgré l'erreur: {dum_series}")
-                except Exception as serie_err:
-                    print(f"      ⚠️  Impossible d'extraire la série: {serie_err}")
+                for extract_attempt in range(3):
+                    try:
+                        if extract_attempt > 0:
+                            time.sleep(1)
+                        
+                        # Re-find reference table on each attempt to avoid stale element
+                        reference_table = driver.find_element(By.ID, "mainTab:form0:j_id_3p_d")
+                        rows = reference_table.find_elements(By.TAG_NAME, "tr")
+                        if len(rows) >= 2:
+                            # Re-find row and cells to avoid stale element
+                            data_row_cells = rows[1].find_elements(By.TAG_NAME, "td")
+                            if len(data_row_cells) >= 5:
+                                serie = data_row_cells[3].text.strip()
+                                cle = data_row_cells[4].text.strip()
+                                if serie and cle:
+                                    dum_series = f"{serie}{cle}"
+                                    print(f"      ℹ️  Série extraite malgré l'erreur: {dum_series}")
+                                    break
+                    except Exception as serie_err:
+                        if extract_attempt < 2:
+                            if "stale element" in str(serie_err).lower():
+                                continue  # Retry on stale element
+                        else:
+                            print(f"      ⚠️  Impossible d'extraire la série après 3 tentatives: {serie_err}")
                 
                 # Si série non trouvée, utiliser un placeholder
                 if not dum_series:
@@ -9876,55 +9927,80 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         # ÉTAPE 12: Extraire la référence de déclaration et la sauvegarder
         # ==================================================================
         print("\n   📋 Extraction de la référence de déclaration...")
-        try:
-            # Attendre que la table de référence soit visible
-            time.sleep(2)
-            
-            # Localiser la table de référence
-            reference_table = wait.until(
-                EC.presence_of_element_located((By.ID, "mainTab:form0:j_id_3p_d"))
-            )
-            
-            # Extraire les cellules de la deuxième ligne (ligne de données)
-            rows = reference_table.find_elements(By.TAG_NAME, "tr")
-            if len(rows) >= 2:
-                data_row = rows[1]  # Deuxième ligne (index 1)
-                cells = data_row.find_elements(By.TAG_NAME, "td")
+        dum_reference = None
+        
+        for extract_attempt in range(3):
+            try:
+                if extract_attempt > 0:
+                    print(f"      🔄 Tentative extraction {extract_attempt + 1}/3...")
+                    time.sleep(1)
                 
-                if len(cells) >= 5:
-                    # Extraire Série (4ème colonne, index 3)
-                    serie = cells[3].text.strip()
-                    # Extraire Clé (5ème colonne, index 4)
-                    cle = cells[4].text.strip()
+                # Attendre que la page soit stable
+                time.sleep(2)
+                wait_for_ui_blocker_disappear(driver, timeout=5)
+                
+                # Re-find the reference table on each attempt to avoid stale element
+                reference_table = wait.until(
+                    EC.presence_of_element_located((By.ID, "mainTab:form0:j_id_3p_d"))
+                )
+                
+                # Re-find rows to avoid stale element
+                rows = reference_table.find_elements(By.TAG_NAME, "tr")
+                if len(rows) >= 2:
+                    # Re-find data row to avoid stale element
+                    data_row_cells = rows[1].find_elements(By.TAG_NAME, "td")
                     
-                    # Combiner pour créer la référence complète
-                    dum_reference = f"{serie}{cle}"
-                    
-                    print(f"      ✓ Référence extraite: {dum_reference}")
-                    print(f"         - Série: {serie}")
-                    print(f"         - Clé: {cle}")
-                    
-                    # Sauvegarder la référence dans result_LTAS.txt
-                    save_dum_reference(lta_folder_path, dum_reference)
-                    
-                    # Extraire le numéro du DUM depuis sheet_name (ex: "Sheet 1" → 1)
-                    sheet_name = dum_data.get('sheet_name', '')
-                    dum_number = int(sheet_name.split()[-1]) if sheet_name.startswith('Sheet') else 1
-                    
-                    # Sauvegarder la série dans generated_excel
-                    save_dum_series_to_excel(lta_folder_path, dum_number, dum_reference)
-                    
+                    if len(data_row_cells) >= 5:
+                        # Extract data immediately to avoid stale element
+                        serie = data_row_cells[3].text.strip()
+                        cle = data_row_cells[4].text.strip()
+                        
+                        # Combiner pour créer la référence complète
+                        dum_reference = f"{serie}{cle}"
+                        
+                        print(f"      ✓ Référence extraite: {dum_reference}")
+                        print(f"         - Série: {serie}")
+                        print(f"         - Clé: {cle}")
+                        
+                        # Sauvegarder la référence dans result_LTAS.txt
+                        save_dum_reference(lta_folder_path, dum_reference)
+                        
+                        # Extraire le numéro du DUM depuis sheet_name (ex: "Sheet 1" → 1)
+                        sheet_name = dum_data.get('sheet_name', '')
+                        dum_number = int(sheet_name.split()[-1]) if sheet_name.startswith('Sheet') else 1
+                        
+                        # Sauvegarder la série dans generated_excel
+                        save_dum_series_to_excel(lta_folder_path, dum_number, dum_reference)
+                        
+                        # Success - break retry loop
+                        break
+                    else:
+                        if extract_attempt < 2:
+                            print(f"      ⚠️  Tentative {extract_attempt + 1}/3: Table de référence incomplète (cellules: {len(data_row_cells)})")
+                            continue
+                        else:
+                            print(f"      ❌ Table de référence incomplète après 3 tentatives (cellules: {len(data_row_cells)})")
+                            dum_reference = "REFERENCE_INCOMPLETE"
                 else:
-                    print(f"      ⚠️  Table de référence incomplète (cellules: {len(cells)})")
-                    dum_reference = "REFERENCE_INCOMPLETE"
-            else:
-                print(f"      ⚠️  Table de référence incomplète (lignes: {len(rows)})")
-                dum_reference = "REFERENCE_INCOMPLETE"
-                
-        except Exception as e:
-            print(f"      ❌ Erreur extraction référence: {e}")
-            dum_reference = "REFERENCE_ERROR"
-            traceback.print_exc()
+                    if extract_attempt < 2:
+                        print(f"      ⚠️  Tentative {extract_attempt + 1}/3: Table de référence incomplète (lignes: {len(rows)})")
+                        continue
+                    else:
+                        print(f"      ❌ Table de référence incomplète après 3 tentatives (lignes: {len(rows)})")
+                        dum_reference = "REFERENCE_INCOMPLETE"
+                    
+            except Exception as e:
+                if extract_attempt < 2:
+                    print(f"      ⚠️  Tentative {extract_attempt + 1}/3 échouée: {e}")
+                    if "stale element" in str(e).lower():
+                        print(f"      ℹ️  Stale element - retry extraction référence")
+                else:
+                    print(f"      ❌ Erreur extraction référence après 3 tentatives: {e}")
+                    dum_reference = "REFERENCE_ERROR"
+        
+        if not dum_reference:
+            print(f"      ❌ Impossible d'extraire la référence après 3 tentatives")
+            dum_reference = "REFERENCE_FAILED"
         
         # ==================================================================
         # ÉTAPE 13: Retour à l'accueil pour traiter le prochain DUM
