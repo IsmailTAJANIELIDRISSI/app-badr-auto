@@ -740,8 +740,8 @@ def save_dum_series_to_excel(lta_folder_path, dum_number, serie):
         dum_number: Numéro du DUM (1, 2, 3, 4, etc.)
         serie: Série du DUM (ex: "0139769N")
     """
-    max_retries = 3
-    retry_delay = 2  # secondes
+    max_retries = 5  # Augmenté de 3 à 5 pour gérer les scans antivirus
+    retry_delay = 3  # Augmenté de 2 à 3 secondes pour laisser le temps aux processus système
     
     for attempt in range(max_retries):
         try:
@@ -770,6 +770,38 @@ def save_dum_series_to_excel(lta_folder_path, dum_number, serie):
             try:
                 # Fermer le fichier Excel s'il est ouvert
                 close_excel_file(generated_excel_path)
+                
+                # Attendre que le fichier soit complètement libéré
+                time.sleep(2.0)  # Augmenté de 1.5 à 2.0 secondes
+                
+                # Vérifier que le fichier existe et est accessible
+                if not os.path.exists(generated_excel_path):
+                    raise Exception(f"Fichier inexistant: {generated_excel_path}")
+                
+                # Vérifier la taille du fichier (doit être > 0)
+                file_size = os.path.getsize(generated_excel_path)
+                if file_size == 0:
+                    raise Exception("Fichier Excel vide (0 bytes)")
+                if file_size < 1024:  # Un fichier .xlsx valide fait au moins 1KB
+                    raise Exception(f"Fichier Excel trop petit ({file_size} bytes)")
+                
+                # Vérifier que le fichier est accessible en lecture ET que c'est un ZIP valide
+                try:
+                    import zipfile
+                    # Tester si le fichier est un ZIP valide et contient les fichiers requis
+                    with zipfile.ZipFile(generated_excel_path, 'r') as zip_test:
+                        # Vérifier que [Content_Types].xml existe
+                        if '[Content_Types].xml' not in zip_test.namelist():
+                            raise Exception("Fichier Excel corrompu: [Content_Types].xml manquant")
+                        # Vérifier qu'on peut lire le contenu
+                        zip_test.read('[Content_Types].xml')
+                except PermissionError:
+                    raise Exception("Fichier Excel verrouillé par un autre processus")
+                except zipfile.BadZipFile:
+                    raise Exception("Fichier Excel corrompu (pas une archive ZIP valide)")
+                
+                # Petit délai supplémentaire après validation
+                time.sleep(1.0)  # Augmenté de 0.5 à 1.0 seconde
                 
                 wb = load_workbook(generated_excel_path, data_only=False)
                 ws = wb['Summary']
@@ -2829,6 +2861,28 @@ def return_to_home_after_error(driver):
     except Exception as e:
         print(f"      ❌ Erreur retour accueil: {e}")
 
+def refresh_and_retry_navigation(driver, wait):
+    """
+    Fallback mechanism: refresh accueil page when menu navigation fails.
+    Returns True if refresh succeeded, False otherwise.
+    """
+    print("\n   🔄 Fallback: Rafraîchissement de la page accueil...")
+    try:
+        # Exit iframe if inside one
+        try:
+            driver.switch_to.default_content()
+        except:
+            pass
+        
+        # Redirect to accueil
+        driver.get("https://badr.douane.gov.ma:40444/badr/views/hab/hab_index.xhtml")
+        time.sleep(3)
+        print("      ✓ Page accueil rafraîchie")
+        return True
+    except Exception as e:
+        print(f"      ❌ Erreur rafraîchissement: {e}")
+        return False
+
 def find_partial_by_number(partial_config, partial_number):
     """
     Finds a partial configuration by its number.
@@ -3195,8 +3249,24 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                     print(f"   ⚠️  Tentative {menu_attempt + 1}/3 échouée: {e}")
                 else:
                     print(f"   ❌ Erreur ouverture menu après 3 tentatives: {e}")
-                    return_to_home_after_error(driver)
-                    return False
+        
+        # Fallback: If menu still not opened, refresh page and retry once
+        if not menu_opened:
+            print(f"   ⚠️  Menu non ouvert - tentative de rafraîchissement...")
+            if refresh_and_retry_navigation(driver, wait):
+                try:
+                    print(f"   🔄 Nouvelle tentative ouverture menu après rafraîchissement...")
+                    mise_en_douane_link = wait.until(
+                        EC.element_to_be_clickable((By.XPATH, "//h3[contains(@class, 'ui-panelmenu-header')]//a[contains(text(), 'MISE EN DOUANE')]"))
+                    )
+                    driver.execute_script("arguments[0].scrollIntoView(true);", mise_en_douane_link)
+                    time.sleep(0.5)
+                    mise_en_douane_link.click()
+                    print("   ✓ Menu 'MISE EN DOUANE' ouvert après rafraîchissement")
+                    time.sleep(2)
+                    menu_opened = True
+                except Exception as e:
+                    print(f"   ❌ Erreur ouverture menu même après rafraîchissement: {e}")
         
         if not menu_opened:
             print(f"   ❌ Impossible d'ouvrir le menu 'MISE EN DOUANE'")
@@ -3224,8 +3294,32 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                     print(f"   ⚠️  Tentative {submenu_attempt + 1}/3 échouée: {e}")
                 else:
                     print(f"   ❌ Erreur ouverture 'Créer une Déclaration' après 3 tentatives: {e}")
-                    return_to_home_after_error(driver)
-                    return False
+        
+        # Fallback: If submenu still not opened, refresh page and retry menu navigation
+        if not submenu_opened:
+            print(f"   ⚠️  Sous-menu non ouvert - tentative de rafraîchissement...")
+            if refresh_and_retry_navigation(driver, wait):
+                try:
+                    print(f"   🔄 Nouvelle tentative navigation complète après rafraîchissement...")
+                    # Reopen main menu
+                    mise_en_douane_link = wait.until(
+                        EC.element_to_be_clickable((By.XPATH, "//h3[contains(@class, 'ui-panelmenu-header')]//a[contains(text(), 'MISE EN DOUANE')]"))
+                    )
+                    driver.execute_script("arguments[0].scrollIntoView(true);", mise_en_douane_link)
+                    time.sleep(0.5)
+                    mise_en_douane_link.click()
+                    time.sleep(2)
+                    
+                    # Try opening submenu again
+                    creer_declaration_link = wait.until(
+                        EC.element_to_be_clickable((By.ID, "_151"))
+                    )
+                    creer_declaration_link.click()
+                    print("   ✓ Sous-menu 'Créer une Déclaration' ouvert après rafraîchissement")
+                    time.sleep(1.5)
+                    submenu_opened = True
+                except Exception as e:
+                    print(f"   ❌ Erreur ouverture sous-menu même après rafraîchissement: {e}")
         
         if not submenu_opened:
             print(f"   ❌ Impossible d'ouvrir 'Créer une Déclaration'")
@@ -5564,27 +5658,103 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
         # ==================================================================
         print("\n📂 Navigation: MISE EN DOUANE → Etat de Dépotage → Voyage Aérien...")
         
-        try:
-            mise_en_douane_link = wait.until(
-                EC.element_to_be_clickable((By.XPATH, "//h3[contains(@class, 'ui-panelmenu-header')]//a[contains(text(), 'MISE EN DOUANE')]"))
-            )
-            driver.execute_script("arguments[0].scrollIntoView(true);", mise_en_douane_link)
-            time.sleep(0.5)
-            mise_en_douane_link.click()
-            print("   ✓ Menu 'MISE EN DOUANE' ouvert")
-            time.sleep(2)
-        except Exception as e:
-            print(f"   ⚠️  Menu 'MISE EN DOUANE' déjà ouvert ou erreur: {e}")
+        # Ouvrir le menu "MISE EN DOUANE" avec retry
+        menu_opened = False
+        for menu_attempt in range(3):
+            try:
+                if menu_attempt > 0:
+                    print(f"   🔄 Tentative ouverture menu {menu_attempt + 1}/3...")
+                    time.sleep(1)
+                
+                mise_en_douane_link = wait.until(
+                    EC.element_to_be_clickable((By.XPATH, "//h3[contains(@class, 'ui-panelmenu-header')]//a[contains(text(), 'MISE EN DOUANE')]"))
+                )
+                driver.execute_script("arguments[0].scrollIntoView(true);", mise_en_douane_link)
+                time.sleep(0.5)
+                mise_en_douane_link.click()
+                print("   ✓ Menu 'MISE EN DOUANE' ouvert")
+                time.sleep(2)
+                menu_opened = True
+                break
+            except Exception as e:
+                if menu_attempt < 2:
+                    print(f"   ⚠️  Tentative {menu_attempt + 1}/3 échouée: {e}")
+                else:
+                    print(f"   ❌ Erreur ouverture menu après 3 tentatives: {e}")
         
-        try:
-            creer_declaration_link = wait.until(
-                EC.element_to_be_clickable((By.ID, "_151"))
-            )
-            creer_declaration_link.click()
-            print("   ✓ Sous-menu 'Créer une Déclaration' ouvert")
-            time.sleep(1)
-        except Exception as e:
-            print(f"   ❌ Erreur ouverture 'Créer une Déclaration': {e}")
+        # Fallback: If menu still not opened, refresh page and retry once
+        if not menu_opened:
+            print(f"   ⚠️  Menu non ouvert - tentative de rafraîchissement...")
+            if refresh_and_retry_navigation(driver, wait):
+                try:
+                    print(f"   🔄 Nouvelle tentative ouverture menu après rafraîchissement...")
+                    mise_en_douane_link = wait.until(
+                        EC.element_to_be_clickable((By.XPATH, "//h3[contains(@class, 'ui-panelmenu-header')]//a[contains(text(), 'MISE EN DOUANE')]"))
+                    )
+                    driver.execute_script("arguments[0].scrollIntoView(true);", mise_en_douane_link)
+                    time.sleep(0.5)
+                    mise_en_douane_link.click()
+                    print("   ✓ Menu 'MISE EN DOUANE' ouvert après rafraîchissement")
+                    time.sleep(2)
+                    menu_opened = True
+                except Exception as e:
+                    print(f"   ❌ Erreur ouverture menu même après rafraîchissement: {e}")
+        
+        if not menu_opened:
+            print(f"   ❌ Impossible d'ouvrir le menu 'MISE EN DOUANE'")
+            return_to_home_after_error(driver)
+            return False
+        
+        # Ouvrir le sous-menu "Créer une Déclaration" (ID: _151) avec retry
+        submenu_opened = False
+        for submenu_attempt in range(3):
+            try:
+                if submenu_attempt > 0:
+                    print(f"   🔄 Tentative ouverture sous-menu {submenu_attempt + 1}/3...")
+                    time.sleep(1)
+                
+                creer_declaration_link = wait.until(
+                    EC.element_to_be_clickable((By.ID, "_151"))
+                )
+                creer_declaration_link.click()
+                print("   ✓ Sous-menu 'Créer une Déclaration' ouvert")
+                time.sleep(1.5)
+                submenu_opened = True
+                break
+            except Exception as e:
+                if submenu_attempt < 2:
+                    print(f"   ⚠️  Tentative {submenu_attempt + 1}/3 échouée: {e}")
+                else:
+                    print(f"   ❌ Erreur ouverture 'Créer une Déclaration' après 3 tentatives: {e}")
+        
+        # Fallback: If submenu still not opened, refresh page and retry menu navigation
+        if not submenu_opened:
+            print(f"   ⚠️  Sous-menu non ouvert - tentative de rafraîchissement...")
+            if refresh_and_retry_navigation(driver, wait):
+                try:
+                    print(f"   🔄 Nouvelle tentative navigation complète après rafraîchissement...")
+                    # Reopen main menu
+                    mise_en_douane_link = wait.until(
+                        EC.element_to_be_clickable((By.XPATH, "//h3[contains(@class, 'ui-panelmenu-header')]//a[contains(text(), 'MISE EN DOUANE')]"))
+                    )
+                    driver.execute_script("arguments[0].scrollIntoView(true);", mise_en_douane_link)
+                    time.sleep(0.5)
+                    mise_en_douane_link.click()
+                    time.sleep(2)
+                    
+                    # Try opening submenu again
+                    creer_declaration_link = wait.until(
+                        EC.element_to_be_clickable((By.ID, "_151"))
+                    )
+                    creer_declaration_link.click()
+                    print("   ✓ Sous-menu 'Créer une Déclaration' ouvert après rafraîchissement")
+                    time.sleep(1.5)
+                    submenu_opened = True
+                except Exception as e:
+                    print(f"   ❌ Erreur ouverture sous-menu même après rafraîchissement: {e}")
+        
+        if not submenu_opened:
+            print(f"   ❌ Impossible d'ouvrir 'Créer une Déclaration'")
             return_to_home_after_error(driver)
             return False
         
