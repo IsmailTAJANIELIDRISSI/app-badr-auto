@@ -15,8 +15,10 @@ PyPDF2>=3.0.1
 # Image Processing
 Pillow>=10.0.0
 
-# AI Integration (Gemini)
-google-generativeai>=0.3.0
+# AI Integration (Gemini - NEW API)
+# OLD: google-generativeai is DEPRECATED as of 2026
+# NEW: Use google-genai instead
+google-genai>=0.1.0
 
 # Fuzzy Matching
 rapidfuzz>=3.5.0

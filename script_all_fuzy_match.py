@@ -20,7 +20,7 @@ import subprocess
 import tempfile
 from PyPDF2 import PdfReader, PdfWriter
 import difflib
-# Try to import new API first, then fallback to old API
+# Use ONLY the new google.genai API (old google.generativeai is deprecated)
 GENAI_CLIENT = None
 GENAI_MODEL = None
 USE_NEW_API = False
@@ -29,13 +29,10 @@ try:
     import google.genai as genai_new
     USE_NEW_API = True
 except ImportError:
-    try:
-        import google.generativeai as genai_old
-        genai = genai_old
-        USE_NEW_API = False
-    except ImportError:
-        genai = None
-        USE_NEW_API = False
+    # Old API is deprecated - no longer supported
+    # Users must install: pip install google-genai
+    genai_new = None
+    USE_NEW_API = False
 import time
 import sys
 import json
@@ -180,11 +177,12 @@ def setup_gemini_api():
             # Set default model name (no need to get model object)
             GENAI_MODEL = 'gemini-2.0-flash'  # or 'gemini-2.5-flash' for latest
             logger.info(f"Gemini API (new google.genai) configured successfully with model: {GENAI_MODEL}")
+            return True
         else:
-            # Old API (google.generativeai): use configure
-            genai.configure(api_key=api_key)
-            logger.info("Gemini API (old google.generativeai) configured successfully")
-        return True
+            # Old API is no longer supported - user must install google-genai
+            logger.error("Google Gemini API not available. Please install: pip install google-genai")
+            logger.error("The old google.generativeai package is deprecated and no longer supported.")
+            return False
     except Exception as e:
         logger.error(f"Error configuring Gemini API: {e}")
         return False
@@ -291,16 +289,8 @@ CRITICAL INSTRUCTIONS:
             else:
                 response_text_raw = str(response)
         else:
-            # Old API: use GenerativeModel
-            if genai is None:
-                raise Exception("Neither google.genai nor google.generativeai is available")
-            model = genai.GenerativeModel('gemini-2.0-flash-exp')
-            response = model.generate_content(prompt)
-            # Old API response format
-            if hasattr(response, 'text'):
-                response_text_raw = response.text
-            else:
-                response_text_raw = str(response)
+            # New API not available - cannot proceed
+            raise Exception("Google Gemini API not available. Please install: pip install google-genai")
         
         logger.info(f"Gemini API response for candidates: {response_text_raw[:200]}...")
         # Parse JSON response
