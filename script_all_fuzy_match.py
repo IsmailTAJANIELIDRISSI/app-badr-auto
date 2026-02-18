@@ -1605,11 +1605,25 @@ def rename_mawb_pdfs_and_create_bloc_note(dir_path, directory_name, skip_rename=
     Returns: (mawb_number, validation_passed)
     
     If skip_rename=True, only validates but doesn't rename/process the MAWB file
+    
+    Enhanced: If no MAWB*.pdf found, will search for doc*.pdf and use MAWB from generated_excel
     """
     print("  Processing MAWB PDFs...")
     found_mawb = False
     mawb_number = None
     mawb_files = glob.glob(os.path.join(dir_path, "MAWB*.pdf"))
+    
+    # If no MAWB*.pdf files found, try doc*.pdf files
+    use_doc_file = False
+    if not mawb_files:
+        print("    No MAWB*.pdf files found, searching for doc*.pdf...")
+        doc_files = glob.glob(os.path.join(dir_path, "doc*.pdf"))
+        if doc_files:
+            print(f"    ✓ Found {len(doc_files)} doc*.pdf file(s) - will use as MAWB")
+            mawb_files = doc_files
+            use_doc_file = True
+        else:
+            print("    ❌ No MAWB*.pdf or doc*.pdf files found")
     
     # First, extract MAWB from generated_excel for validation
     excel_mawb = extract_mawb_from_generated_excel(dir_path)
@@ -1618,12 +1632,32 @@ def rename_mawb_pdfs_and_create_bloc_note(dir_path, directory_name, skip_rename=
     
     for file_path in mawb_files:
         if not found_mawb:
-            print("    Found MAWB PDFs to process:")
+            if use_doc_file:
+                print("    Found doc*.pdf file(s) to process as MAWB:")
+            else:
+                print("    Found MAWB PDFs to process:")
             found_mawb = True
         
         filename = os.path.basename(file_path)
-        match = re.search(r'MAWB\s*(.+)\.pdf', filename)
-        if match:
+        
+        # If using doc*.pdf file, get MAWB from generated_excel instead of filename
+        if use_doc_file:
+            if not excel_mawb:
+                print(f"    ❌ Cannot process '{filename}' - No MAWB found in generated_excel")
+                return None, False
+            
+            mawb_number = excel_mawb
+            print(f"    ✓ Using MAWB from generated_excel: {mawb_number}")
+            print(f"    📄 Processing doc file: {filename}")
+            
+            # No validation needed since we're using excel_mawb directly
+        else:
+            # Original logic for MAWB*.pdf files
+            match = re.search(r'MAWB\s*(.+)\.pdf', filename)
+            if not match:
+                print(f"    ⚠️  Skipping '{filename}' - Cannot extract MAWB number from filename")
+                continue
+                
             mawb_number = match.group(1).strip()
             
             # Validate MAWB number matches generated_excel
@@ -1639,30 +1673,33 @@ def rename_mawb_pdfs_and_create_bloc_note(dir_path, directory_name, skip_rename=
                     # Create warning report for this mismatch
                     create_mawb_mismatch_warning(directory_name, mawb_number, excel_mawb)
                     return None, False  # Return False to indicate validation failed
-            
-            # If skip_rename is True, don't rename - just return validation result
-            if skip_rename:
-                print(f"    ⏸️  MAWB rename deferred (pending other validations)")
-                return mawb_number, True
-            
-            # Rename to original format: "{directory_name} - {mawb_number}.pdf"
-            new_name = os.path.join(dir_path, f"{directory_name} - {mawb_number}.pdf")
-            try:
-                os.rename(file_path, new_name)
+        
+        # If skip_rename is True, don't rename - just return validation result
+        if skip_rename:
+            print(f"    ⏸️  MAWB rename deferred (pending other validations)")
+            return mawb_number, True
+        
+        # Rename to original format: "{directory_name} - {mawb_number}.pdf"
+        new_name = os.path.join(dir_path, f"{directory_name} - {mawb_number}.pdf")
+        try:
+            os.rename(file_path, new_name)
+            if use_doc_file:
+                print(f"    ✓ Renamed doc file '{filename}' to '{os.path.basename(new_name)}'")
+            else:
                 print(f"    ✓ Renamed '{filename}' to '{os.path.basename(new_name)}'")
-                
-                # Check size and compress if needed (> 1.5 MB)
-                compressed_path, was_compressed = compress_pdf_if_needed(new_name, max_size_mb=1.5)
-                
-                if was_compressed:
-                    print(f"    ✓ PDF compressed successfully")
-                
-                # Extract shipper name and create bloc note
-                shipper_name = extract_shipper_name(compressed_path)
-                create_bloc_note(directory_name, mawb_number, shipper_name)
-                
-            except Exception as e:
-                print(f"    ✗ Error processing '{filename}': {e}")
+            
+            # Check size and compress if needed (> 1.5 MB)
+            compressed_path, was_compressed = compress_pdf_if_needed(new_name, max_size_mb=1.5)
+            
+            if was_compressed:
+                print(f"    ✓ PDF compressed successfully")
+            
+            # Extract shipper name and create bloc note
+            shipper_name = extract_shipper_name(compressed_path)
+            create_bloc_note(directory_name, mawb_number, shipper_name)
+            
+        except Exception as e:
+            print(f"    ✗ Error processing '{filename}': {e}")
     if not found_mawb:
         print("    No MAWB PDFs found")
     return mawb_number, True  # Return True to indicate validation passed
