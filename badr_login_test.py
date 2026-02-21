@@ -4327,60 +4327,201 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
             return False
         
         # ==================================================================
-        # ÉTAPE ED.6: Entrer le poids brut total
+        # ÉTAPE ED.6: Entrer le poids brut total avec retry robuste
         # ==================================================================
         print("\n   ⚖️  Saisie du poids brut total...")
         
-        try:
-            poids_brut_input = wait.until(
-                EC.presence_of_element_located((By.ID, "mainTab:form3:poidsBrutTotal_IT_id_input"))
-            )
-            poids_brut_input.clear()
-            poids_brut_input.send_keys(str(total_p_brut))
-            print(f"      ✓ Poids brut total saisi: {total_p_brut}")
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"      ❌ Erreur saisie poids brut: {e}")
-            driver.switch_to.default_content()
-            return_to_home_after_error(driver)
-            return False
+        poids_brut_success = False
+        for poids_attempt in range(5):
+            try:
+                if poids_attempt > 0:
+                    print(f"      🔄 Tentative saisie poids brut {poids_attempt + 1}/5...")
+                    time.sleep(1)
+                
+                # Attendre que le blocker UI disparaisse
+                wait_for_ui_blocker_disappear(driver, timeout=10)
+                time.sleep(0.5)
+                
+                # Localiser et vérifier l'élément
+                poids_brut_input = wait.until(
+                    EC.presence_of_element_located((By.ID, "mainTab:form3:poidsBrutTotal_IT_id_input"))
+                )
+                
+                # Vérifier visibilité et interactivité
+                if not poids_brut_input.is_displayed():
+                    raise Exception("Champ poids brut non visible")
+                if not poids_brut_input.is_enabled():
+                    raise Exception("Champ poids brut non activé")
+                
+                # Scroll vers l'élément
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", poids_brut_input)
+                time.sleep(0.3)
+                
+                # Attendre que le blocker disparaisse avant saisie
+                wait_for_ui_blocker_disappear(driver, timeout=5)
+                
+                # Saisir la valeur
+                poids_brut_input.clear()
+                time.sleep(0.2)
+                poids_brut_input.send_keys(str(total_p_brut))
+                
+                # Vérifier que la valeur a été saisie
+                entered_value = poids_brut_input.get_attribute("value")
+                if entered_value and str(total_p_brut) in entered_value:
+                    print(f"      ✓ Poids brut total saisi: {total_p_brut}")
+                    poids_brut_success = True
+                    time.sleep(0.5)
+                    break
+                else:
+                    if poids_attempt < 4:
+                        print(f"      ⚠️  Valeur non confirmée, retry...")
+                    continue
+                    
+            except Exception as e:
+                if poids_attempt < 4:
+                    error_str = str(e).lower()
+                    if "not interactable" in error_str:
+                        print(f"      ⚠️  Élément non interactable, attente blocker UI...")
+                        try:
+                            wait_for_ui_blocker_disappear(driver, timeout=10)
+                            time.sleep(1)
+                        except:
+                            pass
+                    else:
+                        print(f"      ⚠️  Tentative {poids_attempt + 1}/5 échouée: {e}")
+                else:
+                    print(f"      ❌ Erreur saisie poids brut après 5 tentatives: {e}")
+                    print(f"      ⚠️  Passage au champ suivant...")
+                    # Ne pas retourner à l'accueil, continuer avec les autres champs
+                    break
+        
+        if not poids_brut_success:
+            print("      ⚠️  ATTENTION: Poids brut peut ne pas être saisi correctement")
         
         # ==================================================================
-        # ÉTAPE ED.7: Entrer le nombre total de contenants
+        # ÉTAPE ED.7: Entrer le nombre total de contenants avec retry robuste
         # ==================================================================
         print("\n   📦 Saisie du nombre total de contenants...")
         
-        try:
-            nombre_contenants_input = wait.until(
-                EC.presence_of_element_located((By.ID, "mainTab:form3:nombreContenantTotal_IT_id"))
-            )
-            nombre_contenants_input.clear()
-            nombre_contenants_input.send_keys(str(total_p))
-            print(f"      ✓ Nombre de contenants saisi: {total_p}")
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"      ❌ Erreur saisie nombre contenants: {e}")
-            driver.switch_to.default_content()
-            return_to_home_after_error(driver)
-            return False
+        contenants_success = False
+        for cont_attempt in range(5):
+            try:
+                if cont_attempt > 0:
+                    print(f"      🔄 Tentative saisie contenants {cont_attempt + 1}/5...")
+                    time.sleep(1)
+                
+                # Attendre que le blocker UI disparaisse
+                wait_for_ui_blocker_disappear(driver, timeout=10)
+                time.sleep(0.5)
+                
+                # Localiser et vérifier l'élément
+                nombre_contenants_input = wait.until(
+                    EC.presence_of_element_located((By.ID, "mainTab:form3:nombreContenantTotal_IT_id"))
+                )
+                
+                # Vérifier visibilité et interactivité
+                if not nombre_contenants_input.is_displayed():
+                    raise Exception("Champ contenants non visible")
+                if not nombre_contenants_input.is_enabled():
+                    raise Exception("Champ contenants non activé")
+                
+                # Scroll vers l'élément
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", nombre_contenants_input)
+                time.sleep(0.3)
+                
+                # Attendre que le blocker disparaisse avant saisie
+                wait_for_ui_blocker_disappear(driver, timeout=5)
+                
+                # Saisir la valeur
+                nombre_contenants_input.clear()
+                time.sleep(0.2)
+                nombre_contenants_input.send_keys(str(total_p))
+                
+                # Vérifier que la valeur a été saisie
+                entered_value = nombre_contenants_input.get_attribute("value")
+                if entered_value and str(total_p) in entered_value:
+                    print(f"      ✓ Nombre de contenants saisi: {total_p}")
+                    contenants_success = True
+                    time.sleep(0.5)
+                    break
+                else:
+                    if cont_attempt < 4:
+                        print(f"      ⚠️  Valeur non confirmée, retry...")
+                    continue
+                    
+            except Exception as e:
+                if cont_attempt < 4:
+                    error_str = str(e).lower()
+                    if "not interactable" in error_str:
+                        print(f"      ⚠️  Élément non interactable, attente blocker UI...")
+                        try:
+                            wait_for_ui_blocker_disappear(driver, timeout=10)
+                            time.sleep(1)
+                        except:
+                            pass
+                    else:
+                        print(f"      ⚠️  Tentative {cont_attempt + 1}/5 échouée: {e}")
+                else:
+                    print(f"      ❌ Erreur saisie contenants après 5 tentatives: {e}")
+                    print(f"      ⚠️  Passage à l'onglet suivant...")
+                    # Ne pas retourner à l'accueil, continuer avec l'onglet LTA
+                    break
+        
+        if not contenants_success:
+            print("      ⚠️  ATTENTION: Nombre de contenants peut ne pas être saisi correctement")
         
         # ==================================================================
-        # ÉTAPE ED.8: Naviguer vers l'onglet "LTA"
+        # ÉTAPE ED.8: Naviguer vers l'onglet "LTA" avec retry
         # ==================================================================
         print("\n   📄 Navigation vers l'onglet LTA...")
         
-        try:
-            lta_tab = wait.until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab4']"))
-            )
-            lta_tab.click()
-            print("      ✓ Onglet LTA ouvert")
-            time.sleep(2)
-        except Exception as e:
-            print(f"      ❌ Erreur navigation onglet LTA: {e}")
-            driver.switch_to.default_content()
-            return_to_home_after_error(driver)
-            return False
+        lta_navigation_success = False
+        for lta_attempt in range(3):
+            try:
+                if lta_attempt > 0:
+                    print(f"      🔄 Tentative navigation LTA {lta_attempt + 1}/3...")
+                    time.sleep(1)
+                
+                # Attendre que le blocker UI disparaisse
+                wait_for_ui_blocker_disappear(driver, timeout=10)
+                time.sleep(0.5)
+                
+                # Clic sur l'onglet LTA
+                lta_tab = wait.until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#mainTab:tab4']"))
+                )
+                
+                # Scroll vers l'élément
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", lta_tab)
+                time.sleep(0.3)
+                
+                # Attendre blocker avant clic
+                wait_for_ui_blocker_disappear(driver, timeout=5)
+                
+                # Essayer clic Selenium puis JavaScript fallback
+                try:
+                    lta_tab.click()
+                    print("      ✓ Onglet LTA ouvert (Selenium)")
+                except:
+                    # Fallback JavaScript
+                    driver.execute_script("arguments[0].click();", lta_tab)
+                    print("      ✓ Onglet LTA ouvert (JavaScript)")
+                
+                lta_navigation_success = True
+                time.sleep(2)
+                break
+                
+            except Exception as e:
+                if lta_attempt < 2:
+                    print(f"      ⚠️  Tentative {lta_attempt + 1}/3 échouée: {e}")
+                else:
+                    print(f"      ❌ Erreur navigation onglet LTA après 3 tentatives: {e}")
+                    print(f"      ⚠️  Tentative de continuer sans onglet LTA...")
+                    # Ne pas retourner à l'accueil, tenter de continuer
+                    break
+        
+        if not lta_navigation_success:
+            print("      ⚠️  ATTENTION: Navigation vers LTA peut avoir échoué, continuation...")
         
         # ==================================================================
         # ÉTAPE ED.9-ED.12: Créer les lots pour chaque DUM
