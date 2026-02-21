@@ -423,10 +423,23 @@ def start_fresh_edge():
         f"--remote-debugging-port={debug_port}",
         f"--user-data-dir={profile_path}",
         "--no-first-run",
+        "--no-default-browser-check",  # Ne pas demander de définir comme navigateur par défaut
+        "--disable-features=msEdgeEnableNurturingFramework",  # Désactive popups de bienvenue
+        "--disable-features=msEdgeWelcomeExperience",  # Désactive expérience de bienvenue
+        "--disable-features=msImplicitSignin",  # Désactive connexion implicite Microsoft
+        "--disable-features=Translate",  # Désactive traduction automatique
+        "--disable-sync",  # Désactive synchronisation
+        "--disable-component-update",  # Désactive mises à jour composants
+        "--disable-background-networking",  # Désactive réseau arrière-plan
+        "--disable-popup-blocking",  # Permet aux popups (ironiquement, aide parfois)
+        "--disable-notifications",  # Désactive notifications système
+        "--disable-infobars",  # Désactive barres d'information
+        "--disable-extensions",  # Désactive extensions
+        # "--disable-web-security",  # Désactive sécurité web (pour automatisation)
     ]
     
     subprocess.Popen(command)
-    time.sleep(4)
+    time.sleep(6)  # Augmenté de 4 à 6 secondes pour laisser Edge se stabiliser complètement
     
     print("✓ Edge lancé avec un profil vierge")
     return profile_path, debug_port
@@ -4982,7 +4995,7 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                             print(f"      ❌ Impossible de saisir le code NGP")
                             raise Exception("Field entry error")
                         
-                        # ED.11.2g: Ajouter le code NGP (bouton >>) avec retry
+                        # ED.11.2g: Ajouter le code NGP (bouton >>) avec retry et gestion blocker UI
                         ngp_added = False
                         for add_attempt in range(3):
                             try:
@@ -4990,10 +5003,22 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                                     print(f"      🔄 Tentative ajout NGP {add_attempt + 1}/3...")
                                     time.sleep(0.5)
                                 
+                                # Attendre que le blocker UI disparaisse AVANT de cliquer
+                                wait_for_ui_blocker_disappear(driver, timeout=10)
+                                time.sleep(0.3)
+                                
                                 # Re-find button on each attempt to avoid stale element
                                 add_ngp_btn = wait.until(
                                     EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_add_ngp')]"))
                                 )
+                                
+                                # Scroll into view pour s'assurer visibilité
+                                driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", add_ngp_btn)
+                                time.sleep(0.2)
+                                
+                                # Double-check blocker avant clic
+                                wait_for_ui_blocker_disappear(driver, timeout=5)
+                                
                                 add_ngp_btn.click()
                                 
                                 if add_attempt == 0:
@@ -5002,10 +5027,20 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                                 time.sleep(1)
                                 break
                             except Exception as e:
+                                error_str = str(e).lower()
                                 if add_attempt < 2:
-                                    print(f"      ⚠️  Tentative {add_attempt + 1}/3 échouée: {e}")
-                                    if "stale element" in str(e).lower():
+                                    if "intercepted" in error_str or "blocker" in error_str:
+                                        print(f"      ⚠️  Blocker UI détecté: {e}")
+                                        print(f"      🔄 Attente disparition blocker...")
+                                        try:
+                                            wait_for_ui_blocker_disappear(driver, timeout=10)
+                                            time.sleep(1)
+                                        except:
+                                            pass
+                                    elif "stale element" in error_str:
                                         print(f"      ℹ️  Stale element - retry ajout NGP")
+                                    else:
+                                        print(f"      ⚠️  Tentative {add_attempt + 1}/3 échouée: {e}")
                                 else:
                                     print(f"      ❌ Erreur ajout NGP après 3 tentatives: {e}")
                                     raise Exception("Field entry error")
@@ -5162,45 +5197,58 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                     retry_attempt += 1
                     
                     error_message = str(lot_error)
+                    error_message_lower = error_message.lower()
                     
                     # Categorize the error type
                     is_field_error = "Field entry error" in error_message or "Field validation error" in error_message or "Empty field" in error_message
                     is_validation_error = "Validation failed" in error_message
                     is_selenium_error_bool = is_selenium_error(lot_error)
+                    is_blocker_error = "intercepted" in error_message_lower or "blocker" in error_message_lower or "would receive the click" in error_message_lower
                     
                     # Decision: Should we retry?
                     if retry_attempt < MAX_LOT_RETRIES:
                         # Determine recovery strategy based on error type
-                        if is_field_error:
+                        if is_blocker_error:
+                            print(f"      ⚠️ Erreur blocker UI détectée: {error_message}")
+                            print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - En attente disparition blocker...")
+                            # Wait for blocker to disappear and retry lot creation from scratch
+                            try:
+                                wait_for_ui_blocker_disappear(driver, timeout=10)
+                                time.sleep(2)
+                            except:
+                                pass
+                            # Le lot sera recréé automatiquement (clic "Nouveau" dans le while loop)
+                            continue  # Retry the lot in while loop
+                            
+                        elif is_field_error:
                             print(f"      ⚠️ Erreur champ détectée: {error_message}")
-                            print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - Les champs seront re-remplis...")
-                            # No need to go to accueil or recreate lot - fields will be refilled in next attempt
-                            # Just ensure we're in a stable state
+                            print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - Le lot sera recréé...")
+                            # Wait for stability
                             try:
                                 wait_for_ui_blocker_disappear(driver, timeout=5)
                                 time.sleep(1)
                             except:
                                 pass
+                            # Le lot sera recréé automatiquement (clic "Nouveau" dans le while loop)
                             continue  # Retry the lot in while loop
                             
                         elif is_validation_error:
                             print(f"      ⚠️ Erreur validation détectée: {error_message}")
-                            print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - La validation sera retentée...")
-                            # No need to recreate lot - validation will be retried
+                            print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - Le lot sera recréé...")
                             try:
                                 wait_for_ui_blocker_disappear(driver, timeout=5)
                                 time.sleep(1)
                             except:
                                 pass
+                            # Le lot sera recréé automatiquement (clic "Nouveau" dans le while loop)
                             continue  # Retry the lot in while loop
                             
                         elif is_selenium_error_bool:
                             print(f"      ⚠️ Erreur Selenium détectée: {error_message}")
-                            print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - Le lot sera recréé depuis le début...")
-                            # For Selenium errors early in process, we may need to recreate lot
-                            # Exit iframe and stabilize
-                            driver.switch_to.default_content()
+                            print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - Stabilisation iframe...")
+                            # For Selenium errors, ensure iframe stability
                             try:
+                                driver.switch_to.default_content()
                                 wait_for_ui_blocker_disappear(driver, timeout=5)
                                 time.sleep(1)
                                 # Return to iframe
@@ -5209,13 +5257,14 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                                 time.sleep(1)
                             except:
                                 pass
+                            # Le lot sera recréé automatiquement (clic "Nouveau" dans le while loop)
                             continue  # Retry the lot in while loop
                         else:
-                            # Unknown error type - treat as Selenium error
+                            # Unknown error type - retry with iframe stabilization
                             print(f"      ⚠️ Erreur inconnue: {error_message}")
                             print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES}...")
-                            driver.switch_to.default_content()
                             try:
+                                driver.switch_to.default_content()
                                 wait_for_ui_blocker_disappear(driver, timeout=5)
                                 time.sleep(1)
                                 # Return to iframe
@@ -5224,6 +5273,7 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                                 time.sleep(1)
                             except:
                                 pass
+                            # Le lot sera recréé automatiquement (clic "Nouveau" dans le while loop)
                             continue  # Retry the lot in while loop
                     else:
                         # Max retries reached
