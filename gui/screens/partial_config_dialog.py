@@ -220,8 +220,8 @@ class PartialConfigDialog:
         
         exception_info = ttk.Label(
             self.exception_frame,
-            text="Un partiel a un poids inférieur au DUM 1.\n"
-                 "Veuillez renseigner les informations de référence ci-dessous:",
+            text="Le plus petit partiel est inférieur au poids du plus grand DUM (cas de complément).\n"
+                 "Une seule ED sera créée. Renseignez les infos du partiel exception ci-dessous:",
             foreground="red",
             font=('Arial', 9, 'bold')
         )
@@ -249,7 +249,23 @@ class PartialConfigDialog:
             row=2, column=2, sticky=tk.W, padx=5, pady=2
         )
         
-        # Partials container (scrollable)
+        # Buttons frame - Pack FIRST (before scrollable content) so it always reserves space at bottom
+        buttons_frame = ttk.Frame(main_frame)
+        buttons_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 5), padx=10)
+        
+        ttk.Button(
+            buttons_frame,
+            text="💾 Sauvegarder",
+            command=self._save_config
+        ).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            buttons_frame,
+            text="❌ Annuler",
+            command=self.dialog.destroy
+        ).pack(side=tk.LEFT, padx=5)
+        
+        # Partials container (scrollable) - Pack AFTER buttons so it fills remaining space
         self.partials_container = ttk.Frame(main_frame)
         self.partials_container.pack(fill=tk.BOTH, expand=True, pady=10)
         
@@ -269,22 +285,6 @@ class PartialConfigDialog:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         self.canvas = canvas
-        
-        # Buttons frame - Fixed at bottom, always visible
-        buttons_frame = ttk.Frame(main_frame)
-        buttons_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 5), padx=10)
-        
-        ttk.Button(
-            buttons_frame,
-            text="💾 Sauvegarder",
-            command=self._save_config
-        ).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(
-            buttons_frame,
-            text="❌ Annuler",
-            command=self.dialog.destroy
-        ).pack(side=tk.LEFT, padx=5)
         
         # Load existing config if available
         if self.existing_config:
@@ -452,11 +452,12 @@ class PartialConfigDialog:
                 except ValueError:
                     partial_weights.append(0)
             
-            # Detect exception case: check if smallest partial weight < DUM 1 weight
-            dum1_weight = self.lta_data['dums'][0]['weight']  # First DUM
+            # Detect exception case: smallest partial < max DUM weight
+            # (means partial is a leftover piece of a single DUM, not made of whole DUMs)
+            max_dum_weight = max(dum['weight'] for dum in self.lta_data['dums'])
             smallest_partial_weight = min(w for w in partial_weights if w > 0) if any(w > 0 for w in partial_weights) else 0
-            is_exception_case = smallest_partial_weight > 0 and smallest_partial_weight < dum1_weight
-            
+            is_exception_case = smallest_partial_weight > 0 and smallest_partial_weight < max_dum_weight
+
             if is_exception_case:
                 # Show exception frame if hidden
                 if not self.exception_frame.winfo_manager():
@@ -524,7 +525,8 @@ class PartialConfigDialog:
         Automatically distribute DUMs across partials based on weights.
         Sequential distribution: Fill partials in order until weight is reached.
         Last DUM may be split if needed.
-        Exception case: Always splits DUM 1 (first DUM) instead of last DUM.
+        Exception case: Sequentially fills the largest partial and splits whichever
+        DUM naturally falls at the weight boundary.
         
         Args:
             partial_weights: List of weights for each partial
@@ -547,12 +549,12 @@ class PartialConfigDialog:
         # Check if exception case
         is_exception_case = (smallest_partial_idx is not None and smallest_partial_positions is not None)
         
-        # For exception case: handle DUM 1 splitting (always split DUM 1, not last DUM)
+        # For exception case: sequentially fill the LARGEST partial, split whichever DUM
+        # naturally falls at the boundary. The split DUM uses split_id='' so its reference
+        # becomes /dumN (no /1 suffix) because the exception partial is the DS MEAD at airport.
+        # The exception partial gets no DUMs - it won't be created as a second ED.
         if is_exception_case:
-            # Find smallest partial weight
-            smallest_partial_weight = partial_weights[smallest_partial_idx]
-            
-            # Find largest partial (other partial)
+            # Find the largest partial index
             largest_partial_idx = None
             largest_partial_weight = 0
             for idx, weight in enumerate(partial_weights):
@@ -560,68 +562,37 @@ class PartialConfigDialog:
                     largest_partial_idx = idx
                     largest_partial_weight = weight
             
-            # DUM 1 data
-            dum1 = dums[0]
-            dum1_weight = dum1['weight']
-            dum1_positions = dum1['positions']
+            # Sequential fill of the largest partial — same as normal, but:
+            # - the split DUM gets split_id='' (reference /N not /N/1)
+            # - positions of the split part = dum.total_positions - exception_partial_positions
+            largest_partial_dums = []
+            weight_accumulated = 0.0
             
-            # Calculate DUM 1 split for exception case
-            # Smallest partial gets: manual weight and positions (from DUM 1)
-            # Largest partial gets: DUM 1 total - smallest partial
-            
-            # Round smallest partial weight and positions FIRST
-            rounded_smallest_weight = round(smallest_partial_weight, 1)
-            rounded_smallest_positions = round(smallest_partial_positions)
-            
-            dum1_largest_weight = round(dum1_weight - rounded_smallest_weight, 1)
-            dum1_largest_positions = round(dum1_positions - rounded_smallest_positions)
-            
-            # Process smallest partial (gets part of DUM 1)
-            smallest_partial_dums = [{
-                'dum_number': 1,
-                'weight': rounded_smallest_weight,
-                'positions': rounded_smallest_positions,
-                'is_split': True,
-                'split_id': '1/1'  # DUM 1, first split
-            }]
-            
-            # Process largest partial (gets remaining DUM 1 + all other DUMs)
-            # For exception case: DUM 1 split in largest partial uses /1 (not /1/2) 
-            # so it matches the reference expected in préapurement DS
-            largest_partial_dums = [{
-                'dum_number': 1,
-                'weight': dum1_largest_weight,
-                'positions': dum1_largest_positions,
-                'is_split': True,
-                'split_id': ''  # Empty split_id for exception case - will use /1 in ED
-            }]
-            
-            # Add all other DUMs to largest partial
-            weight_remaining = round(largest_partial_weight - dum1_largest_weight, 1)
-            current_dum_idx = 1  # Start from DUM 2
-            
-            while weight_remaining > 0 and current_dum_idx < len(dums):
-                dum = dums[current_dum_idx]
+            for dum in dums:
+                if weight_accumulated >= largest_partial_weight:
+                    break
+                
                 rounded_dum_weight = round(dum['weight'], 1)
                 rounded_dum_positions = round(dum['positions'])
+                weight_needed = round(largest_partial_weight - weight_accumulated, 1)
                 
-                # Check if entire DUM fits or needs to be split
-                if rounded_dum_weight <= weight_remaining:
-                    # Entire DUM fits - not a split
+                if rounded_dum_weight <= weight_needed:
+                    # Entire DUM fits
                     largest_partial_dums.append({
                         'dum_number': dum['number'],
                         'weight': rounded_dum_weight,
                         'positions': rounded_dum_positions,
-                        'is_split': False,  # Entire DUM, not split
+                        'is_split': False,
                         'split_id': ''
                     })
-                    weight_remaining = round(weight_remaining - rounded_dum_weight, 1)
-                    current_dum_idx += 1
+                    weight_accumulated = round(weight_accumulated + rounded_dum_weight, 1)
                 else:
-                    # DUM needs to be split
-                    split_weight = round(weight_remaining, 1)
-                    # Calculate positions proportionally
-                    if dum['weight'] > 0:
+                    # This DUM is split at the boundary
+                    split_weight = round(weight_needed, 1)
+                    # Positions for the large partial's piece = total DUM positions - exception partial positions
+                    if smallest_partial_positions is not None:
+                        split_positions = max(0, rounded_dum_positions - round(smallest_partial_positions))
+                    elif dum['weight'] > 0:
                         split_positions = round((split_weight / dum['weight']) * dum['positions'])
                     else:
                         split_positions = 0
@@ -631,25 +602,32 @@ class PartialConfigDialog:
                         'weight': split_weight,
                         'positions': split_positions,
                         'is_split': True,
-                        'split_id': f"{dum['number']}/2"  # Split for second partial
+                        'split_id': ''  # Exception: reference is /N not /N/1
                     })
+                    weight_accumulated = round(weight_accumulated + split_weight, 1)
                     break
+            
+            total_largest_weight = round(sum(d['weight'] for d in largest_partial_dums), 1)
+            total_largest_positions = sum(d['positions'] for d in largest_partial_dums)
+            
+            # Exception partial info (no DUMs - won't be created as ED)
+            rounded_smallest_weight = round(partial_weights[smallest_partial_idx], 1)
+            rounded_smallest_positions = round(smallest_partial_positions)
             
             # Build distribution in order
             for partial_idx in range(len(partial_weights)):
-                if partial_idx == smallest_partial_idx:
-                    distribution.append({
-                        'weight': rounded_smallest_weight,
-                        'positions': rounded_smallest_positions,
-                        'dums': smallest_partial_dums
-                    })
-                elif partial_idx == largest_partial_idx:
-                    total_largest_weight = sum(d['weight'] for d in largest_partial_dums)
-                    total_largest_positions = sum(d['positions'] for d in largest_partial_dums)
+                if partial_idx == largest_partial_idx:
                     distribution.append({
                         'weight': total_largest_weight,
                         'positions': total_largest_positions,
                         'dums': largest_partial_dums
+                    })
+                elif partial_idx == smallest_partial_idx:
+                    # Exception partial — no DUMs, handled as DS MEAD at airport
+                    distribution.append({
+                        'weight': rounded_smallest_weight,
+                        'positions': rounded_smallest_positions,
+                        'dums': []  # Not created as ED
                     })
                 else:
                     distribution.append({'weight': 0, 'positions': 0, 'dums': []})
@@ -851,10 +829,10 @@ class PartialConfigDialog:
             # Get exception case positions if provided (same logic as in _update_distribution_preview)
             smallest_partial_positions = None
             smallest_partial_idx = None
-            dum1_weight = self.lta_data['dums'][0]['weight']  # First DUM
+            max_dum_weight = max(dum['weight'] for dum in self.lta_data['dums'])
             smallest_partial_weight = min(w for w in partial_weights if w > 0) if any(w > 0 for w in partial_weights) else 0
-            is_exception_case = smallest_partial_weight > 0 and smallest_partial_weight < dum1_weight
-            
+            is_exception_case = smallest_partial_weight > 0 and smallest_partial_weight < max_dum_weight
+
             if is_exception_case:
                 try:
                     smallest_partial_positions_str = self.smallest_partial_positions_var.get().strip()
@@ -881,28 +859,43 @@ class PartialConfigDialog:
                 ds_serie_full = form_data['ds_serie_var'].get().strip()
                 location = form_data['location_var'].get().strip()
                 
-                if not all([weight, ds_serie_full, location]):
-                    messagebox.showerror(
-                        "Validation",
-                        f"Partiel {partial_num}: Tous les champs sont requis (Poids, DS Série, Lieu de Chargement)"
-                    )
-                    return
+                # Exception partial doesn't need Location (handled at airport), but DS Série IS required
+                if is_exception_case and idx == smallest_partial_idx:
+                    if not all([weight, ds_serie_full]):
+                        messagebox.showerror(
+                            "Validation",
+                            f"Partiel {partial_num}: Poids et DS Série sont requis"
+                        )
+                        return
+                else:
+                    if not all([weight, ds_serie_full, location]):
+                        messagebox.showerror(
+                            "Validation",
+                            f"Partiel {partial_num}: Tous les champs sont requis (Poids, DS Série, Lieu de Chargement)"
+                        )
+                        return
                 
-                # Validate and parse DS Série (format "XXXX Y" like preparation)
-                ds_serie_normalized = normalize_ds_series(ds_serie_full)
-                is_valid, err_msg = validate_ds_series(ds_serie_normalized)
-                if not is_valid:
-                    messagebox.showerror("Validation", f"Partiel {partial_num}: DS Série - {err_msg}")
-                    return
-                parts = ds_serie_normalized.split()
-                ds_serie = parts[0] if parts else ""
-                ds_cle = parts[1] if len(parts) > 1 else ""
+                # Validate and parse DS Série (required for all partials)
+                if ds_serie_full:
+                    ds_serie_normalized = normalize_ds_series(ds_serie_full)
+                    is_valid, err_msg = validate_ds_series(ds_serie_normalized)
+                    if not is_valid:
+                        messagebox.showerror("Validation", f"Partiel {partial_num}: DS Série - {err_msg}")
+                        return
+                    parts = ds_serie_normalized.split()
+                    ds_serie = parts[0] if parts else ""
+                    ds_cle = parts[1] if len(parts) > 1 else ""
+                else:
+                    # Should not reach here due to required fields check above
+                    ds_serie = ''
+                    ds_cle = ''
                 
-                # Validate location
-                is_valid, err_msg = validate_location(location)
-                if not is_valid:
-                    messagebox.showerror("Validation", f"Partiel {partial_num}: Lieu - {err_msg}")
-                    return
+                # Validate location (skip for exception partial)
+                if not (is_exception_case and idx == smallest_partial_idx):
+                    is_valid, err_msg = validate_location(location)
+                    if not is_valid:
+                        messagebox.showerror("Validation", f"Partiel {partial_num}: Lieu - {err_msg}")
+                        return
                 
                 # Validate weight
                 try:
@@ -928,8 +921,8 @@ class PartialConfigDialog:
                         'split_id': dum_info.get('split_id', '')
                     })
                 
-                # Validate distribution has DUMs
-                if not selected_dums:
+                # Validate distribution has DUMs (exception partial has none - handled at airport)
+                if not selected_dums and not (is_exception_case and idx == smallest_partial_idx):
                     messagebox.showerror(
                         "Validation",
                         f"Partiel {partial_num}: Aucun DUM assigné par distribution automatique"
@@ -980,10 +973,11 @@ class PartialConfigDialog:
                             'positions': dum['positions']
                         })
             
-            # Detect exception case: check if smallest partial < DUM 1 (not smallest DUM)
-            dum1_weight = self.lta_data['dums'][0]['weight']  # First DUM
+            # Detect exception case: smallest partial < max DUM weight
+            # (means partial is a leftover complement of one DUM, not made of whole DUMs)
+            max_dum_weight = max(dum['weight'] for dum in self.lta_data['dums'])
             smallest_partial_weight = min(w for w in partial_weights if w > 0) if any(w > 0 for w in partial_weights) else 0
-            is_exception_case = smallest_partial_weight > 0 and smallest_partial_weight < dum1_weight
+            is_exception_case = smallest_partial_weight > 0 and smallest_partial_weight < max_dum_weight
             
             # For exception case, validate additional fields
             smallest_partial_number = None

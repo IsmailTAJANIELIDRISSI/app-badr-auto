@@ -3091,49 +3091,55 @@ def get_dum_preapurement_lots(dum_number, partial_config, validated_lta_referenc
     smallest_partial_positions = partial_config.get('smallest_partial_positions', 0)
     
     # Exception case: DUM 1 has 2 lots
-    if is_exception and dum_str == '1':
-        lots = []
+    # Exception case: find which DUM is the split DUM dynamically (was hardcoded to DUM 1)
+    if is_exception:
+        # The split DUM in exception case is whichever DUM key appears in split_dums
+        exception_split_dums = list(partial_config.get('split_dums', {}).keys())
+        exception_split_dum_str = exception_split_dums[0] if exception_split_dums else None
         
-        # Lot 1: Smallest partial (already cleared at airport)
-        smallest_partial = find_partial_by_number(partial_config, smallest_partial_num)
-        if smallest_partial:
-            lots.append({
-                'reference': airport_reference,  # Exact airport reference (no suffix)
-                'ds_serie': smallest_partial['ds_serie'],
-                'ds_cle': smallest_partial['ds_cle'],
-                'split_id': None,
-                'weight': smallest_partial['weight'],
-                'positions': smallest_partial_positions,
-                'is_exception_smallest': True  # Flag for special handling
-            })
-        
-        # Lot 2: Largest partial (from état de dépotage)
-        # Find which partial DUM 1 belongs to (should be the largest one)
-        for partial in partial_config['partials']:
-            if partial['partial_number'] != smallest_partial_num:
-                for dum in partial['dums']:
-                    if dum['dum_number'] == 1:
-                        signed_series = partial.get('signed_series', '')
-                        if signed_series and ' ' in signed_series:
-                            parts = signed_series.split()
-                            ds_serie = parts[0]
-                            ds_cle = parts[1]
-                        else:
-                            ds_serie = partial['ds_serie']
-                            ds_cle = partial['ds_cle']
-                        
-                        lots.append({
-                            'reference': f"{airport_reference}/1",  # Airport reference + /1
-                            'ds_serie': ds_serie,
-                            'ds_cle': ds_cle,
-                            'split_id': None,
-                            'weight': dum['weight'],
-                            'positions': dum['positions'],
-                            'is_exception_largest': True  # Flag for special handling
-                        })
-                        break
-        
-        return lots
+        if exception_split_dum_str and dum_str == exception_split_dum_str:
+            lots = []
+            
+            # Lot 1: Smallest partial (already cleared at airport) - DS MEAD type
+            smallest_partial = find_partial_by_number(partial_config, smallest_partial_num)
+            if smallest_partial:
+                lots.append({
+                    'reference': airport_reference,  # Exact airport reference (no suffix)
+                    'ds_serie': smallest_partial['ds_serie'],
+                    'ds_cle': smallest_partial['ds_cle'],
+                    'split_id': None,
+                    'weight': smallest_partial['weight'],
+                    'positions': smallest_partial_positions,
+                    'is_exception_smallest': True  # Flag for special handling (DS MEAD type)
+                })
+            
+            # Lot 2: Largest partial split piece (from état de dépotage) - Depotage type
+            # Find which partial the split DUM belongs to (should be the largest one)
+            for partial in partial_config['partials']:
+                if partial['partial_number'] != smallest_partial_num:
+                    for dum in partial['dums']:
+                        if str(dum['dum_number']) == exception_split_dum_str:
+                            signed_series = partial.get('signed_series', '')
+                            if signed_series and ' ' in signed_series:
+                                parts = signed_series.split()
+                                ds_serie = parts[0]
+                                ds_cle = parts[1]
+                            else:
+                                ds_serie = partial['ds_serie']
+                                ds_cle = partial['ds_cle']
+                            
+                            lots.append({
+                                'reference': f"{airport_reference}/{exception_split_dum_str}",  # Airport ref + /N
+                                'ds_serie': ds_serie,
+                                'ds_cle': ds_cle,
+                                'split_id': None,
+                                'weight': dum['weight'],
+                                'positions': dum['positions'],
+                                'is_exception_largest': True  # Flag for special handling
+                            })
+                            break
+            
+            return lots
     
     # Check if DUM is split
     if dum_str in partial_config.get('split_dums', {}):
@@ -8456,22 +8462,24 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             # Check if this is a split DUM (for validation logic)
             is_split_dum = partial_config and str(dum_number) in partial_config.get('split_dums', {})
             
-            # Check if this is exception case DUM 1 with multiple lots (needs accumulation like split DUMs)
-            is_exception_dum1_multiple_lots = (
+            # Check if this is exception case split DUM with multiple lots (needs accumulation)
+            # Dynamic: works for any DUM number, not just DUM 1
+            exception_split_dums = list(partial_config.get('split_dums', {}).keys()) if partial_config else []
+            is_exception_split_dum_multiple_lots = (
                 partial_config 
                 and partial_config.get('partial_type') == 'exception'
-                and dum_number == '1'
+                and dum_number in exception_split_dums
                 and num_lots_to_add > 1
             )
             
-            # Use accumulation validation if it's a split DUM OR exception DUM 1 with multiple lots
-            needs_accumulation = is_split_dum or is_exception_dum1_multiple_lots
+            # Use accumulation validation if it's a split DUM OR exception split DUM with multiple lots
+            needs_accumulation = is_split_dum or is_exception_split_dum_multiple_lots
             
             if needs_accumulation:
-                if is_split_dum:
+                if is_exception_split_dum_multiple_lots:
+                    print(f"      ⚠️  CAS D'EXCEPTION DUM {dum_number} - {num_lots_to_add} lots requis (accumulation nécessaire)")
+                else:
                     print(f"      ⚠️  DUM SPLIT détecté - {num_lots_to_add} lots requis")
-                elif is_exception_dum1_multiple_lots:
-                    print(f"      ⚠️  CAS D'EXCEPTION DUM 1 - {num_lots_to_add} lots requis (accumulation nécessaire)")
                 # Initialize accumulators for validation
                 split_accumulated_weight = 0.0
                 split_accumulated_containers = 0.0
