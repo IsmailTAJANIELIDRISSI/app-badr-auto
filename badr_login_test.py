@@ -10500,8 +10500,26 @@ def process_lta_folder(driver, lta_folder_path, lta_name):
             print(f"   - Lieu: {shipper_data['loading_location']}")
             print("\n🔄 Création de l'Etat de Dépotage...")
             
-            if not create_etat_depotage(driver, lta_folder_path, shipper_data):
-                print("❌ Échec création Etat de Dépotage - Arrêt du traitement")
+            MAX_ED_RESTARTS = 2
+            ed_success = False
+            for ed_attempt in range(MAX_ED_RESTARTS):
+                if ed_attempt > 0:
+                    print(f"\n🔄 RESTART COMPLET ED - Tentative {ed_attempt + 1}/{MAX_ED_RESTARTS}")
+                    print("   ℹ️  Un lot a échoué - ré-création de l'ED entier depuis l'accueil...")
+                    try:
+                        driver.switch_to.default_content()
+                    except:
+                        pass
+                    return_to_home_after_error(driver)
+                    time.sleep(3)
+                if create_etat_depotage(driver, lta_folder_path, shipper_data):
+                    ed_success = True
+                    break
+                else:
+                    print(f"   ❌ ED tentative {ed_attempt + 1}/{MAX_ED_RESTARTS} échouée")
+            
+            if not ed_success:
+                print("❌ Échec création Etat de Dépotage après tous les restarts - Arrêt du traitement")
                 return 0
             
             print("\n✅ Etat de Dépotage créé avec succès - Passage aux DUMs")
@@ -11226,9 +11244,27 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
         print(f"   - Lieu: {shipper_data['loading_location']}")
         print("\n🔄 Création de l'Etat de Dépotage...")
         
-        # Create ED
-        if not create_etat_depotage(driver, lta_folder_path, shipper_data):
-            print("❌ Échec création Etat de Dépotage")
+        # Create ED - with outer restart retry in case a lot fails mid-way
+        MAX_ED_RESTARTS = 2
+        ed_success = False
+        for ed_attempt in range(MAX_ED_RESTARTS):
+            if ed_attempt > 0:
+                print(f"\n🔄 RESTART COMPLET ED - Tentative {ed_attempt + 1}/{MAX_ED_RESTARTS}")
+                print("   ℹ️  Un lot a échoué - ré-création de l'ED entier depuis l'accueil...")
+                try:
+                    driver.switch_to.default_content()
+                except:
+                    pass
+                return_to_home_after_error(driver)
+                time.sleep(3)
+            if create_etat_depotage(driver, lta_folder_path, shipper_data):
+                ed_success = True
+                break
+            else:
+                print(f"   ❌ ED tentative {ed_attempt + 1}/{MAX_ED_RESTARTS} échouée")
+        
+        if not ed_success:
+            print("❌ Échec création Etat de Dépotage après tous les restarts")
             return False
         
         print("\n✅ Etat de Dépotage créé avec succès!")
