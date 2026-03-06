@@ -2333,49 +2333,50 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
                         else:
                             ds_reference = None
                 
-                # MED.9.2: Enregistrer la référence dans le fichier shipper (ligne 4)
-                if ds_reference:
-                    try:
-                        lta_name = os.path.basename(lta_folder_path)
-                        parent_dir = os.path.dirname(lta_folder_path)
-                        
-                        # Chercher le fichier shipper: [X]eme_LTA_*.txt
-                        lta_name_with_underscore = lta_name.replace(" ", "_")
-                        shipper_pattern = f"{lta_name_with_underscore}_*.txt"
-                        shipper_files = glob.glob(os.path.join(parent_dir, shipper_pattern))
-                        
-                        if not shipper_files:
-                            print(f"      ⚠️  Fichier shipper introuvable: {shipper_pattern}")
-                        else:
-                            shipper_file = shipper_files[0]
-                            
-                            # Lire le fichier actuel
-                            with open(shipper_file, 'r', encoding='utf-8') as f:
-                                lines = [line.rstrip('\n') for line in f.readlines()]
-                            
-                            # S'assurer qu'on a au moins 3 lignes (shipper, serie+cle, location)
-                            while len(lines) < 3:
-                                lines.append("")
-                            
-                            # Ajouter ou remplacer la ligne 4 (index 3) avec la référence DS
-                            if len(lines) == 3:
-                                # Ajouter ligne 4
-                                lines.append(ds_reference)
-                                action = "ajoutée"
-                            elif len(lines) >= 4:
-                                # Remplacer ligne 4 existante
-                                lines[3] = ds_reference
-                                action = "mise à jour"
-                            
-                            # Réécrire le fichier
-                            with open(shipper_file, 'w', encoding='utf-8') as f:
-                                f.write('\n'.join(lines))
-                            
-                            print(f"      ✓ Référence DS {action} dans {os.path.basename(shipper_file)}")
-                            print(f"         Ligne 4: {ds_reference}")
+            # MED.9.2: Enregistrer la référence dans le fichier shipper (ligne 4)
+            # NOTE: Must be OUTSIDE the for-loop so it runs after break (successful extraction)
+            if ds_reference:
+                try:
+                    lta_name = os.path.basename(lta_folder_path)
+                    parent_dir = os.path.dirname(lta_folder_path)
                     
-                    except Exception as e:
-                        print(f"      ⚠️  Erreur mise à jour fichier shipper: {e}")
+                    # Chercher le fichier shipper: [X]eme_LTA_*.txt
+                    lta_name_with_underscore = lta_name.replace(" ", "_")
+                    shipper_pattern = f"{lta_name_with_underscore}_*.txt"
+                    shipper_files = glob.glob(os.path.join(parent_dir, shipper_pattern))
+                    
+                    if not shipper_files:
+                        print(f"      ⚠️  Fichier shipper introuvable: {shipper_pattern}")
+                    else:
+                        shipper_file = shipper_files[0]
+                        
+                        # Lire le fichier actuel
+                        with open(shipper_file, 'r', encoding='utf-8') as f:
+                            lines = [line.rstrip('\n') for line in f.readlines()]
+                        
+                        # S'assurer qu'on a au moins 3 lignes (shipper, serie+cle, location)
+                        while len(lines) < 3:
+                            lines.append("")
+                        
+                        # Ajouter ou remplacer la ligne 4 (index 3) avec la référence DS
+                        if len(lines) == 3:
+                            # Ajouter ligne 4
+                            lines.append(ds_reference)
+                            action = "ajoutée"
+                        elif len(lines) >= 4:
+                            # Remplacer ligne 4 existante
+                            lines[3] = ds_reference
+                            action = "mise à jour"
+                        
+                        # Réécrire le fichier
+                        with open(shipper_file, 'w', encoding='utf-8') as f:
+                            f.write('\n'.join(lines))
+                        
+                        print(f"      ✓ Référence DS {action} dans {os.path.basename(shipper_file)}")
+                        print(f"         Ligne 4: {ds_reference}")
+                
+                except Exception as e:
+                    print(f"      ⚠️  Erreur mise à jour fichier shipper: {e}")
         
         except Exception as e:
             print(f"      ⚠️  Erreur vérification validation: {e}")
