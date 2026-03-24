@@ -2724,6 +2724,83 @@ def wait_for_ui_blocker_disappear(driver, timeout=10):
         # En cas d'erreur, on suppose que le blocker n'est pas là
         return True
 
+def verify_uploaded_files(driver, expected_filenames, timeout=15):
+    """
+    Vérifie que les fichiers uploadés apparaissent bien dans la table 'Liste des fichiers chargés'.
+    
+    Args:
+        driver: WebDriver Selenium
+        expected_filenames: list of filename strings to look for (e.g. ["mn6.pdf", "2eme LTA - 112-03185464.pdf"])
+                            Matching is case-insensitive and checks if the listed cell CONTAINS the name.
+        timeout: maximum seconds to wait for files to appear
+
+    Returns:
+        tuple: (bool success, list missing_files)
+            success is True only if ALL expected filenames were found.
+    """
+    try:
+        import time as _time
+        start = _time.time()
+        
+        while _time.time() - start < timeout:
+            try:
+                # Read rows from the uploaded files table
+                tbody = driver.find_element(By.ID, "mainTab:form7:listFichiersAnnexeDT_data")
+                rows = tbody.find_elements(By.TAG_NAME, "tr")
+                
+                # If the table shows "empty message" row, no files yet
+                if len(rows) == 1:
+                    empty_cells = rows[0].find_elements(By.TAG_NAME, "td")
+                    if empty_cells and empty_cells[0].get_attribute("colspan"):
+                        # Still empty - wait and retry
+                        _time.sleep(1)
+                        continue
+                
+                # Collect filenames visible in column 2 (index 1)
+                found_names = []
+                for row in rows:
+                    cells = row.find_elements(By.TAG_NAME, "td")
+                    if len(cells) >= 2:
+                        cell_text = cells[1].text.strip().lower()
+                        if cell_text:
+                            found_names.append(cell_text)
+                
+                # Check each expected file
+                missing = []
+                for expected in expected_filenames:
+                    expected_lower = expected.lower()
+                    if not any(expected_lower in found for found in found_names):
+                        missing.append(expected)
+                
+                if not missing:
+                    return True, []
+                
+                _time.sleep(1)
+                
+            except Exception as row_err:
+                _time.sleep(1)
+        
+        # Final check after timeout
+        try:
+            tbody = driver.find_element(By.ID, "mainTab:form7:listFichiersAnnexeDT_data")
+            rows = tbody.find_elements(By.TAG_NAME, "tr")
+            found_names = []
+            for row in rows:
+                cells = row.find_elements(By.TAG_NAME, "td")
+                if len(cells) >= 2:
+                    cell_text = cells[1].text.strip().lower()
+                    if cell_text:
+                        found_names.append(cell_text)
+            missing = [e for e in expected_filenames if not any(e.lower() in f for f in found_names)]
+            return len(missing) == 0, missing
+        except:
+            return False, expected_filenames
+            
+    except Exception as e:
+        print(f"      ⚠️  Erreur vérification fichiers uploadés: {e}")
+        return False, expected_filenames
+
+
 def save_dum_error_log(lta_folder_path, lta_name, dum_number, sheet_name, error_exception, error_step, dum_data=None):
     """
     Crée un fichier log détaillé pour un DUM qui a échoué.
@@ -9213,11 +9290,10 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             print(f"      ❌ Erreur sélection date: {e}")
             return False
         
-        # 7.1.4: Upload du fichier LTA PDF
+        # 7.1.4: Upload du fichier LTA PDF — avec retry et vérification
         print("      4️⃣ Upload du fichier LTA PDF...")
         try:
             # Trouver le fichier LTA dans le dossier
-            # Pattern: "12eme LTA - *.pdf" (le fichier principal LTA, pas les mn*.pdf)
             lta_name = os.path.basename(lta_folder_path)  # e.g., "12eme LTA"
             lta_pattern = os.path.join(lta_folder_path, f"{lta_name} - *.pdf")
             lta_files = glob.glob(lta_pattern)
@@ -9228,37 +9304,63 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 return False
             
             lta_file_path = lta_files[0]
-            print(f"         📄 Fichier trouvé: {os.path.basename(lta_file_path)}")
-            
-            # Upload du fichier
-            file_input = wait.until(
-                EC.presence_of_element_located((By.ID, "mainTab:form7:comp2_input"))
-            )
+            lta_filename = os.path.basename(lta_file_path)
             absolute_path = os.path.abspath(lta_file_path)
-            file_input.send_keys(absolute_path)
-            print(f"         ✓ Fichier LTA uploadé: {os.path.basename(lta_file_path)}")
+            print(f"         📄 Fichier trouvé: {lta_filename}")
             
-            # Attendre que le blocker d'upload disparaisse
-            print("         ⏳ Attente fin d'upload...")
-            if wait_for_ui_blocker_disappear(driver, timeout=10):
-                print("         ✓ Upload terminé (blocker disparu)")
-            else:
-                print("         ⚠️  Timeout blocker upload - continuons")
+            # --- Retry upload + vérification ---
+            upload_verified = False
+            max_upload_attempts = 3
             
-            # Attendre que l'interface soit prête pour le prochain upload
-            time.sleep(3)  # Stabilisation après premier upload
+            for upload_attempt in range(1, max_upload_attempts + 1):
+                if upload_attempt > 1:
+                    print(f"         🔄 Re-upload LTA (tentative {upload_attempt}/{max_upload_attempts})...")
+                    time.sleep(2)
+                    wait_for_ui_blocker_disappear(driver, timeout=8)
+                
+                # Upload du fichier
+                file_input = wait.until(
+                    EC.presence_of_element_located((By.ID, "mainTab:form7:comp2_input"))
+                )
+                file_input.send_keys(absolute_path)
+                print(f"         ✓ Fichier LTA envoyé (tentative {upload_attempt}): {lta_filename}")
+                
+                # Attendre que le blocker d'upload disparaisse
+                print("         ⏳ Attente fin d'upload...")
+                if wait_for_ui_blocker_disappear(driver, timeout=12):
+                    print("         ✓ Upload terminé (blocker disparu)")
+                else:
+                    print("         ⚠️  Timeout blocker upload")
+                
+                time.sleep(2)
+                
+                # Vérification que le fichier est BIEN dans la table
+                print("         🔍 Vérification présence dans 'Liste des fichiers chargés'...")
+                ok, missing = verify_uploaded_files(driver, [lta_filename], timeout=12)
+                if ok:
+                    print(f"         ✅ LTA confirmé dans la liste: {lta_filename}")
+                    upload_verified = True
+                    break
+                else:
+                    print(f"         ⚠️  Fichier LTA absent de la liste (tentative {upload_attempt})")
+                    if upload_attempt == max_upload_attempts:
+                        print(f"         ❌ Fichier LTA non confirmé après {max_upload_attempts} tentatives — ARRÊT")
+                        return False
             
-            # Vérifier à nouveau si un blocker apparaît (traitement en arrière-plan)
-            print("         ⏳ Vérification stabilité UI...")
-            if wait_for_ui_blocker_disappear(driver, timeout=5):
-                print("         ✓ UI stabilisée")
+            if not upload_verified:
+                print("      ❌ Upload LTA non vérifié — ARRÊT")
+                return False
             
-            time.sleep(2)  # Pause supplémentaire pour sécurité
-            
+            # Stabilisation UI avant le 2e upload
+            print("         ⏳ Stabilisation UI...")
+            wait_for_ui_blocker_disappear(driver, timeout=5)
+            time.sleep(2)
             print("         ✓ Upload LTA traité, préparation pour le document MN...")
+            
         except Exception as e:
             print(f"      ❌ Erreur upload fichier LTA: {e}")
             return False
+
         
         # ==================================================================
         # ÉTAPE 7.2: Deuxième Upload - Document MN du DUM actuel
@@ -9474,10 +9576,9 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             print(f"      ❌ Erreur sélection date: {e}")
             return False
         
-        # 7.2.4: Upload du fichier MN PDF
+        # 7.2.4: Upload du fichier MN PDF — avec retry et vérification
         print(f"      4️⃣ Upload du fichier {mn_filename}...")
         try:
-            # Chercher le fichier mn*.pdf dans le dossier LTA
             mn_file_path = os.path.join(lta_folder_path, mn_filename)
             
             if not os.path.exists(mn_file_path):
@@ -9485,28 +9586,64 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 print(f"         Chemin recherché: {mn_file_path}")
                 return False
             
+            absolute_path = os.path.abspath(mn_file_path)
             print(f"         📄 Fichier trouvé: {mn_filename}")
             
-            # Upload du fichier
-            file_input = wait.until(
-                EC.presence_of_element_located((By.ID, "mainTab:form7:comp2_input"))
-            )
-            absolute_path = os.path.abspath(mn_file_path)
-            file_input.send_keys(absolute_path)
-            print(f"         ✓ Fichier MN uploadé: {mn_filename}")
+            # --- Retry upload + vérification ---
+            upload_verified = False
+            max_upload_attempts = 3
             
-            # Attendre que le blocker d'upload disparaisse
-            print("         ⏳ Attente fin d'upload...")
-            if wait_for_ui_blocker_disappear(driver, timeout=10):
-                print("         ✓ Upload terminé (blocker disparu)")
-            else:
-                print("         ⚠️  Timeout blocker upload - continuons")
-            time.sleep(2)
+            for upload_attempt in range(1, max_upload_attempts + 1):
+                if upload_attempt > 1:
+                    print(f"         🔄 Re-upload MN (tentative {upload_attempt}/{max_upload_attempts})...")
+                    time.sleep(2)
+                    wait_for_ui_blocker_disappear(driver, timeout=8)
+                
+                file_input = wait.until(
+                    EC.presence_of_element_located((By.ID, "mainTab:form7:comp2_input"))
+                )
+                file_input.send_keys(absolute_path)
+                print(f"         ✓ Fichier MN envoyé (tentative {upload_attempt}): {mn_filename}")
+                
+                print("         ⏳ Attente fin d'upload...")
+                if wait_for_ui_blocker_disappear(driver, timeout=12):
+                    print("         ✓ Upload terminé (blocker disparu)")
+                else:
+                    print("         ⚠️  Timeout blocker upload")
+                
+                time.sleep(2)
+                
+                # Vérification que le fichier est BIEN dans la table
+                print("         🔍 Vérification présence dans 'Liste des fichiers chargés'...")
+                ok, missing = verify_uploaded_files(driver, [mn_filename], timeout=12)
+                if ok:
+                    print(f"         ✅ MN confirmé dans la liste: {mn_filename}")
+                    upload_verified = True
+                    break
+                else:
+                    print(f"         ⚠️  Fichier MN absent de la liste (tentative {upload_attempt})")
+                    if upload_attempt == max_upload_attempts:
+                        print(f"         ❌ Fichier MN non confirmé après {max_upload_attempts} tentatives — ARRÊT")
+                        return False
+            
+            if not upload_verified:
+                print("      ❌ Upload MN non vérifié — ARRÊT")
+                return False
+            
         except Exception as e:
             print(f"      ❌ Erreur upload fichier MN: {e}")
             return False
         
-        print("\n   ✅ Documents uploadés avec succès (LTA + MN)")
+        # Vérification finale: les 2 documents (LTA + MN) sont bien présents
+        print("\n   🔍 Vérification finale des 2 documents uploadés...")
+        final_ok, final_missing = verify_uploaded_files(driver, [lta_filename, mn_filename], timeout=10)
+        if final_ok:
+            print(f"   ✅ Documents uploadés avec succès — LTA + MN confirmés dans la liste")
+        else:
+            print(f"   ⚠️  Documents manquants dans la liste finale: {final_missing}")
+            print(f"   ❌ Impossible de confirmer tous les documents — ARRÊT")
+            return False
+
         
         # ==================================================================
         # ÉTAPE 8: Retour à l'onglet "Entête" pour validation finale
