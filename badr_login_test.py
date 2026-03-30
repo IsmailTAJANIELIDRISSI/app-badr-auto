@@ -1552,6 +1552,7 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
         for dum_index, dum_data in enumerate(dum_lots_data, start=1):
             lot_creation_successful = False
             retry_attempt = 0
+            reuse_current_lot_form = False
             
             while not lot_creation_successful and retry_attempt < MAX_LOT_RETRIES:
                 if retry_attempt > 0:
@@ -6568,16 +6569,20 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                     # ==================================================================
                     # ÉTAPE LOT.1: Cliquer "Nouveau" pour créer un lot
                     # ==================================================================
-                    try:
-                        nouveau_lot_btn = wait.until(
-                            EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_new_lot')]"))
-                        )
-                        nouveau_lot_btn.click()
-                        print(f"      ✓ Bouton 'Nouveau' lot cliqué")
-                        time.sleep(2)
-                    except Exception as e:
-                        print(f"      ❌ Erreur clic 'Nouveau' lot: {e}")
-                        raise Exception("Lot creation error")
+                    if not reuse_current_lot_form:
+                        try:
+                            nouveau_lot_btn = wait.until(
+                                EC.element_to_be_clickable((By.XPATH, "//button[contains(@name, 'btn_new_lot')]"))
+                            )
+                            nouveau_lot_btn.click()
+                            print(f"      ✓ Bouton 'Nouveau' lot cliqué")
+                            time.sleep(2)
+                        except Exception as e:
+                            print(f"      ❌ Erreur clic 'Nouveau' lot: {e}")
+                            raise Exception("Lot creation error")
+                    else:
+                        print("      ℹ️  Retry en réutilisant le lot en cours (pas de nouveau lot)")
+                        reuse_current_lot_form = False
             
                     # ==================================================================
                     # ÉTAPE LOT.2: Remplir l'en-tête du lot
@@ -7159,7 +7164,8 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                         if is_field_error:
                             print(f"      ⚠️ Erreur champ détectée: {error_message}")
                             print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - Les champs seront re-remplis...")
-                            # No need to go to accueil or recreate lot - fields will be refilled in next attempt
+                            # Reuse current lot form to avoid creating duplicate lot references
+                            reuse_current_lot_form = True
                             try:
                                 wait_for_ui_blocker_disappear(driver, timeout=5)
                                 time.sleep(1)
@@ -7170,7 +7176,8 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                         elif is_validation_error:
                             print(f"      ⚠️ Erreur validation détectée: {error_message}")
                             print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - La validation sera retentée...")
-                            # No need to recreate lot - validation will be retried
+                            # Reuse current lot form to avoid creating duplicate lot references
+                            reuse_current_lot_form = True
                             try:
                                 wait_for_ui_blocker_disappear(driver, timeout=5)
                                 time.sleep(1)
@@ -7181,6 +7188,7 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                         elif is_selenium_error_bool:
                             print(f"      ⚠️ Erreur Selenium détectée: {error_message}")
                             print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - Recréation du lot...")
+                            reuse_current_lot_form = False
                             # For Selenium errors early in lot creation, recreate the lot
                             try:
                                 driver.switch_to.default_content()
@@ -7199,6 +7207,7 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
                             # Unknown error - retry with general recovery
                             print(f"      ⚠️ Erreur inconnue: {error_message}")
                             print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES}...")
+                            reuse_current_lot_form = False
                             try:
                                 wait_for_ui_blocker_disappear(driver, timeout=5)
                                 time.sleep(1)
@@ -7251,9 +7260,13 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
             if error_containers and len(error_containers) > 0:
                 error_details = driver.find_elements(By.CSS_SELECTOR, "span.ui-messages-error-detail")
                 if error_details and len(error_details) > 0:
-                    error_message = error_details[0].text.strip()
-                    print(f"   ❌ Erreur validation: {error_message}")
-                    raise Exception("Validation error")
+                    non_empty_errors = [d.text.strip() for d in error_details if d.text and d.text.strip()]
+                    if non_empty_errors:
+                        error_message = non_empty_errors[0]
+                        print(f"   ❌ Erreur validation: {error_message}")
+                        raise Exception("Validation error")
+                    else:
+                        print("   ℹ️  Conteneur d'erreur sans message (ignoré)")
             
             print("   ✓ Validation réussie!")
             

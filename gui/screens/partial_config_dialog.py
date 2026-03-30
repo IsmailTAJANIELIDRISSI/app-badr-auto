@@ -635,6 +635,15 @@ class PartialConfigDialog:
             return distribution
         
         # Normal case: sequential distribution (existing logic)
+        # Keep split numbering per DUM (e.g. DUM 6 -> 6/1, 6/2),
+        # independent of which partial index contains the split.
+        split_counters = {}
+
+        def next_split_id(dum_number):
+            count = split_counters.get(dum_number, 0) + 1
+            split_counters[dum_number] = count
+            return f"{dum_number}/{count}"
+
         current_dum_idx = 0
         remaining_dum_weight = round(dums[0]['weight'], 1) if dums else 0
         remaining_dum_positions = round(dums[0]['positions']) if dums else 0
@@ -686,7 +695,7 @@ class PartialConfigDialog:
                         'weight': rounded_weight,
                         'positions': rounded_positions,
                         'is_split': is_actually_split,  # Only true if it's actually a split continuation
-                        'split_id': f"{dums[current_dum_idx]['number']}/{partial_idx + 1}" if is_actually_split else ''
+                        'split_id': next_split_id(dums[current_dum_idx]['number']) if is_actually_split else ''
                     })
                     weight_accumulated += rounded_weight
                     positions_accumulated += rounded_positions
@@ -715,7 +724,7 @@ class PartialConfigDialog:
                             'weight': rounded_weight,
                             'positions': rounded_positions,
                             'is_split': is_continuing_split,  # Only true if it was already split from previous partial
-                            'split_id': f"{dums[current_dum_idx]['number']}/{partial_idx + 1}" if is_continuing_split else ''
+                            'split_id': next_split_id(dums[current_dum_idx]['number']) if is_continuing_split else ''
                         })
                         weight_accumulated += rounded_weight
                         positions_accumulated += rounded_positions
@@ -764,7 +773,7 @@ class PartialConfigDialog:
                             'weight': rounded_weight_needed,
                             'positions': rounded_positions_for_split,
                             'is_split': True,
-                            'split_id': f"{dums[current_dum_idx]['number']}/{partial_idx + 1}"
+                            'split_id': next_split_id(dums[current_dum_idx]['number'])
                         })
                         weight_accumulated += rounded_weight_needed
                         positions_accumulated += rounded_positions_for_split
