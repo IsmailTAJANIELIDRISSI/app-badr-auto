@@ -455,8 +455,14 @@ class PartialConfigDialog:
             # Detect exception case: smallest partial < max DUM weight
             # (means partial is a leftover piece of a single DUM, not made of whole DUMs)
             max_dum_weight = max(dum['weight'] for dum in self.lta_data['dums'])
+            num_partials = len(partial_weights)
             smallest_partial_weight = min(w for w in partial_weights if w > 0) if any(w > 0 for w in partial_weights) else 0
-            is_exception_case = smallest_partial_weight > 0 and smallest_partial_weight < max_dum_weight
+            # Business rule: exception case is supported for 2- or 3-partial workflows.
+            is_exception_case = (
+                num_partials in (2, 3)
+                and smallest_partial_weight > 0
+                and smallest_partial_weight < max_dum_weight
+            )
 
             if is_exception_case:
                 # Show exception frame if hidden
@@ -549,89 +555,136 @@ class PartialConfigDialog:
         # Check if exception case
         is_exception_case = (smallest_partial_idx is not None and smallest_partial_positions is not None)
         
-        # For exception case: sequentially fill the LARGEST partial, split whichever DUM
-        # naturally falls at the boundary. The split DUM uses split_id='' so its reference
-        # becomes /dumN (no /1 suffix) because the exception partial is the DS MEAD at airport.
-        # The exception partial gets no DUMs - it won't be created as a second ED.
+        # For exception case: smallest partial takes a split from DUM 1 (airport DS MEAD),
+        # then remaining DUM flow is distributed sequentially across other partials.
         if is_exception_case:
-            # Find the largest partial index
-            largest_partial_idx = None
-            largest_partial_weight = 0
-            for idx, weight in enumerate(partial_weights):
-                if idx != smallest_partial_idx and weight > largest_partial_weight:
-                    largest_partial_idx = idx
-                    largest_partial_weight = weight
-            
-            # Sequential fill of the largest partial — same as normal, but:
-            # - the split DUM gets split_id='' (reference /N not /N/1)
-            # - positions of the split part = dum.total_positions - exception_partial_positions
-            largest_partial_dums = []
-            weight_accumulated = 0.0
-            
-            for dum in dums:
-                if weight_accumulated >= largest_partial_weight:
-                    break
-                
-                rounded_dum_weight = round(dum['weight'], 1)
-                rounded_dum_positions = round(dum['positions'])
-                weight_needed = round(largest_partial_weight - weight_accumulated, 1)
-                
-                if rounded_dum_weight <= weight_needed:
-                    # Entire DUM fits
-                    largest_partial_dums.append({
-                        'dum_number': dum['number'],
-                        'weight': rounded_dum_weight,
-                        'positions': rounded_dum_positions,
-                        'is_split': False,
-                        'split_id': ''
-                    })
-                    weight_accumulated = round(weight_accumulated + rounded_dum_weight, 1)
-                else:
-                    # This DUM is split at the boundary
-                    split_weight = round(weight_needed, 1)
-                    # Positions for the large partial's piece = total DUM positions - exception partial positions
-                    if smallest_partial_positions is not None:
-                        split_positions = max(0, rounded_dum_positions - round(smallest_partial_positions))
-                    elif dum['weight'] > 0:
-                        split_positions = round((split_weight / dum['weight']) * dum['positions'])
-                    else:
-                        split_positions = 0
-                    
-                    largest_partial_dums.append({
-                        'dum_number': dum['number'],
-                        'weight': split_weight,
-                        'positions': split_positions,
-                        'is_split': True,
-                        'split_id': ''  # Exception: reference is /N not /N/1
-                    })
-                    weight_accumulated = round(weight_accumulated + split_weight, 1)
-                    break
-            
-            total_largest_weight = round(sum(d['weight'] for d in largest_partial_dums), 1)
-            total_largest_positions = sum(d['positions'] for d in largest_partial_dums)
-            
-            # Exception partial info (no DUMs - won't be created as ED)
+            non_smallest_indices = [i for i in range(len(partial_weights)) if i != smallest_partial_idx]
+            per_partial_dums = {i: [] for i in non_smallest_indices}
+            per_partial_weight = {i: 0.0 for i in non_smallest_indices}
+            per_partial_positions = {i: 0 for i in non_smallest_indices}
+            split_counters = {}
+
+            def next_split_id(dum_number):
+                count = split_counters.get(dum_number, 0) + 1
+                split_counters[dum_number] = count
+                return f"{dum_number}/{count}"
+
+            # Smallest partial consumes DUM 1 first (exception business rule).
             rounded_smallest_weight = round(partial_weights[smallest_partial_idx], 1)
             rounded_smallest_positions = round(smallest_partial_positions)
-            
-            # Build distribution in order
+            smallest_partial_dums = []
+
+            current_dum_idx = 0
+            remaining_dum_weight = round(dums[0]['weight'], 1) if dums else 0
+            remaining_dum_positions = round(dums[0]['positions']) if dums else 0
+            is_continuing_split = False
+            original_dum_weight_at_start = remaining_dum_weight
+
+            if dums and rounded_smallest_weight > 0:
+                first_dum_num = dums[0]['number']
+                first_dum_weight = round(dums[0]['weight'], 1)
+                taken_weight = min(rounded_smallest_weight, first_dum_weight)
+                smallest_partial_dums.append({
+                    'dum_number': first_dum_num,
+                    'weight': taken_weight,
+                    'positions': rounded_smallest_positions,
+                    'is_split': True,
+                    'split_id': ''  # airport lot keeps base reference
+                })
+
+                remaining_after_smallest = round(first_dum_weight - taken_weight, 1)
+                if remaining_after_smallest > 0:
+                    current_dum_idx = 0
+                    remaining_dum_weight = remaining_after_smallest
+                    remaining_dum_positions = max(0, round(dums[0]['positions']) - rounded_smallest_positions)
+                    is_continuing_split = True
+                    original_dum_weight_at_start = first_dum_weight
+                else:
+                    current_dum_idx = 1
+                    if current_dum_idx < len(dums):
+                        remaining_dum_weight = round(dums[current_dum_idx]['weight'], 1)
+                        remaining_dum_positions = round(dums[current_dum_idx]['positions'])
+                        original_dum_weight_at_start = remaining_dum_weight
+                    else:
+                        remaining_dum_weight = 0
+                        remaining_dum_positions = 0
+                    is_continuing_split = False
+
+            for order_idx, partial_idx in enumerate(non_smallest_indices):
+                target_weight = round(partial_weights[partial_idx], 1)
+                if target_weight <= 0:
+                    continue
+
+                weight_accumulated = 0.0
+                positions_accumulated = 0
+
+                while weight_accumulated < target_weight and current_dum_idx < len(dums):
+                    weight_needed = round(target_weight - weight_accumulated, 1)
+                    dum_number = dums[current_dum_idx]['number']
+
+                    if remaining_dum_weight <= weight_needed:
+                        rounded_weight = round(remaining_dum_weight, 1)
+                        rounded_positions = round(remaining_dum_positions)
+                        actually_split = is_continuing_split and (abs(remaining_dum_weight - original_dum_weight_at_start) > 0.1)
+
+                        per_partial_dums[partial_idx].append({
+                            'dum_number': dum_number,
+                            'weight': rounded_weight,
+                            'positions': rounded_positions,
+                            'is_split': actually_split,
+                            'split_id': next_split_id(dum_number) if actually_split else ''
+                        })
+                        weight_accumulated = round(weight_accumulated + rounded_weight, 1)
+                        positions_accumulated += rounded_positions
+
+                        current_dum_idx += 1
+                        is_continuing_split = False
+                        if current_dum_idx < len(dums):
+                            remaining_dum_weight = round(dums[current_dum_idx]['weight'], 1)
+                            remaining_dum_positions = round(dums[current_dum_idx]['positions'])
+                            original_dum_weight_at_start = remaining_dum_weight
+                    else:
+                        split_weight = round(weight_needed, 1)
+                        if remaining_dum_weight > 0:
+                            split_positions = round((split_weight / remaining_dum_weight) * remaining_dum_positions)
+                        else:
+                            split_positions = 0
+                        split_positions = max(0, min(split_positions, remaining_dum_positions))
+
+                        per_partial_dums[partial_idx].append({
+                            'dum_number': dum_number,
+                            'weight': split_weight,
+                            'positions': split_positions,
+                            'is_split': True,
+                            'split_id': next_split_id(dum_number)
+                        })
+                        weight_accumulated = round(weight_accumulated + split_weight, 1)
+                        positions_accumulated += split_positions
+
+                        remaining_dum_weight = round(remaining_dum_weight - split_weight, 1)
+                        remaining_dum_positions = round(remaining_dum_positions - split_positions)
+                        is_continuing_split = True
+                        break
+
+                per_partial_weight[partial_idx] = round(weight_accumulated, 1)
+                per_partial_positions[partial_idx] = round(positions_accumulated)
+
             for partial_idx in range(len(partial_weights)):
-                if partial_idx == largest_partial_idx:
-                    distribution.append({
-                        'weight': total_largest_weight,
-                        'positions': total_largest_positions,
-                        'dums': largest_partial_dums
-                    })
-                elif partial_idx == smallest_partial_idx:
-                    # Exception partial — no DUMs, handled as DS MEAD at airport
+                if partial_idx == smallest_partial_idx:
                     distribution.append({
                         'weight': rounded_smallest_weight,
                         'positions': rounded_smallest_positions,
-                        'dums': []  # Not created as ED
+                        'dums': smallest_partial_dums
+                    })
+                elif partial_idx in per_partial_dums:
+                    distribution.append({
+                        'weight': per_partial_weight[partial_idx],
+                        'positions': per_partial_positions[partial_idx],
+                        'dums': per_partial_dums[partial_idx]
                     })
                 else:
                     distribution.append({'weight': 0, 'positions': 0, 'dums': []})
-            
+
             return distribution
         
         # Normal case: sequential distribution (existing logic)
@@ -839,8 +892,13 @@ class PartialConfigDialog:
             smallest_partial_positions = None
             smallest_partial_idx = None
             max_dum_weight = max(dum['weight'] for dum in self.lta_data['dums'])
+            num_partials = len(partial_weights)
             smallest_partial_weight = min(w for w in partial_weights if w > 0) if any(w > 0 for w in partial_weights) else 0
-            is_exception_case = smallest_partial_weight > 0 and smallest_partial_weight < max_dum_weight
+            is_exception_case = (
+                num_partials in (2, 3)
+                and smallest_partial_weight > 0
+                and smallest_partial_weight < max_dum_weight
+            )
 
             if is_exception_case:
                 try:
@@ -985,8 +1043,13 @@ class PartialConfigDialog:
             # Detect exception case: smallest partial < max DUM weight
             # (means partial is a leftover complement of one DUM, not made of whole DUMs)
             max_dum_weight = max(dum['weight'] for dum in self.lta_data['dums'])
+            num_partials = len(partial_weights)
             smallest_partial_weight = min(w for w in partial_weights if w > 0) if any(w > 0 for w in partial_weights) else 0
-            is_exception_case = smallest_partial_weight > 0 and smallest_partial_weight < max_dum_weight
+            is_exception_case = (
+                num_partials in (2, 3)
+                and smallest_partial_weight > 0
+                and smallest_partial_weight < max_dum_weight
+            )
             
             # For exception case, validate additional fields
             smallest_partial_number = None

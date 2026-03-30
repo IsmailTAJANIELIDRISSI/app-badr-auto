@@ -3019,7 +3019,8 @@ def get_dum_lots_for_partial(partial_data, partial_config=None):
     smallest_partial_weight = 0
     
     if partial_config:
-        is_exception = partial_config.get('partial_type') == 'exception'
+        partials_count = len(partial_config.get('partials', []))
+        is_exception = partial_config.get('partial_type') == 'exception' and partials_count in (2, 3)
         smallest_partial_number = partial_config.get('smallest_partial_number')
         smallest_partial_positions = partial_config.get('smallest_partial_positions', 0)
         
@@ -3164,7 +3165,8 @@ def get_dum_preapurement_lots(dum_number, partial_config, validated_lta_referenc
     dum_str = str(dum_number)
     
     # Check for exception case
-    is_exception = partial_config.get('partial_type') == 'exception'
+    partials_count = len(partial_config.get('partials', []))
+    is_exception = partial_config.get('partial_type') == 'exception' and partials_count in (2, 3)
     smallest_partial_num = partial_config.get('smallest_partial_number')
     airport_reference = partial_config.get('smallest_partial_airport_reference')
     smallest_partial_positions = partial_config.get('smallest_partial_positions', 0)
@@ -4707,6 +4709,7 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
         for dum_index, dum_data in enumerate(dum_lots_data, start=1):
             lot_creation_successful = False
             retry_attempt = 0
+            reuse_current_lot_form = False
             
             while not lot_creation_successful and retry_attempt < MAX_LOT_RETRIES:
                 if retry_attempt > 0:
@@ -6557,6 +6560,7 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
         for dum_index, dum_data in enumerate(dum_lots_data, start=1):
             lot_creation_successful = False
             retry_attempt = 0
+            reuse_current_lot_form = False
             
             while not lot_creation_successful and retry_attempt < MAX_LOT_RETRIES:
                 if retry_attempt > 0:
@@ -11295,6 +11299,11 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
             
             # Check if exception case
             partial_type = partial_config.get('partial_type', 'normal')
+            partials_count = len(partial_config.get('partials', []))
+            # Guardrail: exception workflow is supported for 2 or 3 partials.
+            if partial_type == 'exception' and partials_count not in (2, 3):
+                print(f"\n   ℹ️  Exception ignorée: {partials_count} partiels détectés (mode normal forcé)")
+                partial_type = 'normal'
             smallest_partial_num = partial_config.get('smallest_partial_number')
             
             if partial_type == 'exception':
