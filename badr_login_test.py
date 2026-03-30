@@ -3171,8 +3171,12 @@ def get_dum_preapurement_lots(dum_number, partial_config, validated_lta_referenc
     airport_reference = partial_config.get('smallest_partial_airport_reference')
     smallest_partial_positions = partial_config.get('smallest_partial_positions', 0)
     
-    # Exception case: DUM 1 has 2 lots
-    # Exception case: find which DUM is the split DUM dynamically (was hardcoded to DUM 1)
+    # Exception case: DUM may have multiple Préapurement lots (depends on how the split spans partials).
+    # We treat:
+    # - Lot 1: airport/smallest-partial DS MEAD
+    # - Remaining lots: depotage lots created from `partial_config['split_dums'][dum_str]['splits']`
+    #   (excluding the smallest partial piece).
+    # This keeps references consistent with Phase 1 lot creation.
     if is_exception:
         # The split DUM in exception case is whichever DUM key appears in split_dums
         exception_split_dums = list(partial_config.get('split_dums', {}).keys())
@@ -3180,8 +3184,8 @@ def get_dum_preapurement_lots(dum_number, partial_config, validated_lta_referenc
         
         if exception_split_dum_str and dum_str == exception_split_dum_str:
             lots = []
-            
-            # Lot 1: Smallest partial (already cleared at airport) - DS MEAD type
+
+            # Lot 1: smallest partial (airport DS MEAD)
             smallest_partial = find_partial_by_number(partial_config, smallest_partial_num)
             if smallest_partial:
                 lots.append({
@@ -3189,17 +3193,22 @@ def get_dum_preapurement_lots(dum_number, partial_config, validated_lta_referenc
                     'ds_serie': smallest_partial['ds_serie'],
                     'ds_cle': smallest_partial['ds_cle'],
                     'split_id': None,
-                    'weight': smallest_partial['weight'],
+                    'weight': smallest_partial.get('weight', 0),
                     'positions': smallest_partial_positions,
                     'is_exception_smallest': True  # Flag for special handling (DS MEAD type)
                 })
-            
-            # Lot 2: Largest partial split piece (from état de dépotage) - Depotage type
-            # Find which partial the split DUM belongs to (should be the largest one)
-            for partial in partial_config['partials']:
-                if partial['partial_number'] != smallest_partial_num:
-                    for dum in partial['dums']:
-                        if str(dum['dum_number']) == exception_split_dum_str:
+
+            # Remaining lots: depotage lots from split pieces of this DUM
+            split_info = partial_config.get('split_dums', {}).get(dum_str, {})
+            split_pieces = split_info.get('splits', []) if isinstance(split_info, dict) else []
+
+            # If no split metadata is found, fall back to legacy 2-lot behavior.
+            if not split_pieces:
+                for partial in partial_config.get('partials', []):
+                    if partial.get('partial_number') == smallest_partial_num:
+                        continue
+                    for dum in partial.get('dums', []):
+                        if str(dum.get('dum_number')) == exception_split_dum_str:
                             signed_series = partial.get('signed_series', '')
                             if signed_series and ' ' in signed_series:
                                 parts = signed_series.split()
@@ -3208,18 +3217,56 @@ def get_dum_preapurement_lots(dum_number, partial_config, validated_lta_referenc
                             else:
                                 ds_serie = partial['ds_serie']
                                 ds_cle = partial['ds_cle']
-                            
+
                             lots.append({
-                                'reference': f"{airport_reference}/{exception_split_dum_str}",  # Airport ref + /N
+                                'reference': f"{airport_reference}/{exception_split_dum_str}",  # airport ref + /DUM
                                 'ds_serie': ds_serie,
                                 'ds_cle': ds_cle,
                                 'split_id': None,
-                                'weight': dum['weight'],
-                                'positions': dum['positions'],
-                                'is_exception_largest': True  # Flag for special handling
+                                'weight': dum.get('weight', 0),
+                                'positions': dum.get('positions', 0),
+                                'is_exception_largest': True
                             })
                             break
-            
+                    if len(lots) > 1:
+                        break
+                return lots
+
+            for split in split_pieces:
+                split_partial_num = split.get('partial')
+                # Exclude smallest-partial piece: it is represented by Lot 1
+                if split_partial_num == smallest_partial_num:
+                    continue
+
+                partial_data = find_partial_by_number(partial_config, split_partial_num)
+                if not partial_data:
+                    continue
+
+                signed_series = partial_data.get('signed_series', '')
+                if signed_series and ' ' in signed_series:
+                    parts = signed_series.split()
+                    ds_serie = parts[0]
+                    ds_cle = parts[1]
+                else:
+                    ds_serie = partial_data['ds_serie']
+                    ds_cle = partial_data['ds_cle']
+
+                split_id = split.get('split_id', '')
+                if split_id:
+                    reference = f"{airport_reference}/{split_id}"
+                else:
+                    # Legacy completion reference
+                    reference = f"{airport_reference}/{dum_str}"
+
+                lots.append({
+                    'reference': reference,
+                    'ds_serie': ds_serie,
+                    'ds_cle': ds_cle,
+                    'split_id': split_id if split_id else None,
+                    'weight': split.get('weight', 0),
+                    'positions': split.get('positions', 0)
+                })
+
             return lots
     
     # Check if DUM is split
