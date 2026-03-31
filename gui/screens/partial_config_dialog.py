@@ -9,6 +9,7 @@ from tkinter import ttk, messagebox
 import os
 import glob
 import logging
+import re
 from openpyxl import load_workbook
 from gui.utils.file_utils import get_lta_partial_info, save_lta_partial_config
 from gui.utils.validators import validate_ds_series, normalize_ds_series, validate_location
@@ -16,6 +17,15 @@ from gui.utils.validators import validate_ds_series, normalize_ds_series, valida
 logger = logging.getLogger(__name__)
 
 # Same predefined locations as preparation.py
+def _looks_like_weight_ds_fields_swapped(weight_str, ds_str):
+    """Detect common mistake: DS série (e.g. '3129 X') in Poids and weight in DS Série."""
+    w = (weight_str or "").strip()
+    d = (ds_str or "").strip()
+    if not w or not d:
+        return False
+    return bool(re.match(r"^\d+\s+[A-Za-z]$", w) and re.match(r"^\d+(\.\d+)?$", d))
+
+
 PARTIAL_LOCATIONS = [
     "RYAD K.KHALED",
     "ISTAMBOUL ATATUR",
@@ -443,15 +453,48 @@ class PartialConfigDialog:
                     dums_text.configure(state='disabled')
                 return
             
-            # Collect partial weights
+            # Collect partial weights (never silently treat invalid input as 0 — that orphans DUMs)
             partial_weights = []
+            parse_ok = []
             for form_data in self.partial_forms:
+                raw_w = form_data['weight_var'].get().strip()
                 try:
-                    weight = float(form_data['weight_var'].get().strip())
-                    partial_weights.append(weight)
+                    partial_weights.append(float(raw_w))
+                    parse_ok.append(True)
                 except ValueError:
-                    partial_weights.append(0)
-            
+                    partial_weights.append(0.0)
+                    parse_ok.append(False)
+
+            if not all(parse_ok):
+                for idx, form_data in enumerate(self.partial_forms):
+                    form_data['positions_var'].set("—")
+                    dums_text = form_data['dums_text']
+                    dums_text.configure(state='normal')
+                    dums_text.delete('1.0', tk.END)
+                    if not parse_ok[idx]:
+                        msg = (
+                            "⚠️ Poids invalide — entrez uniquement le poids en kg (nombre).\n"
+                            "Ex: 304.9\n\n"
+                        )
+                        if _looks_like_weight_ds_fields_swapped(
+                            form_data['weight_var'].get(),
+                            form_data['ds_serie_var'].get(),
+                        ):
+                            msg += (
+                                "Les champs « Poids (kg) » et « DS Série » semblent inversés.\n"
+                                "Mettez le nombre en kg dans Poids et la série (ex: 3129 X) dans DS Série."
+                            )
+                        else:
+                            msg += "Vérifiez qu’aucun texte (série DS, lettres) n’est dans le champ Poids."
+                        dums_text.insert(tk.END, msg)
+                    else:
+                        dums_text.insert(
+                            tk.END,
+                            "Saisissez un poids valide pour chaque partiel pour calculer la distribution.",
+                        )
+                    dums_text.configure(state='disabled')
+                return
+
             # Detect exception case: smallest partial < max DUM weight
             # (means partial is a leftover piece of a single DUM, not made of whole DUMs)
             max_dum_weight = max(dum['weight'] for dum in self.lta_data['dums'])
@@ -493,6 +536,9 @@ class PartialConfigDialog:
             # Calculate distribution
             distribution = self._calculate_dum_distribution(partial_weights, smallest_partial_idx, smallest_partial_positions)
             
+            sum_partial_weights = sum(partial_weights)
+            tw_lta = self.lta_data['total_weight']
+            
             # Update each partial's display
             for idx, form_data in enumerate(self.partial_forms):
                 if idx < len(distribution):
@@ -507,7 +553,21 @@ class PartialConfigDialog:
                     dums_text.delete('1.0', tk.END)
                     
                     if not partial_dist['dums']:
-                        dums_text.insert(tk.END, "Aucun DUM assigné")
+                        if partial_weights[idx] <= 0:
+                            dums_text.insert(tk.END, "Aucun DUM assigné (poids partiel = 0)")
+                        else:
+                            dums_text.insert(tk.END, "Aucun DUM assigné")
+                            if abs(sum_partial_weights - tw_lta) > max(0.5, tw_lta * 0.01):
+                                dums_text.insert(
+                                    tk.END,
+                                    f"\n\n⚠️ Somme des partiels ({sum_partial_weights:.1f} kg) ≠ total LTA ({tw_lta:.1f} kg). "
+                                    "Les poids des N partiels doivent totaliser le poids LTA pour répartir tous les DUMs.",
+                                )
+                            else:
+                                dums_text.insert(
+                                    tk.END,
+                                    "\n\n⚠️ Plus de masse DUM disponible pour ce partiel — vérifiez les partiels précédents ou la cohérence des données.",
+                                )
                     else:
                         for dum_info in partial_dist['dums']:
                             dum_num = dum_info['dum_number']
@@ -969,9 +1029,12 @@ class PartialConfigDialog:
                     weight_float = float(weight)
                     total_weight_check += weight_float
                 except ValueError:
+                    extra = ""
+                    if _looks_like_weight_ds_fields_swapped(weight, ds_serie_full):
+                        extra = "\n\nLes champs « Poids (kg) » et « DS Série » semblent inversés."
                     messagebox.showerror(
                         "Validation",
-                        f"Partiel {partial_num}: Poids invalide"
+                        f"Partiel {partial_num}: Poids invalide (nombre en kg uniquement).{extra}"
                     )
                     return
                 
