@@ -3143,7 +3143,23 @@ def main():
     # Filter directories to only process those containing "LTA"
     all_directories = [d for d in os.listdir(folder_path) if os.path.isdir(os.path.join(folder_path, d))]
     sub_directories = [d for d in all_directories if 'lta' in d.lower()]
+    # Process in ordinal order (8eme, 9eme, 10eme) — not os.listdir order (often 9 before 8)
+    try:
+        from gui.utils.file_utils import sort_lta_folder_names
+        sub_directories = sort_lta_folder_names(sub_directories)
+    except ImportError:
+        import re
+        def _lta_sort_key(n):
+            s = (n or "").strip()
+            m = re.match(r"^(\d+)\s*(?:er|ère|ere|eme|ème|e\s*me)\b", s, re.IGNORECASE)
+            if m:
+                return int(m.group(1))
+            m = re.search(r"(\d+)", s)
+            return int(m.group(1)) if m else 9999
+        sub_directories = sorted(sub_directories, key=_lta_sort_key)
     
+    # Visible confirmation (ordinal order: 8eme → 9eme → 10eme, not listdir order)
+    print(f"\n📋 Ordre de traitement LTA ({len(sub_directories)}): {', '.join(sub_directories)}\n")
     
     for directory in sub_directories:
         dir_path = os.path.join(folder_path, directory)
