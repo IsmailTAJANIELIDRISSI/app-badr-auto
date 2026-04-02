@@ -21,6 +21,14 @@ import tempfile
 from PyPDF2 import PdfReader, PdfWriter
 import difflib
 # Use ONLY the new google.genai API (old google.generativeai is deprecated)
+# Default: Gemini 3.1 Flash Lite Preview (replaces discontinued gemini-2.0-flash / flash-lite as of 2026-06-01).
+# Override with env GEMINI_MODEL if needed.
+DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
+GEMINI_MODEL_FALLBACKS = (
+    "gemini-3.1-flash-lite-preview",
+    "gemini-2.5-flash",
+    "gemini-1.5-flash",
+)
 GENAI_CLIENT = None
 GENAI_MODEL = None
 USE_NEW_API = False
@@ -174,8 +182,7 @@ def setup_gemini_api():
             # The new API doesn't require getting a model object first
             # Just create the client and use client.models.generate_content(model='name', contents='...')
             GENAI_CLIENT = genai_new.Client(api_key=api_key)
-            # Set default model name (no need to get model object)
-            GENAI_MODEL = 'gemini-2.0-flash'  # or 'gemini-2.5-flash' for latest
+            GENAI_MODEL = (os.getenv("GEMINI_MODEL") or "").strip() or DEFAULT_GEMINI_MODEL
             logger.info(f"Gemini API (new google.genai) configured successfully with model: {GENAI_MODEL}")
             return True
         else:
@@ -186,6 +193,37 @@ def setup_gemini_api():
     except Exception as e:
         logger.error(f"Error configuring Gemini API: {e}")
         return False
+
+
+def _gemini_response_text(response):
+    """
+    Extract user-facing text from a generate_content response.
+    Gemini 3 may return multiple parts (e.g. thought vs answer); join non-thought text parts.
+    For single-turn calls the SDK handles thought signatures; no manual circulation needed.
+    """
+    if response is None:
+        return None
+    if hasattr(response, "text") and response.text:
+        return response.text
+    try:
+        parts_out = []
+        cands = getattr(response, "candidates", None) or []
+        if not cands:
+            return str(response)
+        content = getattr(cands[0], "content", None)
+        part_list = getattr(content, "parts", None) if content else None
+        if not part_list:
+            return str(response)
+        for part in part_list:
+            if getattr(part, "thought", False):
+                continue
+            t = getattr(part, "text", None)
+            if t:
+                parts_out.append(t)
+        return "\n".join(parts_out) if parts_out else str(response)
+    except Exception:
+        return str(response)
+
 
 def verify_shipper_with_gemini(extracted_name, database_companies):
     """Use Gemini AI to select the best company name from candidates and database"""
@@ -246,8 +284,13 @@ CRITICAL INSTRUCTIONS:
         # Use appropriate API based on what's available
         if USE_NEW_API and GENAI_CLIENT:
             # New API (google.genai): use client.models.generate_content()
-            # Model names to try in order of preference
-            model_names = ['gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-1.5-flash']
+            # Prefer configured model, then known-good fallbacks (no Gemini 2.0 — discontinued June 2026).
+            seen = set()
+            model_names = []
+            for m in (GENAI_MODEL,) + GEMINI_MODEL_FALLBACKS:
+                if m and m not in seen:
+                    seen.add(m)
+                    model_names.append(m)
             response = None
             last_error = None
             
@@ -267,27 +310,7 @@ CRITICAL INSTRUCTIONS:
             if response is None:
                 raise Exception(f"Failed to generate content with new API: {last_error}")
             
-            # New API response format - try multiple ways to extract text
-            response_text_raw = None
-            if hasattr(response, 'text'):
-                response_text_raw = response.text
-            elif hasattr(response, 'candidates') and response.candidates:
-                # Extract text from candidates
-                candidate = response.candidates[0]
-                if hasattr(candidate, 'content'):
-                    if hasattr(candidate.content, 'parts') and candidate.content.parts:
-                        response_text_raw = candidate.content.parts[0].text
-                    else:
-                        response_text_raw = str(candidate.content)
-                else:
-                    response_text_raw = str(candidate)
-            elif hasattr(response, 'content'):
-                if hasattr(response.content, 'parts') and response.content.parts:
-                    response_text_raw = response.content.parts[0].text
-                else:
-                    response_text_raw = str(response.content)
-            else:
-                response_text_raw = str(response)
+            response_text_raw = _gemini_response_text(response)
         else:
             # New API not available - cannot proceed
             raise Exception("Google Gemini API not available. Please install: pip install google-genai")

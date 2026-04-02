@@ -17,8 +17,8 @@ Pillow>=10.0.0
 
 # AI Integration (Gemini - NEW API)
 # OLD: google-generativeai is DEPRECATED as of 2026
-# NEW: Use google-genai instead
-google-genai>=0.1.0
+# NEW: Use google-genai (Gemini 3.x / 2.5 clients; default model: gemini-3.1-flash-lite-preview)
+google-genai>=1.0.0
 
 # Fuzzy Matching
 rapidfuzz>=3.5.0
