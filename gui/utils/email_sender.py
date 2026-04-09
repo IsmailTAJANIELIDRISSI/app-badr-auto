@@ -6,6 +6,7 @@ Sends generated_excel files via email when DUMs are successfully processed
 
 import smtplib
 import os
+import glob
 import logging
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -45,16 +46,18 @@ def save_email_config(config):
         return False
 
 
-def send_excel_via_email(excel_file_path, lta_name, dum_number=None, recipient_email=None):
+def send_excel_via_email(excel_file_path, lta_name, dum_number=None, recipient_email=None, lta_folder_path=None):
     """
-    Send generated_excel file via email
-    
+    Send generated_excel file via email, optionally with the MAWB PDF attached.
+
     Args:
         excel_file_path: Path to the generated_excel*.xlsx file
         lta_name: Name of the LTA folder
         dum_number: Optional DUM number (if sending after single DUM)
         recipient_email: Optional recipient email (uses config if not provided)
-    
+        lta_folder_path: Optional path to the parent folder containing the LTA subfolder.
+                         Used to locate the MAWB PDF and to read error series from Excel.
+
     Returns:
         bool: True if email sent successfully, False otherwise
     """
@@ -111,7 +114,25 @@ def send_excel_via_email(excel_file_path, lta_name, dum_number=None, recipient_e
         if not os.path.exists(excel_file_path):
             logger.error(f"Excel file not found: {excel_file_path}")
             return False
-        
+
+        # --- Detect ERROR series in the Excel ---
+        error_series = _get_error_series_from_excel(excel_file_path)
+        has_errors = len(error_series) > 0
+
+        # --- Resolve MAWB from PDF filename for subject ---
+        mawb_suffix = ""
+        if lta_folder_path:
+            pdf_path_for_subject = _find_mawb_pdf(lta_folder_path, lta_name)
+            if pdf_path_for_subject:
+                pdf_basename = os.path.basename(pdf_path_for_subject)  # e.g. "3eme LTA - 235-97495543.pdf"
+                # Strip lta_name prefix and .pdf suffix to get just the MAWB
+                mawb_part = pdf_basename
+                if mawb_part.startswith(lta_name + " - "):
+                    mawb_part = mawb_part[len(lta_name) + 3:]  # remove "<lta_name> - "
+                if mawb_part.lower().endswith(".pdf"):
+                    mawb_part = mawb_part[:-4]
+                mawb_suffix = f" - {mawb_part}"
+
         # Create email message
         msg = MIMEMultipart()
         msg['From'] = sender_email
@@ -122,12 +143,15 @@ def send_excel_via_email(excel_file_path, lta_name, dum_number=None, recipient_e
         if 'Subject' in msg:
             del msg['Subject']
         
-        # Set subject only once (RFC 5322 compliance)
-        # Remove emojis from subject to avoid encoding issues with Gmail
+        # Build subject — includes MAWB and flags errors when present
         if dum_number:
-            msg['Subject'] = f"DUM {dum_number} Traite - {lta_name}"
+            subject = f"DUM {dum_number} Traite - {lta_name}{mawb_suffix}"
         else:
-            msg['Subject'] = f"LTA Complet - {lta_name}"
+            if has_errors:
+                subject = f"[ERREUR DUM] LTA Complet - {lta_name}{mawb_suffix}"
+            else:
+                subject = f"LTA Complet - {lta_name}{mawb_suffix}"
+        msg['Subject'] = subject
         
         # Email body
         body = f"""
@@ -138,7 +162,13 @@ Le fichier Excel généré pour le LTA "{lta_name}" est prêt.
         if dum_number:
             body += f"\nDUM {dum_number} a été traité avec succès.\n"
         else:
-            body += f"\nTous les DUMs de ce LTA ont été traités avec succès.\n"
+            body += f"\nTous les DUMs de ce LTA ont été traités.\n"
+
+        if has_errors:
+            body += f"\n\n⚠️  ATTENTION — DUMs en erreur ({len(error_series)}):\n"
+            for s in error_series:
+                body += f"   • {s}\n"
+            body += "\nCes DUMs nécessitent un traitement manuel.\n"
         
         body += f"""
 Fichier joint: {os.path.basename(excel_file_path)}
@@ -154,13 +184,34 @@ TAJANI EL IDRISSI Ismail
         with open(excel_file_path, 'rb') as attachment:
             part = MIMEBase('application', 'octet-stream')
             part.set_payload(attachment.read())
-        
         encoders.encode_base64(part)
         part.add_header(
             'Content-Disposition',
             f'attachment; filename= {os.path.basename(excel_file_path)}'
         )
         msg.attach(part)
+
+        # --- Attach MAWB PDF if available ---
+        if lta_folder_path:
+            # Reuse the path already resolved for the subject when possible
+            pdf_path = pdf_path_for_subject if mawb_suffix else _find_mawb_pdf(lta_folder_path, lta_name)
+            if pdf_path and os.path.exists(pdf_path):
+                try:
+                    with open(pdf_path, 'rb') as pdf_file:
+                        pdf_part = MIMEBase('application', 'octet-stream')
+                        pdf_part.set_payload(pdf_file.read())
+                    encoders.encode_base64(pdf_part)
+                    pdf_part.add_header(
+                        'Content-Disposition',
+                        f'attachment; filename= {os.path.basename(pdf_path)}'
+                    )
+                    msg.attach(pdf_part)
+                    logger.info(f"Attached MAWB PDF: {pdf_path}")
+                    print(f"   📎 PDF joint: {os.path.basename(pdf_path)}")
+                except Exception as pdf_error:
+                    logger.warning(f"Could not attach PDF: {pdf_error}")
+            else:
+                logger.info(f"MAWB PDF not found for {lta_name} — sending without PDF")
         
         # Send email
         recipients_str = ', '.join(recipient_email) if isinstance(recipient_email, list) else recipient_email
@@ -190,8 +241,75 @@ def send_excel_after_dum_success(excel_file_path, lta_name, dum_number):
     return send_excel_via_email(excel_file_path, lta_name, dum_number=dum_number)
 
 
-def send_excel_after_lta_completion(excel_file_path, lta_name):
+def _get_error_series_from_excel(excel_file_path):
     """
-    Convenience function to send Excel after LTA completion
+    Read the Summary sheet and return a list of DUM serie values that contain an error.
+    Series are in column C at rows 12, 19, 26, 33, … (pattern: 12 + (n-1)*7).
+    A value is considered an error if the string contains 'error' (case-insensitive)
+    or is exactly 'error'.
+
+    Returns:
+        List[str]: e.g. ["0159942R (error)", "error"]  — empty list if none or on any failure.
     """
-    return send_excel_via_email(excel_file_path, lta_name)
+    try:
+        from openpyxl import load_workbook
+        wb = load_workbook(excel_file_path, data_only=True, read_only=True)
+        if 'Summary' not in wb.sheetnames:
+            wb.close()
+            return []
+        ws = wb['Summary']
+        errors = []
+        dum_number = 1
+        while True:
+            row = 12 + (dum_number - 1) * 7
+            cell = ws[f"C{row}"]
+            value = cell.value
+            if value is None:
+                break  # No more DUMs
+            value_str = str(value).strip()
+            if 'error' in value_str.lower():
+                errors.append(value_str)
+            dum_number += 1
+            if dum_number > 20:  # Safety cap
+                break
+        wb.close()
+        return errors
+    except Exception as e:
+        logger.warning(f"Could not read error series from Excel: {e}")
+        return []
+
+
+def _find_mawb_pdf(lta_folder_path, lta_name):
+    """
+    Locate the MAWB PDF file inside the LTA subfolder.
+    Pattern: <lta_name>/<lta_name> - <MAWB>.pdf
+    Falls back to any .pdf in the subfolder if naming doesn't match.
+
+    Returns:
+        str | None: absolute path to PDF, or None if not found.
+    """
+    try:
+        lta_subfolder = os.path.join(lta_folder_path, lta_name)
+        if not os.path.isdir(lta_subfolder):
+            return None
+        # Try the standard naming pattern first
+        pdfs = glob.glob(os.path.join(lta_subfolder, f"{lta_name} - *.pdf"))
+        if not pdfs:
+            # Fallback: any PDF in the subfolder
+            pdfs = glob.glob(os.path.join(lta_subfolder, "*.pdf"))
+        return pdfs[0] if pdfs else None
+    except Exception as e:
+        logger.warning(f"Could not locate MAWB PDF for {lta_name}: {e}")
+        return None
+
+
+def send_excel_after_lta_completion(excel_file_path, lta_name, lta_folder_path=None):
+    """
+    Send Excel (and optionally the MAWB PDF) after LTA completion.
+    Subject will flag ERROR if any DUM serie contains an error.
+    """
+    return send_excel_via_email(
+        excel_file_path,
+        lta_name,
+        lta_folder_path=lta_folder_path,
+    )

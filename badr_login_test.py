@@ -51,6 +51,9 @@ EDGE_PATH = os.getenv('EDGE_PATH', r"C:\Program Files (x86)\Microsoft\Edge\Appli
 DRIVER_PATH = os.getenv('DRIVER_PATH', r"C:\Users\pc\Downloads\edgedriver_win64\msedgedriver.exe")
 BADR_PASSWORD = os.getenv('BADR_PASSWORD', '')
 
+# Returned by create_etat_depotage() on E2800124 / weight mismatch — caller must NOT run a full ED restart
+ED_CREATE_BUSINESS_ERROR = object()
+
 # Cache for driver path to avoid repeated downloads
 _CACHED_DRIVER_PATH = None
 
@@ -3342,7 +3345,9 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
         shipper_data: Dict containing serie, cle, loading_location
     
     Returns:
-        bool: True if successful, False otherwise
+        True if successful
+        False if failed and caller may retry full ED creation (transient / lot errors)
+        ED_CREATE_BUSINESS_ERROR if validation failed with a business rule (e.g. E2800124 poids) — do NOT retry ED
     """
     try:
         wait = WebDriverWait(driver, 15)
@@ -5779,7 +5784,7 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                     
                     driver.switch_to.default_content()
                     return_to_home_after_error(driver)
-                    return False
+                    return ED_CREATE_BUSINESS_ERROR
                 
                 else:
                     # Erreur générique - LOG STANDARD
@@ -10704,6 +10709,7 @@ def process_lta_folder(driver, lta_folder_path, lta_name):
             
             MAX_ED_RESTARTS = 2
             ed_success = False
+            ed_result = None
             for ed_attempt in range(MAX_ED_RESTARTS):
                 if ed_attempt > 0:
                     print(f"\n🔄 RESTART COMPLET ED - Tentative {ed_attempt + 1}/{MAX_ED_RESTARTS}")
@@ -10714,14 +10720,21 @@ def process_lta_folder(driver, lta_folder_path, lta_name):
                         pass
                     return_to_home_after_error(driver)
                     time.sleep(3)
-                if create_etat_depotage(driver, lta_folder_path, shipper_data):
+                ed_result = create_etat_depotage(driver, lta_folder_path, shipper_data)
+                if ed_result is True:
                     ed_success = True
                     break
-                else:
-                    print(f"   ❌ ED tentative {ed_attempt + 1}/{MAX_ED_RESTARTS} échouée")
+                if ed_result is ED_CREATE_BUSINESS_ERROR:
+                    print("   ⚠️  Échec validation ED (erreur métier, ex. poids / E2800124) — pas de nouvelle tentative ED.")
+                    print("      Correction manuelle requise. Passage au LTA suivant.")
+                    break
+                print(f"   ❌ ED tentative {ed_attempt + 1}/{MAX_ED_RESTARTS} échouée")
             
             if not ed_success:
-                print("❌ Échec création Etat de Dépotage après tous les restarts - Arrêt du traitement")
+                if ed_result is ED_CREATE_BUSINESS_ERROR:
+                    print("❌ Etat de Dépotage — validation métier échouée (voir fichier error-weight-mismatch ou log).")
+                else:
+                    print("❌ Échec création Etat de Dépotage après tous les restarts - Arrêt du traitement")
                 return 0
             
             print("\n✅ Etat de Dépotage créé avec succès - Passage aux DUMs")
@@ -10837,7 +10850,7 @@ def process_lta_folder(driver, lta_folder_path, lta_name):
                 if generated_excel_files:
                     # Utiliser le premier fichier trouvé (normalement il n'y en a qu'un)
                     excel_file = generated_excel_files[0]
-                    send_excel_after_lta_completion(excel_file, lta_name)
+                    send_excel_after_lta_completion(excel_file, lta_name, lta_folder_path=os.path.dirname(lta_folder_path))
                     print(f"   📧 Email envoyé avec le fichier Excel du LTA '{lta_name}'")
             except Exception as email_error:
                 # Ne pas bloquer le processus si l'email échoue
@@ -11451,9 +11464,10 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
         print(f"   - Lieu: {shipper_data['loading_location']}")
         print("\n🔄 Création de l'Etat de Dépotage...")
         
-        # Create ED - with outer restart retry in case a lot fails mid-way
+        # Create ED - with outer restart retry in case a lot fails mid-way (not for E2800124 / business errors)
         MAX_ED_RESTARTS = 2
         ed_success = False
+        ed_result = None
         for ed_attempt in range(MAX_ED_RESTARTS):
             if ed_attempt > 0:
                 print(f"\n🔄 RESTART COMPLET ED - Tentative {ed_attempt + 1}/{MAX_ED_RESTARTS}")
@@ -11464,14 +11478,21 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
                     pass
                 return_to_home_after_error(driver)
                 time.sleep(3)
-            if create_etat_depotage(driver, lta_folder_path, shipper_data):
+            ed_result = create_etat_depotage(driver, lta_folder_path, shipper_data)
+            if ed_result is True:
                 ed_success = True
                 break
-            else:
-                print(f"   ❌ ED tentative {ed_attempt + 1}/{MAX_ED_RESTARTS} échouée")
+            if ed_result is ED_CREATE_BUSINESS_ERROR:
+                print("   ⚠️  Échec validation ED (erreur métier, ex. poids / E2800124) — pas de nouvelle tentative ED.")
+                print("      Correction manuelle requise. Passage au LTA suivant.")
+                break
+            print(f"   ❌ ED tentative {ed_attempt + 1}/{MAX_ED_RESTARTS} échouée")
         
         if not ed_success:
-            print("❌ Échec création Etat de Dépotage après tous les restarts")
+            if ed_result is ED_CREATE_BUSINESS_ERROR:
+                print("❌ Etat de Dépotage — validation métier échouée (voir fichier error-weight-mismatch ou log).")
+            else:
+                print("❌ Échec création Etat de Dépotage après tous les restarts")
             return False
         
         print("\n✅ Etat de Dépotage créé avec succès!")
@@ -11670,7 +11691,7 @@ def process_lta_folder_dum_only(driver, lta_folder_path, lta_name):
                 if generated_excel_files:
                     # Utiliser le premier fichier trouvé (normalement il n'y en a qu'un)
                     excel_file = generated_excel_files[0]
-                    send_excel_after_lta_completion(excel_file, lta_name)
+                    send_excel_after_lta_completion(excel_file, lta_name, lta_folder_path=os.path.dirname(lta_folder_path))
                     print(f"   📧 Email envoyé avec le fichier Excel du LTA '{lta_name}'")
             except Exception as email_error:
                 # Ne pas bloquer le processus si l'email échoue

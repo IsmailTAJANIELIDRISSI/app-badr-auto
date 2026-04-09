@@ -7,6 +7,8 @@ Handles reading/writing LTA files and shipper files
 import os
 import glob
 import logging
+import re
+import unicodedata
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +18,7 @@ def _extract_lta_number(folder_name):
     Examples:
         "1er LTA" -> 1
         "2eme LTA" -> 2
+        "8eme LTA" / "8ème LTA" -> 8
         "10eme LTA" -> 10
         "12eme LTA" -> 12
         
@@ -25,12 +28,56 @@ def _extract_lta_number(folder_name):
     Returns:
         int: The numeric value, or 9999 if not found (for sorting at end)
     """
-    import re
-    # Match patterns like "1er", "2eme", "10eme", "12eme", etc.
-    match = re.search(r'(\d+)', folder_name)
-    if match:
-        return int(match.group(1))
+    s = (folder_name or "").strip()
+    # Prefer leading French ordinal (avoids "2024" in "Folder 2024 8eme" stealing sort key)
+    m = re.match(
+        r"^(\d+)\s*(?:er|ère|ere|eme|ème|e\s*me)\b",
+        s,
+        re.IGNORECASE,
+    )
+    if m:
+        return int(m.group(1))
+    m = re.search(r"(\d+)", s)
+    if m:
+        return int(m.group(1))
     return 9999  # Put unmatched folders at the end
+
+
+def sort_lta_folder_names(names):
+    """Sort LTA folder names by ordinal (1er, 8eme, 9eme, 10eme, …), not lexicographic."""
+    return sorted(names, key=_extract_lta_number)
+
+
+def _folder_name_ascii_fold(name):
+    """Strip accents for matching filenames that use ASCII (8eme_LTA vs 8ème LTA)."""
+    if not name:
+        return name
+    try:
+        nfkd = unicodedata.normalize("NFD", name)
+        return "".join(c for c in nfkd if unicodedata.category(c) != "Mn")
+    except Exception:
+        return name
+
+
+def glob_shipper_files_for_lta(folder_path, folder_name):
+    """
+    Find shipper txt files for an LTA folder. Tries exact name and accent-folded variant
+    so '8ème LTA' still matches '8eme_LTA_shipper_name.txt'.
+    """
+    patterns = []
+    primary = folder_name.replace(" ", "_")
+    patterns.append(f"{primary}_*.txt")
+    folded = _folder_name_ascii_fold(folder_name)
+    if folded != folder_name:
+        patterns.append(f"{folded.replace(' ', '_')}_*.txt")
+    seen = set()
+    out = []
+    for pat in patterns:
+        for f in glob.glob(os.path.join(folder_path, pat)):
+            if f not in seen:
+                seen.add(f)
+                out.append(f)
+    return out
 
 def clean_lta_reference(reference):
     """
@@ -73,9 +120,8 @@ def detect_ltas(folder_path):
         for folder_name in lta_folders:
             folder_full_path = os.path.join(folder_path, folder_name)
             
-            # Look for shipper file (in parent directory)
-            shipper_pattern = f"{folder_name.replace(' ', '_')}_*.txt"
-            shipper_files = glob.glob(os.path.join(folder_path, shipper_pattern))
+            # Look for shipper file (in parent directory); tolerate è/e mismatch in folder name vs filename
+            shipper_files = glob_shipper_files_for_lta(folder_path, folder_name)
             
             # Look for LTA file (in parent directory with folder name)
             # Try different patterns
@@ -437,8 +483,7 @@ def update_lta_shipper_name(lta_folder_path, folder_name, shipper_name):
         success1 = write_lta_file_line(lta_folder_path, folder_name, 6, shipper_name)
         
         # Update line 1 of shipper file (in same parent directory)
-        shipper_pattern = folder_name.replace(' ', '_') + "_*.txt"
-        shipper_files = glob.glob(os.path.join(lta_folder_path, shipper_pattern))
+        shipper_files = glob_shipper_files_for_lta(lta_folder_path, folder_name)
         
         success2 = False
         if shipper_files:
