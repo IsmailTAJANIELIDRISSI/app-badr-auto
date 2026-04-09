@@ -740,6 +740,73 @@ def add_lta_separator():
         print(f"   ⚠️  Erreur ajout séparateur: {e}")
 
 
+def _write_excel_cell_atomic(excel_path, cell_position, value, sheet_name='Summary'):
+    """
+    Write a single cell value to an xlsx file using an atomic temp-file pattern.
+
+    Steps:
+      1. If the original is corrupt (BadZipFile) and a .bak exists → restore from .bak
+      2. Backup the (now valid) original to .bak
+      3. Copy original → .tmp; open .tmp; write cell; save .tmp
+      4. os.replace(.tmp → original)  — atomic on all major FSes
+      5. Delete .bak on success
+
+    This prevents corruption: if we crash during step 3, the original is untouched.
+    The .bak is preserved so the next call can auto-recover.
+    """
+    import zipfile
+
+    bak_path = excel_path + ".bak"
+    tmp_path = excel_path + ".tmp"
+
+    # --- Step 1: detect corruption and restore from backup if needed ---
+    def _is_valid_xlsx(path):
+        try:
+            with zipfile.ZipFile(path, 'r') as z:
+                z.read('[Content_Types].xml')
+            return True
+        except Exception:
+            return False
+
+    if not _is_valid_xlsx(excel_path):
+        if os.path.exists(bak_path) and _is_valid_xlsx(bak_path):
+            print(f"      ⚠️  Original corrompu — restauration automatique depuis sauvegarde...")
+            shutil.copy2(bak_path, excel_path)
+            print(f"      ✓ Restauré depuis {os.path.basename(bak_path)}")
+        else:
+            raise Exception(
+                "Fichier Excel corrompu et aucune sauvegarde disponible. "
+                "Supprimez ou remplacez manuellement le fichier generated_excel."
+            )
+
+    # --- Step 2: backup the valid original ---
+    shutil.copy2(excel_path, bak_path)
+
+    # --- Step 3: write to temp copy ---
+    shutil.copy2(excel_path, tmp_path)
+    wb = None
+    try:
+        wb = load_workbook(tmp_path, data_only=False)
+        ws = wb[sheet_name]
+        ws[cell_position] = value
+        wb.save(tmp_path)
+    finally:
+        if wb:
+            try:
+                wb.close()
+            except Exception:
+                pass
+
+    # --- Step 4: atomic replace ---
+    os.replace(tmp_path, excel_path)
+
+    # --- Step 5: remove backup on success ---
+    try:
+        os.remove(bak_path)
+    except Exception:
+        pass
+
+
 def save_dum_series_to_excel(lta_folder_path, dum_number, serie):
     """
     Écrit la série du DUM dans le fichier generated_excel à la position appropriée.
@@ -756,101 +823,48 @@ def save_dum_series_to_excel(lta_folder_path, dum_number, serie):
         dum_number: Numéro du DUM (1, 2, 3, 4, etc.)
         serie: Série du DUM (ex: "0139769N")
     """
-    max_retries = 5  # Augmenté de 3 à 5 pour gérer les scans antivirus
-    retry_delay = 3  # Augmenté de 2 à 3 secondes pour laisser le temps aux processus système
-    
+    max_retries = 3
+    retry_delay = 3
+
+    # Locate the generated_excel file once (path doesn't change between retries)
+    generated_excel_path = None
+    for file in os.listdir(lta_folder_path):
+        if file.startswith("generated_excel") and file.endswith(".xlsx"):
+            generated_excel_path = os.path.join(lta_folder_path, file)
+            break
+
+    if not generated_excel_path:
+        print(f"      ⚠️  Fichier generated_excel non trouvé dans {lta_folder_path}")
+        return False
+
+    row_number = 12 + (dum_number - 1) * 7
+    cell_position = f"C{row_number}"
+
+    # Close Excel only once before the first attempt
+    close_excel_file(generated_excel_path)
+    time.sleep(1.5)
+
     for attempt in range(max_retries):
         try:
-            # Trouver le fichier generated_excel dans le dossier LTA
-            generated_excel_path = None
-            for file in os.listdir(lta_folder_path):
-                if file.startswith("generated_excel") and file.endswith(".xlsx"):
-                    generated_excel_path = os.path.join(lta_folder_path, file)
-                    break
-            
-            if not generated_excel_path:
-                print(f"      ⚠️  Fichier generated_excel non trouvé dans {lta_folder_path}")
-                return False
-            
-            # Calculer la position de la cellule: C + (12 + (dum_number - 1) * 7)
-            row_number = 12 + (dum_number - 1) * 7
-            cell_position = f"C{row_number}"
-            
-            # Attendre un peu avant d'ouvrir (éviter conflits)
             if attempt > 0:
                 print(f"      🔄 Tentative {attempt + 1}/{max_retries}...")
                 time.sleep(retry_delay)
-            
-            # Ouvrir le fichier Excel (data_only=False pour pouvoir écrire)
-            wb = None
-            try:
-                # Fermer le fichier Excel s'il est ouvert
-                close_excel_file(generated_excel_path)
-                
-                # Attendre que le fichier soit complètement libéré
-                time.sleep(2.0)  # Augmenté de 1.5 à 2.0 secondes
-                
-                # Vérifier que le fichier existe et est accessible
-                if not os.path.exists(generated_excel_path):
-                    raise Exception(f"Fichier inexistant: {generated_excel_path}")
-                
-                # Vérifier la taille du fichier (doit être > 0)
-                file_size = os.path.getsize(generated_excel_path)
-                if file_size == 0:
-                    raise Exception("Fichier Excel vide (0 bytes)")
-                if file_size < 1024:  # Un fichier .xlsx valide fait au moins 1KB
-                    raise Exception(f"Fichier Excel trop petit ({file_size} bytes)")
-                
-                # Vérifier que le fichier est accessible en lecture ET que c'est un ZIP valide
-                try:
-                    import zipfile
-                    # Tester si le fichier est un ZIP valide et contient les fichiers requis
-                    with zipfile.ZipFile(generated_excel_path, 'r') as zip_test:
-                        # Vérifier que [Content_Types].xml existe
-                        if '[Content_Types].xml' not in zip_test.namelist():
-                            raise Exception("Fichier Excel corrompu: [Content_Types].xml manquant")
-                        # Vérifier qu'on peut lire le contenu
-                        zip_test.read('[Content_Types].xml')
-                except PermissionError:
-                    raise Exception("Fichier Excel verrouillé par un autre processus")
-                except zipfile.BadZipFile:
-                    raise Exception("Fichier Excel corrompu (pas une archive ZIP valide)")
-                
-                # Petit délai supplémentaire après validation
-                time.sleep(1.0)  # Augmenté de 0.5 à 1.0 seconde
-                
-                wb = load_workbook(generated_excel_path, data_only=False)
-                ws = wb['Summary']
-                
-                # Écrire la série dans la cellule
-                ws[cell_position] = serie
-                
-                # Sauvegarder le fichier
-                wb.save(generated_excel_path)
-                
-                print(f"      ✓ Série écrite dans generated_excel")
-                print(f"         Cellule {cell_position}: {serie}")
-                
-                return True
-                
-            finally:
-                # Toujours fermer le workbook
-                if wb:
-                    try:
-                        wb.close()
-                    except:
-                        pass
-            
+
+            _write_excel_cell_atomic(generated_excel_path, cell_position, serie)
+
+            print(f"      ✓ Série écrite dans generated_excel")
+            print(f"         Cellule {cell_position}: {serie}")
+            return True
+
         except Exception as e:
             if attempt < max_retries - 1:
                 print(f"      ⚠️  Erreur tentative {attempt + 1}: {e}")
                 print(f"      ⏳ Nouvelle tentative dans {retry_delay}s...")
             else:
                 print(f"      ❌ Erreur écriture série dans generated_excel après {max_retries} tentatives: {e}")
-                print(f"      💡 Vérifiez que le fichier Excel n'est pas ouvert dans Excel")
                 traceback.print_exc()
                 return False
-    
+
     return False
 
 def detect_blocage_from_lta_file(lta_folder_path):
@@ -2870,58 +2884,33 @@ def mark_dum_as_error_in_excel(lta_folder_path, dum_number, serie=None):
     """
     Marque un DUM comme "error" dans le fichier generated_excel.
     Même logique que save_dum_series_to_excel mais écrit "error" (ou "serie (error)" si série fournie).
-    
+
     Args:
         lta_folder_path: Chemin du dossier LTA
         dum_number: Numéro du DUM (1, 2, 3, etc.)
         serie: Série du DUM (optionnel - si fournie, format: "0159942R (error)")
     """
     try:
-        # Trouver le fichier generated_excel
         generated_excel_path = None
         for file in os.listdir(lta_folder_path):
             if file.startswith("generated_excel") and file.endswith(".xlsx"):
                 generated_excel_path = os.path.join(lta_folder_path, file)
                 break
-        
+
         if not generated_excel_path:
             print(f"      ⚠️  generated_excel introuvable pour marquage erreur")
             return
-        
-        # Ouvrir le fichier Excel
-        # Fermer le fichier Excel s'il est ouvert
-        close_excel_file(generated_excel_path)
-        
-        wb = load_workbook(generated_excel_path, data_only=False)
-        ws = wb['Summary']
-        
-        # Calculer la cellule: C + (12 + (dum_number - 1) * 7)
+
         row = 12 + (dum_number - 1) * 7
         cell = f'C{row}'
-        
-        # Vérifier si la cellule contient déjà une valeur (error)
-        current_value = ws[cell].value
-        if current_value and "(error)" in str(current_value):
-            # Déjà marqué avec série, ne pas écraser
-            print(f"      ℹ️  Cellule {cell} déjà marquée: {current_value}")
-            wb.close()
-            return
-        
-        # Construire la valeur à écrire
-        if serie:
-            error_value = f"{serie} (error)"
-        else:
-            error_value = "error"
-        
-        # Écrire dans la cellule
-        ws[cell] = error_value
-        
-        # Sauvegarder
-        wb.save(generated_excel_path)
-        wb.close()
-        
+        error_value = f"{serie} (error)" if serie else "error"
+
+        close_excel_file(generated_excel_path)
+        time.sleep(1.5)
+
+        _write_excel_cell_atomic(generated_excel_path, cell, error_value)
         print(f"      ✓ Marqueur 'error' ajouté en {cell}: {error_value}")
-        
+
     except Exception as e:
         print(f"      ⚠️  Erreur marquage Excel: {e}")
 
