@@ -757,7 +757,8 @@ def _write_excel_cell_atomic(excel_path, cell_position, value, sheet_name='Summa
     import zipfile
 
     bak_path = excel_path + ".bak"
-    tmp_path = excel_path + ".tmp"
+    _base, _ext = os.path.splitext(excel_path)
+    tmp_path = _base + "_tmp" + (_ext or ".xlsx")
 
     # --- Step 1: detect corruption and restore from backup if needed ---
     def _is_valid_xlsx(path):
