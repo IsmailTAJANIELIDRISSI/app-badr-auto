@@ -2881,15 +2881,51 @@ def save_dum_error_log(lta_folder_path, lta_name, dum_number, sheet_name, error_
     except Exception as e:
         print(f"      ⚠️  Impossible de créer le log d'erreur: {e}")
 
-def mark_dum_as_error_in_excel(lta_folder_path, dum_number, serie=None):
+def _read_dum_excel_status(excel_path, dum_number):
     """
-    Marque un DUM comme "error" dans le fichier generated_excel.
-    Même logique que save_dum_series_to_excel mais écrit "error" (ou "serie (error)" si série fournie).
+    Read the current status of a DUM cell from generated_excel (Summary sheet, column C).
+
+    Returns:
+        "done"      — a valid series is already written (non-error, non-empty)
+        "error"     — marked as Selenium/tech error (retryable at LTA level)
+        "error_biz" — marked as business logic error (not retryable)
+        None        — cell is empty / file not found (needs processing)
+    """
+    try:
+        from openpyxl import load_workbook
+        row = 12 + (dum_number - 1) * 7
+        cell_ref = f"C{row}"
+        wb = load_workbook(excel_path, data_only=True, read_only=True)
+        if 'Summary' not in wb.sheetnames:
+            wb.close()
+            return None
+        ws = wb['Summary']
+        value = ws[cell_ref].value
+        wb.close()
+        if value is None:
+            return None
+        value_str = str(value).strip()
+        if not value_str:
+            return None
+        if "error_biz" in value_str.lower():
+            return "error_biz"
+        if "error" in value_str.lower():
+            return "error"
+        return "done"  # valid series
+    except Exception:
+        return None
+
+
+def mark_dum_as_error_in_excel(lta_folder_path, dum_number, serie=None, is_business_error=False):
+    """
+    Marque un DUM comme erreur dans le fichier generated_excel.
 
     Args:
         lta_folder_path: Chemin du dossier LTA
         dum_number: Numéro du DUM (1, 2, 3, etc.)
         serie: Série du DUM (optionnel - si fournie, format: "0159942R (error)")
+        is_business_error: Si True → marque "error_biz" (erreur métier, pas de retry LTA).
+                           Si False → marque "error" (Selenium, retryable).
     """
     try:
         generated_excel_path = None
@@ -2904,13 +2940,23 @@ def mark_dum_as_error_in_excel(lta_folder_path, dum_number, serie=None):
 
         row = 12 + (dum_number - 1) * 7
         cell = f'C{row}'
-        error_value = f"{serie} (error)" if serie else "error"
+
+        # Choose label based on error type
+        error_label = "error_biz" if is_business_error else "error"
+        error_value = f"{serie} ({error_label})" if serie else error_label
+
+        # Don't downgrade a business error to a retryable "error"
+        if not is_business_error:
+            current_status = _read_dum_excel_status(generated_excel_path, dum_number)
+            if current_status == "error_biz":
+                print(f"      ℹ️  DUM {dum_number} déjà marqué 'error_biz' — non écrasé")
+                return
 
         close_excel_file(generated_excel_path)
         time.sleep(1.5)
 
         _write_excel_cell_atomic(generated_excel_path, cell, error_value)
-        print(f"      ✓ Marqueur 'error' ajouté en {cell}: {error_value}")
+        print(f"      ✓ Marqueur '{error_label}' ajouté en {cell}: {error_value}")
 
     except Exception as e:
         print(f"      ⚠️  Erreur marquage Excel: {e}")
@@ -10443,9 +10489,8 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 
                 print(f"      ✓ Fichier d'erreur créé: {error_filename}")
                 
-                # Marquer "error" avec série dans le fichier Excel (colonne C)
-                # Utiliser la fonction centralisée
-                mark_dum_as_error_in_excel(lta_folder_path, dum_number, serie=dum_series)
+                # Marquer "error_biz" avec série dans le fichier Excel (erreur métier BADR — pas de retry)
+                mark_dum_as_error_in_excel(lta_folder_path, dum_number, serie=dum_series, is_business_error=True)
                 
                 print(f"      ❌ Déclaration refusée - Erreurs détectées")
                 print(f"      ⏭️  Passage au DUM suivant...")
@@ -11573,90 +11618,157 @@ def process_lta_folder_dum_only(driver, lta_folder_path, lta_name):
         
         # ====================================================================
         # RESILIENT DUM PROCESSING: Each DUM wrapped in try-catch
+        # Skip logic: DUMs already written in generated_excel are skipped.
+        # LTA-level retry: up to MAX_LTA_PASSES passes for Selenium errors.
+        # Business errors (error_biz) are never retried at LTA level.
         # ====================================================================
+        MAX_LTA_PASSES = 3
+
         successful_count = 0
         failed_count = 0
-        
-        for i, dum_data in enumerate(dum_list, 1):
-            print(f"\n{'='*70}")
-            print(f"DUM {i}/{len(dum_list)}: {dum_data.get('sheet_name')}")
-            print(f"{'='*70}")
-            
-            dum_success = False
-            error_step = "Initialisation"
-            max_dum_retries = 2  # Maximum retries for a DUM in case of Selenium errors
-            dum_retry_count = 0
-            
-            while dum_retry_count <= max_dum_retries and not dum_success:
-                try:
-                    # STEP 1: Create declaration
-                    error_step = "Création déclaration (create_declaration)"
-                    if not create_declaration(driver):
-                        raise Exception("create_declaration returned False")
-                    
-                    # STEP 2-9: Fill declaration form (all steps inside)
-                    error_step = "Remplissage formulaire (fill_declaration_form)"
-                    if fill_declaration_form(driver, shipper_data['shipper_name'], dum_data, lta_folder_path, shipper_data['lta_reference_clean']):
+
+        for lta_pass in range(MAX_LTA_PASSES):
+            if lta_pass > 0:
+                print(f"\n{'='*70}")
+                print(f"🔄 REPRISE PASSE {lta_pass + 1}/{MAX_LTA_PASSES} — DUMs Selenium en échec: {lta_name}")
+                print(f"{'='*70}")
+                time.sleep(5)
+
+            # Resolve generated_excel path fresh each pass (may have been created in a prior pass)
+            _gen_excel_files = glob.glob(os.path.join(lta_folder_path, "generated_excel*.xlsx"))
+            generated_excel_path_skip = _gen_excel_files[0] if _gen_excel_files else None
+
+            if generated_excel_path_skip:
+                print(f"\n   📋 Reprise intelligente activée: {os.path.basename(generated_excel_path_skip)}")
+                # Pre-scan to show which DUMs will be skipped
+                skipped_done = []
+                skipped_biz = []
+                for _i in range(1, len(dum_list) + 1):
+                    _s = _read_dum_excel_status(generated_excel_path_skip, _i)
+                    if _s == "done":
+                        skipped_done.append(_i)
+                    elif _s == "error_biz":
+                        skipped_biz.append(_i)
+                if skipped_done:
+                    print(f"   ⏭️  DUMs déjà traités (ignorés): {skipped_done}")
+                if skipped_biz:
+                    print(f"   🚫 DUMs erreur métier (non-retryables): {skipped_biz}")
+                to_process = [_i for _i in range(1, len(dum_list) + 1)
+                              if _i not in skipped_done and _i not in skipped_biz]
+                print(f"   🔄 DUMs à traiter: {to_process if to_process else '(aucun)'}")
+            else:
+                print(f"\n   ℹ️  Aucun generated_excel trouvé — tous les DUMs seront traités")
+
+            # Recount from scratch each pass (skip-logic updates these)
+            successful_count = 0
+            failed_count = 0
+            pass_retryable_count = 0  # Selenium failures still retryable after this pass
+
+            for i, dum_data in enumerate(dum_list, 1):
+                # ------------------------------------------------
+                # SKIP LOGIC: read generated_excel cell for DUM i
+                # ------------------------------------------------
+                if generated_excel_path_skip and os.path.exists(generated_excel_path_skip):
+                    dum_status = _read_dum_excel_status(generated_excel_path_skip, i)
+                    if dum_status == "done":
                         successful_count += 1
-                        dum_success = True
-                        print(f"\n✅ DUM {i} traité avec succès")
-                        break  # Success, exit retry loop
-                    else:
-                        raise Exception("fill_declaration_form returned False")
-                
-                except Exception as e:
-                    # Check if this is a Selenium error (should retry) or logical error (skip)
-                    is_selenium = is_selenium_error(e)
-                    
-                    if is_selenium and dum_retry_count < max_dum_retries:
-                        # Selenium error: retry the DUM
-                        dum_retry_count += 1
-                        print(f"\n⚠️  ERREUR SELENIUM DUM {i} (tentative {dum_retry_count}/{max_dum_retries + 1}): {dum_data.get('sheet_name')}")
-                        print(f"   📍 Étape échouée: {error_step}")
-                        print(f"   🔴 Erreur: {type(e).__name__}: {str(e)[:100]}")
-                        print(f"   🔄 Retry du DUM après retour à l'accueil...")
-                        
-                        # Return to home before retry
-                        return_to_home_after_error(driver)
-                        
-                        # Wait a bit before retry
-                        time.sleep(3)
-                        continue  # Retry the DUM
-                    
-                    else:
-                        # Logical error or max retries reached: skip to next DUM
+                        continue  # silently — already pre-announced in the pre-scan above
+                    if dum_status == "error_biz":
                         failed_count += 1
-                        
-                        if is_selenium:
-                            print(f"\n❌ ÉCHEC DUM {i} après {max_dum_retries + 1} tentatives: {dum_data.get('sheet_name')}")
-                            print(f"   📍 Étape échouée: {error_step}")
-                            print(f"   🔴 Erreur Selenium (toutes tentatives échouées): {type(e).__name__}: {str(e)[:100]}")
+                        continue  # silently — already pre-announced
+                    # "error" or None → process / retry this DUM
+
+                print(f"\n{'='*70}")
+                print(f"{'🔄 RETRY ' if lta_pass > 0 else ''}DUM {i}/{len(dum_list)}: {dum_data.get('sheet_name')}")
+                print(f"{'='*70}")
+
+                dum_success = False
+                error_step = "Initialisation"
+                max_dum_retries = 2  # Maximum retries for a DUM in case of Selenium errors
+                dum_retry_count = 0
+
+                while dum_retry_count <= max_dum_retries and not dum_success:
+                    try:
+                        # STEP 1: Create declaration
+                        error_step = "Création déclaration (create_declaration)"
+                        if not create_declaration(driver):
+                            raise Exception("create_declaration returned False")
+
+                        # STEP 2-9: Fill declaration form (all steps inside)
+                        error_step = "Remplissage formulaire (fill_declaration_form)"
+                        if fill_declaration_form(driver, shipper_data['shipper_name'], dum_data, lta_folder_path, shipper_data['lta_reference_clean']):
+                            successful_count += 1
+                            dum_success = True
+                            print(f"\n✅ DUM {i} traité avec succès")
+                            break  # Success, exit retry loop
                         else:
-                            print(f"\n❌ ÉCHEC DUM {i}: {dum_data.get('sheet_name')}")
+                            raise Exception("fill_declaration_form returned False")
+
+                    except Exception as e:
+                        # Check if this is a Selenium error (should retry) or logical error (skip)
+                        is_selenium = is_selenium_error(e)
+
+                        if is_selenium and dum_retry_count < max_dum_retries:
+                            # Selenium error: retry the DUM (inner retry)
+                            dum_retry_count += 1
+                            print(f"\n⚠️  ERREUR SELENIUM DUM {i} (tentative {dum_retry_count}/{max_dum_retries + 1}): {dum_data.get('sheet_name')}")
                             print(f"   📍 Étape échouée: {error_step}")
-                            print(f"   🔴 Erreur logique: {type(e).__name__}: {str(e)[:100]}")
-                        
-                        # 1. Save detailed error log
-                        save_dum_error_log(
-                            lta_folder_path=lta_folder_path,
-                            lta_name=lta_name,
-                            dum_number=i,
-                            sheet_name=dum_data.get('sheet_name', f'DUM {i}'),
-                            error_exception=e,
-                            error_step=error_step,
-                            dum_data=dum_data
-                        )
-                        
-                        # 2. Return to home (cleanup state)
-                        return_to_home_after_error(driver)
-                        
-                        # 3. Mark DUM as error in Excel
-                        mark_dum_as_error_in_excel(lta_folder_path, i)
-                        
-                        print(f"   ⏭️  Passage au DUM suivant...")
-                        
-                        # Continue to next DUM (DON'T stop entire process)
-                        break  # Exit retry loop and continue to next DUM
+                            print(f"   🔴 Erreur: {type(e).__name__}: {str(e)[:100]}")
+                            print(f"   🔄 Retry du DUM après retour à l'accueil...")
+
+                            # Return to home before retry
+                            return_to_home_after_error(driver)
+
+                            # Wait a bit before retry
+                            time.sleep(3)
+                            continue  # Retry the DUM
+
+                        else:
+                            # Logical error or max inner retries reached: skip to next DUM
+                            failed_count += 1
+
+                            if is_selenium:
+                                print(f"\n❌ ÉCHEC DUM {i} après {max_dum_retries + 1} tentatives: {dum_data.get('sheet_name')}")
+                                print(f"   📍 Étape échouée: {error_step}")
+                                print(f"   🔴 Erreur Selenium (toutes tentatives échouées): {type(e).__name__}: {str(e)[:100]}")
+                                pass_retryable_count += 1  # eligible for next LTA pass
+                            else:
+                                print(f"\n❌ ÉCHEC DUM {i}: {dum_data.get('sheet_name')}")
+                                print(f"   📍 Étape échouée: {error_step}")
+                                print(f"   🔴 Erreur logique (non-retryable): {type(e).__name__}: {str(e)[:100]}")
+
+                            # 1. Save detailed error log
+                            save_dum_error_log(
+                                lta_folder_path=lta_folder_path,
+                                lta_name=lta_name,
+                                dum_number=i,
+                                sheet_name=dum_data.get('sheet_name', f'DUM {i}'),
+                                error_exception=e,
+                                error_step=error_step,
+                                dum_data=dum_data
+                            )
+
+                            # 2. Return to home (cleanup state)
+                            return_to_home_after_error(driver)
+
+                            # 3. Mark DUM as error in Excel
+                            #    Selenium (exhausted) → "error"  (retryable on next LTA pass)
+                            #    Business logic       → "error_biz" (no further retry)
+                            mark_dum_as_error_in_excel(lta_folder_path, i, is_business_error=not is_selenium)
+
+                            print(f"   ⏭️  Passage au DUM suivant...")
+
+                            # Continue to next DUM (DON'T stop entire process)
+                            break  # Exit retry loop and continue to next DUM
+
+            # ----------------------------------------------------------------
+            # After this pass: decide whether another pass is needed
+            # ----------------------------------------------------------------
+            if pass_retryable_count == 0:
+                break  # No Selenium failures remain — done
+
+            if lta_pass < MAX_LTA_PASSES - 1:
+                print(f"\n   ⚠️  {pass_retryable_count} DUM(s) Selenium en échec — passe {lta_pass + 2}/{MAX_LTA_PASSES} dans 5s...")
         
         # ====================================================================
         # LTA SUMMARY

@@ -260,18 +260,22 @@ def _get_error_series_from_excel(excel_file_path):
         ws = wb['Summary']
         errors = []
         dum_number = 1
-        while True:
+        consecutive_none = 0
+        while dum_number <= 100:  # Safety cap — supports up to 100 DUMs per LTA
             row = 12 + (dum_number - 1) * 7
             cell = ws[f"C{row}"]
             value = cell.value
             if value is None:
-                break  # No more DUMs
+                consecutive_none += 1
+                if consecutive_none >= 3:
+                    break  # 3 empty rows in a row → no more DUMs
+                dum_number += 1
+                continue
+            consecutive_none = 0  # reset on non-empty cell
             value_str = str(value).strip()
             if 'error' in value_str.lower():
                 errors.append(value_str)
             dum_number += 1
-            if dum_number > 20:  # Safety cap
-                break
         wb.close()
         return errors
     except Exception as e:
