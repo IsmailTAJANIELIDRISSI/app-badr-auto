@@ -119,6 +119,11 @@ def send_excel_via_email(excel_file_path, lta_name, dum_number=None, recipient_e
         error_series = _get_error_series_from_excel(excel_file_path)
         has_errors = len(error_series) > 0
 
+        # --- Read LTA metadata (shipper, DS MEAD, blocage) ---
+        lta_info = {'shipper': None, 'ds_mead': None, 'is_blocage': False}
+        if lta_folder_path:
+            lta_info = _read_lta_info(lta_folder_path, lta_name)
+
         # --- Resolve MAWB from PDF filename for subject ---
         mawb_suffix = ""
         if lta_folder_path:
@@ -143,14 +148,16 @@ def send_excel_via_email(excel_file_path, lta_name, dum_number=None, recipient_e
         if 'Subject' in msg:
             del msg['Subject']
         
-        # Build subject — includes MAWB and flags errors when present
+        # Build subject — includes MAWB and flags errors/blocage when present
         if dum_number:
             subject = f"DUM {dum_number} Traite - {lta_name}{mawb_suffix}"
         else:
+            prefix = ""
+            if lta_info['is_blocage']:
+                prefix += "[BLOCAGE] "
             if has_errors:
-                subject = f"[ERREUR DUM] LTA Complet - {lta_name}{mawb_suffix}"
-            else:
-                subject = f"LTA Complet - {lta_name}{mawb_suffix}"
+                prefix += "[ERREUR DUM] "
+            subject = f"{prefix}LTA Complet - {lta_name}{mawb_suffix}"
         msg['Subject'] = subject
         
         # Email body
@@ -163,6 +170,14 @@ Le fichier Excel généré pour le LTA "{lta_name}" est prêt.
             body += f"\nDUM {dum_number} a été traité avec succès.\n"
         else:
             body += f"\nTous les DUMs de ce LTA ont été traités.\n"
+
+        # --- LTA metadata block ---
+        if lta_info['shipper']:
+            body += f"\nExpéditeur:   {lta_info['shipper']}\n"
+        if lta_info['ds_mead']:
+            body += f"DS MEAD Signé: {lta_info['ds_mead']}\n"
+        if lta_info['is_blocage']:
+            body += "\n⚠️  Ce LTA est en BLOCAGE — intervention douanière requise.\n"
 
         if has_errors:
             body += f"\n\n⚠️  ATTENTION — DUMs en erreur ({len(error_series)}):\n"
@@ -281,6 +296,59 @@ def _get_error_series_from_excel(excel_file_path):
     except Exception as e:
         logger.warning(f"Could not read error series from Excel: {e}")
         return []
+
+
+def _read_lta_info(lta_folder_path, lta_name):
+    """
+    Read extra LTA metadata from the two text files created by Phase 1.
+
+    Files (relative to lta_folder_path):
+      - "<lta_name>.txt"                  — main LTA file
+          Line 5 (index 4): "blocage" if it's a blocage LTA, else empty
+          Line 8 (index 7): DS MEAD série (e.g. "2047 C"), empty if none
+      - "<lta_name_underscored>_shipper_name.txt"
+          Line 1 (index 0): Shipper / Expéditeur name
+
+    Returns:
+        dict with keys:
+            shipper   (str | None)
+            ds_mead   (str | None)
+            is_blocage (bool)
+    """
+    result = {'shipper': None, 'ds_mead': None, 'is_blocage': False}
+    try:
+        # ---- Main LTA txt ----
+        lta_txt = os.path.join(lta_folder_path, f"{lta_name}.txt")
+        if os.path.exists(lta_txt):
+            with open(lta_txt, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            # Strip newlines but keep empty lines for index alignment
+            lines = [l.rstrip('\n').rstrip('\r') for l in lines]
+            # Line 5 (index 4) — blocage indicator
+            if len(lines) > 4 and 'blocage' in lines[4].strip().lower():
+                result['is_blocage'] = True
+            # Line 8 (index 7) — DS MEAD série
+            if len(lines) > 7:
+                ds = lines[7].strip()
+                if ds:
+                    result['ds_mead'] = ds
+    except Exception as e:
+        logger.warning(f"Could not read main LTA txt for {lta_name}: {e}")
+
+    try:
+        # ---- Shipper name txt ----
+        # Convert "6eme LTA" → "6eme_LTA" for filename lookup
+        lta_name_file = lta_name.replace(' ', '_')
+        shipper_txt = os.path.join(lta_folder_path, f"{lta_name_file}_shipper_name.txt")
+        if os.path.exists(shipper_txt):
+            with open(shipper_txt, 'r', encoding='utf-8') as f:
+                first_line = f.readline().rstrip('\n').rstrip('\r').strip()
+            if first_line:
+                result['shipper'] = first_line
+    except Exception as e:
+        logger.warning(f"Could not read shipper txt for {lta_name}: {e}")
+
+    return result
 
 
 def _find_mawb_pdf(lta_folder_path, lta_name):
