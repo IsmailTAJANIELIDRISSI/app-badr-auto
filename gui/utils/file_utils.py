@@ -468,7 +468,8 @@ def get_lta_shipper_name(lta_folder_path, folder_name):
 
 def update_lta_shipper_name(lta_folder_path, folder_name, shipper_name):
     """
-    Update shipper name in both LTA file (line 6) and shipper file (line 1)
+    Update shipper name in both LTA file (line 6) and shipper file (line 1),
+    and write it to cell H1 of the LTA's generated_excel*.xlsx when it exists.
     
     Args:
         lta_folder_path: Path to parent folder containing both LTA txt file and shipper file
@@ -504,6 +505,25 @@ def update_lta_shipper_name(lta_folder_path, folder_name, shipper_name):
             except Exception as e:
                 logger.error(f"Error updating shipper file: {e}")
         
+        # Write shipper name to H1 in generated_excel*.xlsx (best-effort, non-blocking)
+        try:
+            lta_subfolder = os.path.join(lta_folder_path, folder_name)
+            gen_excels = glob.glob(os.path.join(lta_subfolder, "generated_excel*.xlsx"))
+            if gen_excels:
+                from openpyxl import load_workbook
+                for gen_path in gen_excels:
+                    try:
+                        wb = load_workbook(gen_path)
+                        ws = wb.active
+                        ws['H1'] = shipper_name
+                        wb.save(gen_path)
+                        wb.close()
+                        logger.info(f"Wrote shipper name to H1 in {os.path.basename(gen_path)}")
+                    except Exception as ex:
+                        logger.warning(f"Could not write shipper to {os.path.basename(gen_path)}: {ex}")
+        except Exception as ex:
+            logger.warning(f"Shipper → generated_excel update skipped: {ex}")
+
         return success1 and success2
     
     except Exception as e:
