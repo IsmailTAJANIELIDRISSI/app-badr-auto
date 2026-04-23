@@ -4819,8 +4819,10 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                             time.sleep(2)
                         except Exception as e:
                             print(f"      ❌ Erreur clic 'Nouveau' lot: {e}")
-                            driver.switch_to.default_content()
-                            return_to_home_after_error(driver)
+                            try:
+                                driver.switch_to.default_content()
+                            except:
+                                pass
                             raise Exception("Lot creation error")
                         
                         # ==================================================================
@@ -4932,8 +4934,10 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                             time.sleep(0.5)
                         except Exception as e:
                             print(f"      ❌ Erreur saisie référence lot: {e}")
-                            driver.switch_to.default_content()
-                            return_to_home_after_error(driver)
+                            try:
+                                driver.switch_to.default_content()
+                            except:
+                                pass
                             raise Exception("Lot creation error")
                         
                         # ED.10.2b: Ligne dépotée (toujours 1)
@@ -4947,8 +4951,10 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                             time.sleep(0.5)
                         except Exception as e:
                             print(f"      ❌ Erreur saisie ligne dépotée: {e}")
-                            driver.switch_to.default_content()
-                            return_to_home_after_error(driver)
+                            try:
+                                driver.switch_to.default_content()
+                            except:
+                                pass
                             raise Exception("Lot creation error")
                         
                         # ED.10.2c: Sélectionner le radio button ICE (valeur 02)
@@ -4980,8 +4986,10 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                                 print(f"      ✓ Option ICE sélectionnée via JavaScript")
                             except Exception as e2:
                                 print(f"      ❌ Erreur sélection radio ICE: {e2}")
-                                driver.switch_to.default_content()
-                                return_to_home_after_error(driver)
+                                try:
+                                    driver.switch_to.default_content()
+                                except:
+                                    pass
                                 raise Exception("Lot creation error")
                         
                         # Attendre que le blocker UI disparaisse après sélection ICE
@@ -5027,8 +5035,10 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                                 
                         except Exception as e:
                             print(f"      ❌ Erreur saisie ICE: {e}")
-                            driver.switch_to.default_content()
-                            return_to_home_after_error(driver)
+                            try:
+                                driver.switch_to.default_content()
+                            except:
+                                pass
                             raise Exception("Lot creation error")
                         
                         # ==================================================================
@@ -5057,8 +5067,10 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                             
                         except Exception as e:
                             print(f"      ❌ Erreur validation en-tête lot: {e}")
-                            driver.switch_to.default_content()
-                            return_to_home_after_error(driver)
+                            try:
+                                driver.switch_to.default_content()
+                            except:
+                                pass
                             raise Exception("Lot creation error")
                         
                         # ==================================================================
@@ -5085,8 +5097,10 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                                 time.sleep(2)
                             except Exception as e2:
                                 print(f"      ❌ Erreur clic 'Nouveau' ligne (alternative): {e2}")
-                                driver.switch_to.default_content()
-                                return_to_home_after_error(driver)
+                                try:
+                                    driver.switch_to.default_content()
+                                except:
+                                    pass
                                 raise Exception("Lot creation error")
                         
                         # ==================================================================
@@ -5096,14 +5110,10 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                         # Vérifier que les données du DUM sont valides avant de continuer
                         if not dum_data.get('p') or dum_data.get('p', 0) <= 0:
                             print(f"      ❌ ERREUR: Nombre de contenants invalide (P={dum_data.get('p', 0)})")
-                            driver.switch_to.default_content()
-                            return_to_home_after_error(driver)
                             raise Exception("Lot creation error")
                         
                         if not dum_data.get('p_brut') or dum_data.get('p_brut', 0) <= 0:
                             print(f"      ❌ ERREUR: Poids brut invalide (P,BRUT={dum_data.get('p_brut', 0)})")
-                            driver.switch_to.default_content()
-                            return_to_home_after_error(driver)
                             raise Exception("Lot creation error")
                         
                         print(f"      ✅ Données DUM validées: P={dum_data['p']}, P,BRUT={dum_data['p_brut']}")
@@ -5127,8 +5137,10 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                             time.sleep(1)
                         except Exception as e:
                             print(f"      ❌ Erreur sélection type contenant: {e}")
-                            driver.switch_to.default_content()
-                            return_to_home_after_error(driver)
+                            try:
+                                driver.switch_to.default_content()
+                            except:
+                                pass
                             raise Exception("Lot creation error")
                         
                         # ED.11.2b: Nombre de contenants (P du DUM) - avec vérification
@@ -5563,11 +5575,16 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                         elif is_selenium_error_bool:
                             print(f"      ⚠️ Erreur Selenium détectée: {error_message}")
                             print(f"      🔄 Retry {retry_attempt + 1}/{MAX_LOT_RETRIES} - Stabilisation iframe...")
-                            # For Selenium errors, ensure iframe stability
+                            # For Selenium errors: switch out of iframe, wait for page stability,
+                            # then navigate back to the ED lot list page so btn_new_lot is visible again
                             try:
                                 driver.switch_to.default_content()
                                 wait_for_ui_blocker_disappear(driver, timeout=5)
                                 time.sleep(1)
+                                # Navigate back to current page to restore the lot list
+                                driver.refresh()
+                                time.sleep(3)
+                                wait_for_ui_blocker_disappear(driver, timeout=10)
                                 # Return to iframe
                                 iframe = wait.until(EC.presence_of_element_located((By.TAG_NAME, "iframe")))
                                 driver.switch_to.frame(iframe)
@@ -5584,6 +5601,10 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                                 driver.switch_to.default_content()
                                 wait_for_ui_blocker_disappear(driver, timeout=5)
                                 time.sleep(1)
+                                # Navigate back to current page to restore the lot list
+                                driver.refresh()
+                                time.sleep(3)
+                                wait_for_ui_blocker_disappear(driver, timeout=10)
                                 # Return to iframe
                                 iframe = wait.until(EC.presence_of_element_located((By.TAG_NAME, "iframe")))
                                 driver.switch_to.frame(iframe)
