@@ -798,8 +798,17 @@ def _write_excel_cell_atomic(excel_path, cell_position, value, sheet_name='Summa
             except Exception:
                 pass
 
-    # --- Step 4: atomic replace ---
-    os.replace(tmp_path, excel_path)
+    # --- Step 4: atomic replace (retry on PermissionError / WinError 5 - transient lock) ---
+    _replace_retries = 5
+    for _r in range(_replace_retries):
+        try:
+            os.replace(tmp_path, excel_path)
+            break
+        except PermissionError:
+            if _r < _replace_retries - 1:
+                time.sleep(2)
+            else:
+                raise
 
     # --- Step 5: remove backup on success ---
     try:
@@ -849,6 +858,7 @@ def save_dum_series_to_excel(lta_folder_path, dum_number, serie):
         try:
             if attempt > 0:
                 print(f"      🔄 Tentative {attempt + 1}/{max_retries}...")
+                close_excel_file(generated_excel_path)
                 time.sleep(retry_delay)
 
             _write_excel_cell_atomic(generated_excel_path, cell_position, serie)
