@@ -227,37 +227,27 @@ class PartialConfigDialog:
         self.exception_frame = ttk.LabelFrame(main_frame, text="⚠️ CAS D'EXCEPTION DÉTECTÉ", padding="10")
         self.exception_frame.pack(fill=tk.X, pady=5)
         self.exception_frame.pack_forget()  # Hide initially
-        
-        exception_info = ttk.Label(
+
+        self.exception_info_label = ttk.Label(
             self.exception_frame,
-            text="Le plus petit partiel est inférieur au poids du plus grand DUM (cas de complément).\n"
-                 "Une seule ED sera créée. Renseignez les infos du partiel exception ci-dessous:",
+            text="Certains partiels sont inférieurs au poids du plus grand DUM (cas de complément).\n"
+                 "Seuls les grands partiels recevront un état de dépotage. Renseignez les infos "
+                 "de chaque partiel exception ci-dessous:",
             foreground="red",
             font=('Arial', 9, 'bold')
         )
-        exception_info.grid(row=0, column=0, columnspan=4, sticky=tk.W, pady=(0, 10))
-        
-        ttk.Label(self.exception_frame, text="Référence créée à l'aéroport:", font=('Arial', 9, 'bold')).grid(
-            row=1, column=0, sticky=tk.W, padx=5, pady=2
-        )
+        self.exception_info_label.grid(row=0, column=0, columnspan=4, sticky=tk.W, pady=(0, 10))
+
+        # Dynamic container — rebuilt by _update_exception_frame() each time weights change
+        self.exception_inputs_frame = ttk.Frame(self.exception_frame)
+        self.exception_inputs_frame.grid(row=1, column=0, columnspan=4, sticky=tk.EW)
+
+        # Per-partial exception vars: {partial_num: {'ref': StringVar, 'pos': StringVar}}
+        self.exception_partial_vars = {}
+
+        # Backward-compat stubs (overwritten by _update_exception_frame once partials are known)
         self.airport_reference_var = tk.StringVar(value="")
-        airport_ref_entry = ttk.Entry(self.exception_frame, textvariable=self.airport_reference_var, width=25)
-        airport_ref_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
-        ttk.Label(self.exception_frame, text="(ex: 157-41680645)", font=('Arial', 8, 'italic')).grid(
-            row=1, column=2, sticky=tk.W, padx=5, pady=2
-        )
-        
-        ttk.Label(self.exception_frame, text="Positions du plus petit partiel:", font=('Arial', 9, 'bold')).grid(
-            row=2, column=0, sticky=tk.W, padx=5, pady=2
-        )
         self.smallest_partial_positions_var = tk.StringVar(value="")
-        positions_entry = ttk.Entry(self.exception_frame, textvariable=self.smallest_partial_positions_var, width=10)
-        positions_entry.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
-        # Trace changes to update distribution preview when positions change
-        self.smallest_partial_positions_var.trace('w', lambda *args: self._update_distribution_preview())
-        ttk.Label(self.exception_frame, text="(nombre de positions)", font=('Arial', 8, 'italic')).grid(
-            row=2, column=2, sticky=tk.W, padx=5, pady=2
-        )
         
         # Buttons frame - Pack FIRST (before scrollable content) so it always reserves space at bottom
         buttons_frame = ttk.Frame(main_frame)
@@ -299,12 +289,86 @@ class PartialConfigDialog:
         # Load existing config if available
         if self.existing_config:
             self.num_partials_var.set(len(self.existing_config['partials']))
-            # Load exception case data if exists
-            if self.existing_config.get('partial_type') == 'exception':
-                self.airport_reference_var.set(self.existing_config.get('smallest_partial_airport_reference', ''))
-                self.smallest_partial_positions_var.set(str(self.existing_config.get('smallest_partial_positions', '')))
+            # Exception fields are restored after _update_exception_frame() is called
+            # during _generate_partial_forms → _update_distribution_preview.
             self._generate_partial_forms(load_existing=True)
-    
+
+    # ------------------------------------------------------------------
+    def _update_exception_frame(self, small_partial_nums):
+        """Rebuild the per-partial exception input rows inside self.exception_inputs_frame."""
+        # Clear previous rows
+        for widget in self.exception_inputs_frame.winfo_children():
+            widget.destroy()
+
+        for row_idx, partial_num in enumerate(sorted(small_partial_nums)):
+            if partial_num not in self.exception_partial_vars:
+                ref_var = tk.StringVar(value="")
+                pos_var = tk.StringVar(value="")
+                pos_var.trace('w', lambda *args: self._update_distribution_preview())
+                self.exception_partial_vars[partial_num] = {'ref': ref_var, 'pos': pos_var}
+
+            vars_ = self.exception_partial_vars[partial_num]
+
+            ttk.Label(
+                self.exception_inputs_frame,
+                text=f"Partiel {partial_num} — Référence aéroport:",
+                font=('Arial', 9, 'bold')
+            ).grid(row=row_idx * 2, column=0, sticky=tk.W, padx=5, pady=2)
+            ttk.Entry(
+                self.exception_inputs_frame,
+                textvariable=vars_['ref'],
+                width=25
+            ).grid(row=row_idx * 2, column=1, sticky=tk.W, padx=5, pady=2)
+            ttk.Label(
+                self.exception_inputs_frame,
+                text="(ex: 157-41680645)",
+                font=('Arial', 8, 'italic')
+            ).grid(row=row_idx * 2, column=2, sticky=tk.W, padx=5, pady=2)
+
+            ttk.Label(
+                self.exception_inputs_frame,
+                text=f"Partiel {partial_num} — Positions:",
+                font=('Arial', 9, 'bold')
+            ).grid(row=row_idx * 2 + 1, column=0, sticky=tk.W, padx=5, pady=2)
+            ttk.Entry(
+                self.exception_inputs_frame,
+                textvariable=vars_['pos'],
+                width=10
+            ).grid(row=row_idx * 2 + 1, column=1, sticky=tk.W, padx=5, pady=2)
+            ttk.Label(
+                self.exception_inputs_frame,
+                text="(nombre de positions)",
+                font=('Arial', 8, 'italic')
+            ).grid(row=row_idx * 2 + 1, column=2, sticky=tk.W, padx=5, pady=2)
+
+        # Restore saved values from existing config if available
+        if self.existing_config and self.existing_config.get('partial_type') == 'exception':
+            refs_dict = self.existing_config.get('smallest_partial_airport_references', {})
+            pos_dict = self.existing_config.get('smallest_partial_positions_map', {})
+            # Legacy single-value fallback
+            if not refs_dict:
+                legacy_ref = self.existing_config.get('smallest_partial_airport_reference', '')
+                legacy_num = self.existing_config.get('smallest_partial_number')
+                if legacy_ref and legacy_num:
+                    refs_dict = {str(legacy_num): legacy_ref}
+            if not pos_dict:
+                legacy_pos = self.existing_config.get('smallest_partial_positions', '')
+                legacy_num = self.existing_config.get('smallest_partial_number')
+                if legacy_pos and legacy_num:
+                    pos_dict = {str(legacy_num): str(legacy_pos)}
+            for partial_num in sorted(small_partial_nums):
+                if partial_num in self.exception_partial_vars:
+                    saved_ref = refs_dict.get(str(partial_num), '')
+                    saved_pos = pos_dict.get(str(partial_num), '')
+                    self.exception_partial_vars[partial_num]['ref'].set(saved_ref)
+                    self.exception_partial_vars[partial_num]['pos'].set(str(saved_pos))
+
+        # Update backward-compat stubs to point at the first small partial's vars
+        if small_partial_nums:
+            first_pnum = sorted(small_partial_nums)[0]
+            self.airport_reference_var = self.exception_partial_vars[first_pnum]['ref']
+            self.smallest_partial_positions_var = self.exception_partial_vars[first_pnum]['pos']
+
     def _generate_partial_forms(self, load_existing=False):
         """Generate forms for each partial"""
         # Clear existing forms
@@ -495,47 +559,112 @@ class PartialConfigDialog:
                     dums_text.configure(state='disabled')
                 return
 
-            # Detect exception case: smallest partial < max DUM weight
-            # (means partial is a leftover piece of a single DUM, not made of whole DUMs)
+            # Detect exception case: any partial weight < max DUM weight
+            # (means that partial contains only a fraction of a DUM — cleared at airport)
             max_dum_weight = max(dum['weight'] for dum in self.lta_data['dums'])
-            num_partials = len(partial_weights)
-            smallest_partial_weight = min(w for w in partial_weights if w > 0) if any(w > 0 for w in partial_weights) else 0
-            # Business rule: exception case is supported for 2- or 3-partial workflows.
-            is_exception_case = (
-                num_partials in (2, 3)
-                and smallest_partial_weight > 0
-                and smallest_partial_weight < max_dum_weight
-            )
+            small_partial_indices = [
+                i for i, w in enumerate(partial_weights)
+                if w > 0 and w < max_dum_weight
+            ]
+            is_exception_case = len(small_partial_indices) > 0
+            small_partial_nums = [i + 1 for i in small_partial_indices]
 
             if is_exception_case:
                 # Show exception frame if hidden
                 if not self.exception_frame.winfo_manager():
                     self.exception_frame.pack(fill=tk.X, pady=5, before=self.partials_container)
+                self._update_exception_frame(small_partial_nums)
             else:
                 # Hide exception frame
                 if self.exception_frame.winfo_manager():
                     self.exception_frame.pack_forget()
-            
-            # Get exception case positions if provided
+
+            # For distribution calculation:
+            # - Single small partial → use exception distribution (DUM 1 consumed first, legacy logic)
+            # - Multiple small partials → use normal sequential distribution (split_dums captures boundaries)
             smallest_partial_positions = None
             smallest_partial_idx = None
-            if is_exception_case:
+            if is_exception_case and len(small_partial_indices) == 1:
+                single_pnum = small_partial_nums[0]
                 try:
-                    smallest_partial_positions_str = self.smallest_partial_positions_var.get().strip()
-                    if smallest_partial_positions_str:
-                        smallest_partial_positions = int(smallest_partial_positions_str)
-                        # Find which partial is the smallest
-                        smallest_partial_weight = min(w for w in partial_weights if w > 0)
-                        for idx, weight in enumerate(partial_weights):
-                            if weight == smallest_partial_weight:
-                                smallest_partial_idx = idx
-                                break
+                    if single_pnum in self.exception_partial_vars:
+                        pos_str = self.exception_partial_vars[single_pnum]['pos'].get().strip()
+                        if pos_str:
+                            smallest_partial_positions = int(pos_str)
+                            smallest_partial_idx = small_partial_indices[0]
                 except (ValueError, AttributeError):
-                    pass  # If not valid, ignore and use normal calculation
+                    pass
             
             # Calculate distribution
             distribution = self._calculate_dum_distribution(partial_weights, smallest_partial_idx, smallest_partial_positions)
-            
+
+            # For multi-smallest exception: override positions with user-filled values.
+            # Small partials get user-entered positions; big partial(s) get
+            # total_positions - sum(exception positions).
+            if is_exception_case and len(small_partial_indices) > 1:
+                user_exc_pos = {}
+                all_exc_filled = True
+                for pnum in small_partial_nums:
+                    vars_ = self.exception_partial_vars.get(pnum, {})
+                    pos_str = vars_.get('pos', tk.StringVar()).get().strip() if vars_ else ''
+                    try:
+                        v = int(pos_str)
+                        if v > 0:
+                            user_exc_pos[pnum] = v
+                        else:
+                            all_exc_filled = False
+                    except (ValueError, TypeError):
+                        all_exc_filled = False
+                if all_exc_filled and user_exc_pos:
+                    total_exc_pos = sum(user_exc_pos.values())
+                    remaining_pos = self.lta_data['total_positions'] - total_exc_pos
+                    big_idxs = [i for i in range(len(partial_weights)) if (i + 1) not in small_partial_nums]
+                    big_total_w = sum(partial_weights[i] for i in big_idxs) or 1.0
+
+                    # Partial-level positions override
+                    for idx2 in range(len(distribution)):
+                        pnum2 = idx2 + 1
+                        if pnum2 in small_partial_nums:
+                            distribution[idx2]['positions'] = user_exc_pos.get(pnum2, distribution[idx2]['positions'])
+                        elif idx2 in big_idxs:
+                            distribution[idx2]['positions'] = round(remaining_pos * partial_weights[idx2] / big_total_w)
+
+                    # DUM-level positions override: fix individual split pieces
+                    # Build map: dum_number → list of (dist_idx, dum_list_idx, partial_num, orig_pos)
+                    dum_piece_map = {}
+                    for dist_idx, dist_entry in enumerate(distribution):
+                        pnum2 = dist_idx + 1
+                        for d_idx, dum_info in enumerate(dist_entry['dums']):
+                            if dum_info['is_split']:
+                                dn = dum_info['dum_number']
+                                if dn not in dum_piece_map:
+                                    dum_piece_map[dn] = []
+                                dum_piece_map[dn].append({
+                                    'dist_idx': dist_idx,
+                                    'd_idx': d_idx,
+                                    'partial_num': pnum2,
+                                    'orig_pos': dum_info['positions'],
+                                    'weight': dum_info['weight'],
+                                })
+                    for dn, pieces in dum_piece_map.items():
+                        exc_p = [p for p in pieces if p['partial_num'] in small_partial_nums]
+                        big_p = [p for p in pieces if p['partial_num'] not in small_partial_nums]
+                        if not exc_p:
+                            continue
+                        total_orig = sum(p['orig_pos'] for p in pieces)
+                        exc_user_sum = sum(user_exc_pos[p['partial_num']] for p in exc_p)
+                        remaining_dum = total_orig - exc_user_sum
+                        for p in exc_p:
+                            distribution[p['dist_idx']]['dums'][p['d_idx']]['positions'] = user_exc_pos[p['partial_num']]
+                        if len(big_p) == 1:
+                            distribution[big_p[0]['dist_idx']]['dums'][big_p[0]['d_idx']]['positions'] = remaining_dum
+                        elif len(big_p) > 1:
+                            big_w_total = sum(p['weight'] for p in big_p) or 1.0
+                            for p in big_p:
+                                distribution[p['dist_idx']]['dums'][p['d_idx']]['positions'] = round(
+                                    remaining_dum * p['weight'] / big_w_total
+                                )
+
             sum_partial_weights = sum(partial_weights)
             tw_lta = self.lta_data['total_weight']
             
@@ -952,27 +1081,24 @@ class PartialConfigDialog:
             smallest_partial_positions = None
             smallest_partial_idx = None
             max_dum_weight = max(dum['weight'] for dum in self.lta_data['dums'])
-            num_partials = len(partial_weights)
-            smallest_partial_weight = min(w for w in partial_weights if w > 0) if any(w > 0 for w in partial_weights) else 0
-            is_exception_case = (
-                num_partials in (2, 3)
-                and smallest_partial_weight > 0
-                and smallest_partial_weight < max_dum_weight
-            )
+            small_partial_indices = [
+                i for i, w in enumerate(partial_weights)
+                if w > 0 and w < max_dum_weight
+            ]
+            is_exception_case = len(small_partial_indices) > 0
+            small_partial_nums_set = [i + 1 for i in small_partial_indices]
 
-            if is_exception_case:
+            # For distribution: single small partial → use exception mode; multiple → normal mode
+            if is_exception_case and len(small_partial_indices) == 1:
+                single_pnum = small_partial_nums_set[0]
                 try:
-                    smallest_partial_positions_str = self.smallest_partial_positions_var.get().strip()
-                    if smallest_partial_positions_str:
-                        smallest_partial_positions = int(smallest_partial_positions_str)
-                        # Find which partial is the smallest
-                        smallest_partial_weight = min(w for w in partial_weights if w > 0)
-                        for idx, weight in enumerate(partial_weights):
-                            if weight == smallest_partial_weight:
-                                smallest_partial_idx = idx
-                                break
+                    if single_pnum in self.exception_partial_vars:
+                        pos_str = self.exception_partial_vars[single_pnum]['pos'].get().strip()
+                        if pos_str:
+                            smallest_partial_positions = int(pos_str)
+                            smallest_partial_idx = small_partial_indices[0]
                 except (ValueError, AttributeError):
-                    pass  # If not valid, ignore and use normal calculation
+                    pass  # If not valid, use normal calculation
             
             # Calculate DUM distribution automatically (with exception case parameters)
             distribution = self._calculate_dum_distribution(partial_weights, smallest_partial_idx, smallest_partial_positions)
@@ -980,14 +1106,15 @@ class PartialConfigDialog:
             # Build partials configuration using calculated distribution
             for idx, form_data in enumerate(self.partial_forms):
                 partial_num = form_data['partial_number']
-                
+                is_small_partial = partial_num in small_partial_nums_set
+
                 # Validate required fields
                 weight = form_data['weight_var'].get().strip()
                 ds_serie_full = form_data['ds_serie_var'].get().strip()
                 location = form_data['location_var'].get().strip()
                 
-                # Exception partial doesn't need Location (handled at airport), but DS Série IS required
-                if is_exception_case and idx == smallest_partial_idx:
+                # Exception partials don't need Location (handled at airport), but DS Série IS required
+                if is_exception_case and is_small_partial:
                     if not all([weight, ds_serie_full]):
                         messagebox.showerror(
                             "Validation",
@@ -1017,8 +1144,8 @@ class PartialConfigDialog:
                     ds_serie = ''
                     ds_cle = ''
                 
-                # Validate location (skip for exception partial)
-                if not (is_exception_case and idx == smallest_partial_idx):
+                # Validate location (skip for exception partials)
+                if not (is_exception_case and is_small_partial):
                     is_valid, err_msg = validate_location(location)
                     if not is_valid:
                         messagebox.showerror("Validation", f"Partiel {partial_num}: Lieu - {err_msg}")
@@ -1052,23 +1179,45 @@ class PartialConfigDialog:
                     })
                 
                 # Validate distribution has DUMs (exception partial has none - handled at airport)
-                if not selected_dums and not (is_exception_case and idx == smallest_partial_idx):
+                if not selected_dums and not (is_exception_case and is_small_partial):
                     messagebox.showerror(
                         "Validation",
                         f"Partiel {partial_num}: Aucun DUM assigné par distribution automatique"
                     )
                     return
                 
+                # For multi-smallest exception small partials: use user-filled positions
+                if is_exception_case and is_small_partial and len(small_partial_indices) > 1:
+                    vars_ = self.exception_partial_vars.get(partial_num, {})
+                    pos_str = vars_.get('pos', tk.StringVar()).get().strip() if vars_ else ''
+                    try:
+                        actual_positions = int(pos_str) if pos_str else partial_dist['positions']
+                    except (ValueError, TypeError):
+                        actual_positions = partial_dist['positions']
+                else:
+                    actual_positions = partial_dist['positions']
+
                 partials.append({
                     'partial_number': partial_num,
                     'weight': weight_float,
-                    'positions': partial_dist['positions'],
+                    'positions': actual_positions,
                     'ds_serie': ds_serie,
                     'ds_cle': ds_cle,
                     'loading_location': location,
                     'dums': selected_dums
                 })
             
+            # For multi-smallest exception: fix big partial positions =
+            # total_positions - sum(exception partial positions)
+            if is_exception_case and len(small_partial_indices) > 1:
+                total_exc_pos = sum(p['positions'] for p in partials if p['partial_number'] in small_partial_nums_set)
+                remaining_pos = self.lta_data['total_positions'] - total_exc_pos
+                big_parts = [p for p in partials if p['partial_number'] not in small_partial_nums_set]
+                big_total_w = sum(p['weight'] for p in big_parts) or 1.0
+                for p in partials:
+                    if p['partial_number'] not in small_partial_nums_set:
+                        p['positions'] = round(remaining_pos * p['weight'] / big_total_w)
+
             # Validate weight tolerance (allow 1% difference)
             weight_diff = abs(total_weight_check - self.lta_data['total_weight'])
             weight_tolerance = self.lta_data['total_weight'] * 0.01
@@ -1103,58 +1252,104 @@ class PartialConfigDialog:
                             'positions': dum['positions']
                         })
             
-            # Detect exception case: smallest partial < max DUM weight
-            # (means partial is a leftover complement of one DUM, not made of whole DUMs)
-            max_dum_weight = max(dum['weight'] for dum in self.lta_data['dums'])
-            num_partials = len(partial_weights)
-            smallest_partial_weight = min(w for w in partial_weights if w > 0) if any(w > 0 for w in partial_weights) else 0
-            is_exception_case = (
-                num_partials in (2, 3)
-                and smallest_partial_weight > 0
-                and smallest_partial_weight < max_dum_weight
-            )
-            
-            # For exception case, validate additional fields
-            smallest_partial_number = None
-            smallest_partial_positions = None
-            airport_reference = None
-            
+            # Detect exception case: any partial weight < max DUM weight
+            # (already computed above as small_partial_nums_set; re-confirm here for clarity)
+            # is_exception_case and small_partial_nums_set are already set above.
+
+            # For exception case, validate per-partial airport references and positions
+            exception_airport_refs = {}    # {str(partial_num): reference}
+            exception_positions_map = {}   # {str(partial_num): int}
+
             if is_exception_case:
-                # Find which partial is the smallest
-                for idx, weight in enumerate(partial_weights):
-                    if weight == smallest_partial_weight:
-                        smallest_partial_number = idx + 1
-                        break
-                
-                # Validate exception case fields
-                airport_reference = self.airport_reference_var.get().strip()
-                smallest_partial_positions_str = self.smallest_partial_positions_var.get().strip()
-                
-                if not airport_reference:
-                    messagebox.showerror(
-                        "Validation",
-                        "Cas d'exception détecté: Veuillez renseigner la référence créée à l'aéroport"
-                    )
-                    return
-                
-                if not smallest_partial_positions_str:
-                    messagebox.showerror(
-                        "Validation",
-                        "Cas d'exception détecté: Veuillez renseigner les positions du plus petit partiel"
-                    )
-                    return
-                
-                try:
-                    smallest_partial_positions = int(smallest_partial_positions_str)
-                    if smallest_partial_positions <= 0:
-                        raise ValueError("Positions must be positive")
-                except ValueError:
-                    messagebox.showerror(
-                        "Validation",
-                        "Positions du plus petit partiel: valeur invalide (doit être un nombre > 0)"
-                    )
-                    return
-            
+                for pnum in small_partial_nums_set:
+                    vars_ = self.exception_partial_vars.get(pnum, {})
+                    ref_val = vars_.get('ref', tk.StringVar()).get().strip() if vars_ else ''
+                    pos_str = vars_.get('pos', tk.StringVar()).get().strip() if vars_ else ''
+
+                    if not ref_val:
+                        messagebox.showerror(
+                            "Validation",
+                            f"Partiel {pnum} (exception): Veuillez renseigner la référence créée à l'aéroport"
+                        )
+                        return
+
+                    if not pos_str:
+                        messagebox.showerror(
+                            "Validation",
+                            f"Partiel {pnum} (exception): Veuillez renseigner les positions"
+                        )
+                        return
+
+                    try:
+                        pos_int = int(pos_str)
+                        if pos_int <= 0:
+                            raise ValueError("Positions must be positive")
+                    except ValueError:
+                        messagebox.showerror(
+                            "Validation",
+                            f"Partiel {pnum} (exception): Positions invalides (doit être un nombre > 0)"
+                        )
+                        return
+
+                    exception_airport_refs[str(pnum)] = ref_val
+                    exception_positions_map[str(pnum)] = pos_int
+
+            # Fix split DUM positions for multi-smallest exception case:
+            # - exception pieces → user-declared positions
+            # - big-partial pieces → total_DUM_orig_positions - sum(exception_user_positions)
+            # This ensures DUM-level positions are consistent with partial-level positions.
+            if is_exception_case and len(small_partial_indices) > 1 and exception_positions_map:
+                # Collect all split DUM pieces from partials
+                dum_pieces = {}
+                for p_idx, partial in enumerate(partials):
+                    for d_idx, dum in enumerate(partial['dums']):
+                        if dum['is_split']:
+                            dnum = dum['dum_number']
+                            if dnum not in dum_pieces:
+                                dum_pieces[dnum] = []
+                            dum_pieces[dnum].append({
+                                'partial_num': partial['partial_number'],
+                                'p_idx': p_idx,
+                                'd_idx': d_idx,
+                                'orig_pos': dum['positions'],
+                                'weight': dum['weight'],
+                            })
+
+                for dnum, pieces in dum_pieces.items():
+                    exc_pieces = [p for p in pieces if str(p['partial_num']) in exception_positions_map]
+                    if not exc_pieces:
+                        continue
+                    big_pieces = [p for p in pieces if str(p['partial_num']) not in exception_positions_map]
+                    total_orig = sum(p['orig_pos'] for p in pieces)
+                    exc_user_sum = sum(exception_positions_map[str(p['partial_num'])] for p in exc_pieces)
+                    remaining = total_orig - exc_user_sum
+
+                    # Correct partials DUM entries
+                    for p in exc_pieces:
+                        partials[p['p_idx']]['dums'][p['d_idx']]['positions'] = exception_positions_map[str(p['partial_num'])]
+                    if len(big_pieces) == 1:
+                        partials[big_pieces[0]['p_idx']]['dums'][big_pieces[0]['d_idx']]['positions'] = remaining
+                    elif len(big_pieces) > 1:
+                        big_total_w = sum(p['weight'] for p in big_pieces) or 1.0
+                        for p in big_pieces:
+                            partials[p['p_idx']]['dums'][p['d_idx']]['positions'] = round(
+                                remaining * p['weight'] / big_total_w
+                            )
+
+                    # Correct split_dums entries (same values)
+                    dum_str = str(dnum)
+                    if dum_str in split_dums:
+                        big_total_w_s = sum(p['weight'] for p in big_pieces) or 1.0
+                        for s in split_dums[dum_str]['splits']:
+                            if str(s['partial']) in exception_positions_map:
+                                s['positions'] = exception_positions_map[str(s['partial'])]
+                            elif len(big_pieces) == 1:
+                                s['positions'] = remaining
+                            else:
+                                piece = next((p for p in big_pieces if p['partial_num'] == s['partial']), None)
+                                if piece:
+                                    s['positions'] = round(remaining * piece['weight'] / big_total_w_s)
+
             # Build config
             config = {
                 'lta_reference': self._get_lta_reference(),
@@ -1164,12 +1359,18 @@ class PartialConfigDialog:
                 'partials': partials,
                 'split_dums': split_dums
             }
-            
+
             # Add exception case fields if applicable
             if is_exception_case:
-                config['smallest_partial_number'] = smallest_partial_number
-                config['smallest_partial_positions'] = smallest_partial_positions
-                config['smallest_partial_airport_reference'] = airport_reference
+                first_pnum = sorted(small_partial_nums_set)[0]
+                # New multi-partial fields
+                config['smallest_partial_numbers'] = sorted(small_partial_nums_set)
+                config['smallest_partial_airport_references'] = exception_airport_refs
+                config['smallest_partial_positions_map'] = exception_positions_map
+                # Backward-compat single-value fields (first small partial)
+                config['smallest_partial_number'] = first_pnum
+                config['smallest_partial_airport_reference'] = exception_airport_refs.get(str(first_pnum), '')
+                config['smallest_partial_positions'] = exception_positions_map.get(str(first_pnum), 0)
             
             # Save config
             success = save_lta_partial_config(

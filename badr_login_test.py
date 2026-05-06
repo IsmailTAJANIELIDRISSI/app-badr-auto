@@ -3213,62 +3213,73 @@ def get_dum_preapurement_lots(dum_number, partial_config, validated_lta_referenc
     
     dum_str = str(dum_number)
     
-    # Check for exception case
-    partials_count = len(partial_config.get('partials', []))
-    is_exception = partial_config.get('partial_type') == 'exception' and partials_count in (2, 3)
-    smallest_partial_num = partial_config.get('smallest_partial_number')
-    airport_reference = partial_config.get('smallest_partial_airport_reference')
-    smallest_partial_positions = partial_config.get('smallest_partial_positions', 0)
-    
-    # Exception case: DUM may have multiple Préapurement lots (depends on how the split spans partials).
-    # We treat:
-    # - Lot 1: airport/smallest-partial DS MEAD
-    # - Remaining lots: depotage lots created from `partial_config['split_dums'][dum_str]['splits']`
-    #   (excluding the smallest partial piece).
-    # This keeps references consistent with Phase 1 lot creation.
-    if is_exception:
-        # The split DUM in exception case is whichever DUM key appears in split_dums
-        exception_split_dums = list(partial_config.get('split_dums', {}).keys())
-        exception_split_dum_str = exception_split_dums[0] if exception_split_dums else None
-        
-        if exception_split_dum_str and dum_str == exception_split_dum_str:
-            lots = []
+    # Check for exception case — support both old (single) and new (multi) config format
+    is_exception = partial_config.get('partial_type') == 'exception'
 
-            # Lot 1: smallest partial (airport DS MEAD)
-            smallest_partial = find_partial_by_number(partial_config, smallest_partial_num)
-            if smallest_partial:
-                lots.append({
-                    'reference': airport_reference,  # Exact airport reference (no suffix)
-                    'ds_serie': smallest_partial['ds_serie'],
-                    'ds_cle': smallest_partial['ds_cle'],
-                    'split_id': None,
-                    'weight': smallest_partial.get('weight', 0),
-                    'positions': smallest_partial_positions,
-                    'is_exception_smallest': True  # Flag for special handling (DS MEAD type)
-                })
+    # Read multi-partial exception fields (new format)
+    smallest_partial_nums_list = partial_config.get('smallest_partial_numbers')
+    if not smallest_partial_nums_list:
+        legacy_num = partial_config.get('smallest_partial_number')
+        smallest_partial_nums_list = [legacy_num] if legacy_num is not None else []
 
-            # Remaining lots: depotage lots from split pieces of this DUM
-            split_info = partial_config.get('split_dums', {}).get(dum_str, {})
+    airport_refs_dict = partial_config.get('smallest_partial_airport_references', {})
+    if not airport_refs_dict:
+        legacy_ref = partial_config.get('smallest_partial_airport_reference')
+        if legacy_ref and smallest_partial_nums_list:
+            airport_refs_dict = {str(smallest_partial_nums_list[0]): legacy_ref}
+
+    positions_map = partial_config.get('smallest_partial_positions_map', {})
+    if not positions_map:
+        legacy_pos = partial_config.get('smallest_partial_positions', 0)
+        if legacy_pos and smallest_partial_nums_list:
+            positions_map = {str(smallest_partial_nums_list[0]): legacy_pos}
+
+    # Exception case: any split DUM that has a piece belonging to a small partial
+    # gets a DS MEAD lot (one per small partial piece) plus Depotage lots for big partial pieces.
+    if is_exception and smallest_partial_nums_list:
+        split_dums_cfg = partial_config.get('split_dums', {})
+
+        if dum_str in split_dums_cfg:
+            split_info = split_dums_cfg[dum_str]
             split_pieces = split_info.get('splits', []) if isinstance(split_info, dict) else []
 
-            # If no split metadata is found, fall back to legacy 2-lot behavior.
-            if not split_pieces:
+            # Find which small partial owns a piece of this DUM (for the Depotage reference base)
+            small_piece = next(
+                (s for s in split_pieces if s.get('partial') in smallest_partial_nums_list),
+                None
+            )
+            # If no split metadata, fall back to legacy 2-lot behavior
+            if not split_pieces or small_piece is None:
+                # Legacy: create single DS MEAD lot + single Depotage lot
+                legacy_pnum = smallest_partial_nums_list[0]
+                legacy_ref = airport_refs_dict.get(str(legacy_pnum), '')
+                legacy_pos = positions_map.get(str(legacy_pnum), 0)
+                smallest_partial = find_partial_by_number(partial_config, legacy_pnum)
+                lots = []
+                if smallest_partial:
+                    lots.append({
+                        'reference': legacy_ref,
+                        'ds_serie': smallest_partial['ds_serie'],
+                        'ds_cle': smallest_partial['ds_cle'],
+                        'split_id': None,
+                        'weight': smallest_partial.get('weight', 0),
+                        'positions': legacy_pos,
+                        'is_exception_smallest': True
+                    })
                 for partial in partial_config.get('partials', []):
-                    if partial.get('partial_number') == smallest_partial_num:
+                    if partial.get('partial_number') == legacy_pnum:
                         continue
                     for dum in partial.get('dums', []):
-                        if str(dum.get('dum_number')) == exception_split_dum_str:
-                            signed_series = partial.get('signed_series', '')
-                            if signed_series and ' ' in signed_series:
-                                parts = signed_series.split()
-                                ds_serie = parts[0]
-                                ds_cle = parts[1]
+                        if str(dum.get('dum_number')) == dum_str:
+                            signed = partial.get('signed_series', '')
+                            if signed and ' ' in signed:
+                                s_parts = signed.split()
+                                ds_serie, ds_cle = s_parts[0], s_parts[1]
                             else:
                                 ds_serie = partial['ds_serie']
                                 ds_cle = partial['ds_cle']
-
                             lots.append({
-                                'reference': f"{airport_reference}/{exception_split_dum_str}",  # airport ref + /DUM
+                                'reference': f"{legacy_ref}/{dum_str}",
                                 'ds_serie': ds_serie,
                                 'ds_cle': ds_cle,
                                 'split_id': None,
@@ -3281,44 +3292,57 @@ def get_dum_preapurement_lots(dum_number, partial_config, validated_lta_referenc
                         break
                 return lots
 
+            # --- General multi-smallest logic ---
+            # Airport reference base for Depotage lots = airport ref of the co-split small partial
+            airport_ref_for_dum = airport_refs_dict.get(str(small_piece['partial']), validated_lta_reference)
+            lots = []
+
             for split in split_pieces:
                 split_partial_num = split.get('partial')
-                # Exclude smallest-partial piece: it is represented by Lot 1
-                if split_partial_num == smallest_partial_num:
-                    continue
-
-                partial_data = find_partial_by_number(partial_config, split_partial_num)
-                if not partial_data:
-                    continue
-
-                signed_series = partial_data.get('signed_series', '')
-                if signed_series and ' ' in signed_series:
-                    parts = signed_series.split()
-                    ds_serie = parts[0]
-                    ds_cle = parts[1]
+                if split_partial_num in smallest_partial_nums_list:
+                    # DS MEAD lot for this small partial
+                    small_partial_data = find_partial_by_number(partial_config, split_partial_num)
+                    if small_partial_data:
+                        pref = airport_refs_dict.get(str(split_partial_num), '')
+                        pos = positions_map.get(str(split_partial_num), split.get('positions', 0))
+                        lots.append({
+                            'reference': pref,
+                            'ds_serie': small_partial_data['ds_serie'],
+                            'ds_cle': small_partial_data['ds_cle'],
+                            'split_id': None,
+                            'weight': split.get('weight', 0),
+                            'positions': pos,
+                            'is_exception_smallest': True
+                        })
                 else:
-                    ds_serie = partial_data['ds_serie']
-                    ds_cle = partial_data['ds_cle']
-
-                split_id = split.get('split_id', '')
-                if split_id:
-                    reference = f"{airport_reference}/{split_id}"
-                else:
-                    # Legacy completion reference
-                    reference = f"{airport_reference}/{dum_str}"
-
-                lots.append({
-                    'reference': reference,
-                    'ds_serie': ds_serie,
-                    'ds_cle': ds_cle,
-                    'split_id': split_id if split_id else None,
-                    'weight': split.get('weight', 0),
-                    'positions': split.get('positions', 0)
-                })
+                    # Depotage lot for big partial piece
+                    partial_data = find_partial_by_number(partial_config, split_partial_num)
+                    if not partial_data:
+                        continue
+                    signed = partial_data.get('signed_series', '')
+                    if signed and ' ' in signed:
+                        s_parts = signed.split()
+                        ds_serie, ds_cle = s_parts[0], s_parts[1]
+                    else:
+                        ds_serie = partial_data['ds_serie']
+                        ds_cle = partial_data['ds_cle']
+                    split_id = split.get('split_id', '')
+                    reference = (
+                        f"{airport_ref_for_dum}/{split_id}"
+                        if split_id else f"{airport_ref_for_dum}/{dum_str}"
+                    )
+                    lots.append({
+                        'reference': reference,
+                        'ds_serie': ds_serie,
+                        'ds_cle': ds_cle,
+                        'split_id': split_id if split_id else None,
+                        'weight': split.get('weight', 0),
+                        'positions': split.get('positions', 0)
+                    })
 
             return lots
     
-    # Check if DUM is split
+    # Check if DUM is split (non-exception case)
     if dum_str in partial_config.get('split_dums', {}):
         # Split DUM - multiple lots (one for each split)
         split_info = partial_config['split_dums'][dum_str]
@@ -8726,23 +8750,32 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                         # Re-remplir les champs communs (Type DS, Bureau, Régime, Année, Série, Clé)
                         print(f"         📝 Re-remplissage des champs pour {lot_label}...")
                         
-                        # Type DS "Depotage(05)"
+                        # Type DS — check current lot flag (DS MEAD for exception partials, Depotage otherwise)
+                        use_mead_for_this_lot = current_lot.get('is_exception_smallest', False)
                         try:
                             type_ds_trigger = wait.until(
                                 EC.element_to_be_clickable((By.CSS_SELECTOR, "div#mainTab\\:form3\\:typeDsId div.ui-selectonemenu-trigger"))
                             )
                             type_ds_trigger.click()
                             time.sleep(1)
-                            depotage_option = wait.until(
-                                EC.element_to_be_clickable((By.XPATH, "//li[@data-label='Depotage(05)']"))
-                            )
-                            depotage_option.click()
+                            if use_mead_for_this_lot:
+                                ds_mead_opt = wait.until(
+                                    EC.element_to_be_clickable((By.XPATH, "//li[@data-label='DS MEAD(03)']"))
+                                )
+                                ds_mead_opt.click()
+                                print(f"         ✓ Type DS: DS MEAD(03) (lot exception)")
+                            else:
+                                depotage_option = wait.until(
+                                    EC.element_to_be_clickable((By.XPATH, "//li[@data-label='Depotage(05)']"))
+                                )
+                                depotage_option.click()
                             time.sleep(1)
                         except:
                             # Fallback JavaScript
-                            driver.execute_script("""
+                            ds_value = '03' if use_mead_for_this_lot else '05'
+                            driver.execute_script(f"""
                                 var select = document.getElementById('mainTab:form3:typeDsId_input');
-                                if (select) { select.value = '05'; select.dispatchEvent(new Event('change', { bubbles: true })); }
+                                if (select) {{ select.value = '{ds_value}'; select.dispatchEvent(new Event('change', {{ bubbles: true }})); }}
                             """)
                             time.sleep(1)
                         
@@ -11426,31 +11459,35 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
             # Check if exception case
             partial_type = partial_config.get('partial_type', 'normal')
             partials_count = len(partial_config.get('partials', []))
-            # Guardrail: exception workflow is supported for 2 or 3 partials.
-            if partial_type == 'exception' and partials_count not in (2, 3):
-                print(f"\n   ℹ️  Exception ignorée: {partials_count} partiels détectés (mode normal forcé)")
-                partial_type = 'normal'
-            smallest_partial_num = partial_config.get('smallest_partial_number')
+            # Support both new (list) and legacy (single) smallest-partial config format
+            smallest_partial_nums_cfg = partial_config.get('smallest_partial_numbers')
+            if not smallest_partial_nums_cfg:
+                legacy_snum = partial_config.get('smallest_partial_number')
+                smallest_partial_nums_cfg = [legacy_snum] if legacy_snum is not None else []
             
             if partial_type == 'exception':
                 print(f"\n⚠️  CAS D'EXCEPTION DÉTECTÉ")
-                print(f"   Plus petit partiel: {smallest_partial_num}")
-                print(f"   Référence aéroport: {partial_config.get('smallest_partial_airport_reference')}")
-                print(f"   Positions plus petit partiel: {partial_config.get('smallest_partial_positions')}")
-                print(f"   ℹ️  Un seul état de dépotage sera créé (plus grand partiel)")
+                print(f"   Partiels exception (DS MEAD, pas d'ED): {smallest_partial_nums_cfg}")
+                print(f"   Références aéroport: {partial_config.get('smallest_partial_airport_references', partial_config.get('smallest_partial_airport_reference'))}")
+                print(f"   ℹ️  Seuls les grands partiels recevront un état de dépotage")
             
             # Process each partial
             all_success = True
             for partial in partial_config['partials']:
                 partial_num = partial['partial_number']
                 
-                # Skip smallest partial in exception case (already cleared at airport)
-                if partial_type == 'exception' and partial_num == smallest_partial_num:
+                # Skip all exception (airport-cleared) partials in exception case
+                if partial_type == 'exception' and partial_num in smallest_partial_nums_cfg:
                     print(f"\n{'='*70}")
-                    print(f"⏭️  PARTIEL {partial_num} IGNORÉ (cas d'exception)")
+                    print(f"⏭️  PARTIEL {partial_num} IGNORÉ (cas d'exception — dédouané à l'aéroport)")
                     print(f"{'='*70}")
                     print(f"   Poids: {partial['weight']} kg")
-                    print(f"   Positions: {partial_config.get('smallest_partial_positions')}")
+                    pos_map = partial_config.get('smallest_partial_positions_map', {})
+                    pos_val = pos_map.get(str(partial_num), partial_config.get('smallest_partial_positions', '?'))
+                    print(f"   Positions: {pos_val}")
+                    ref_map = partial_config.get('smallest_partial_airport_references', {})
+                    ref_val = ref_map.get(str(partial_num), partial_config.get('smallest_partial_airport_reference', '?'))
+                    print(f"   Référence aéroport: {ref_val}")
                     print(f"   DS: {partial['ds_serie']} {partial['ds_cle']}")
                     print(f"   ℹ️  Déjà dédouané à l'aéroport - Pas d'état de dépotage requis")
                     continue
@@ -11463,9 +11500,9 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
                 print(f"   DS: {partial['ds_serie']} {partial['ds_cle']}")
                 print(f"   DUMs: {[d['dum_number'] for d in partial['dums']]}")
                 
-                # For exception case, adjust DUM 1 to exclude smallest partial
+                # For exception case, adjust DUM 1 to exclude smallest partials
                 if partial_type == 'exception':
-                    print(f"   ⚠️  Cas d'exception: DUM 1 ajusté (partiel {smallest_partial_num} déduit)")
+                    print(f"   ⚠️  Cas d'exception: DUM 1 ajusté (partiels {smallest_partial_nums_cfg} déduits)")
                 
                 # Create ED for this partial
                 if not create_etat_depotage_partial(driver, lta_folder_path, partial_config, partial_num):
