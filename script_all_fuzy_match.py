@@ -365,6 +365,69 @@ CRITICAL INSTRUCTIONS:
         }
 
 
+def extract_vision_meta(pdf_path):
+    """
+    Scanned-PDF fallback: send raw PDF bytes to Gemini Vision to extract the shipper name.
+    Returns the shipper name string, or None on failure.
+    """
+    global GENAI_CLIENT, GENAI_MODEL, USE_NEW_API
+    if not USE_NEW_API or not GENAI_CLIENT:
+        logger.info("Gemini Vision ignoré — client non initialisé")
+        return None
+
+    import base64
+    with open(pdf_path, "rb") as f:
+        pdf_base64 = base64.b64encode(f.read()).decode("utf-8")
+
+    known = KNOWN_COMPANIES[:25]
+    prompt = f"""This is an Air Waybill (MAWB) document.
+
+Extract the SHIPPER NAME from the \"Shipper's Name and Address\" box (top-left of the form).
+- Return ONLY the company name (no address, no street, no phone, no email).
+- Fix obvious OCR errors (\"C0\" -> \"CO\", \"LOGIGHCS\" -> \"LOGISTICS\").
+- NEVER return \"MED AFRICA LOGISTICS\" — that is the consignee.
+- If it closely matches a known company below, return the canonical form.
+Known companies: {json.dumps(known)}
+
+Respond in this EXACT JSON (no markdown fences):
+{{"shipper_name": "COMPANY NAME OR null"}}"""
+
+    seen = set()
+    model_names = []
+    for m in ((GENAI_MODEL,) + GEMINI_MODEL_FALLBACKS):
+        if m and m not in seen:
+            seen.add(m)
+            model_names.append(m)
+
+    for model_name in model_names:
+        try:
+            logger.info(f"PDF scanné — appel Gemini Vision ({model_name})…")
+            response = GENAI_CLIENT.models.generate_content(
+                model=model_name,
+                contents=[{
+                    "parts": [
+                        {"inline_data": {"mime_type": "application/pdf", "data": pdf_base64}},
+                        {"text": prompt},
+                    ]
+                }]
+            )
+            raw = (_gemini_response_text(response) or "").strip()
+            if raw.startswith("```"):
+                start = raw.find("{")
+                end = raw.rfind("}") + 1
+                raw = raw[start:end] if start != -1 else raw
+            parsed = json.loads(raw)
+            shipper_name = parsed.get("shipper_name") or None
+            logger.info(f"Gemini Vision résultat: expéditeur=\"{shipper_name}\"")
+            return shipper_name
+        except Exception as e:
+            logger.warning(f"Gemini Vision {model_name} échoué: {e}")
+            continue
+
+    logger.warning("Tous les modèles Gemini Vision ont échoué")
+    return None
+
+
 def is_pdf_text_based(pdf_path):
     """Determine if PDF contains extractable text or is image-based"""
     try:
@@ -1301,6 +1364,17 @@ def extract_shipper_name(pdf_path):
                 # Use the exact same OCR methods as image-based PDFs
                 extracted_candidates = extract_shipper_name_ocr(pdf_path)
         else:
+            logger.info("PDF identified as image-based - trying Gemini Vision first")
+            # ── Gemini Vision (mirrors extractVisionMeta in mawbShipperExtract.js) ──
+            if setup_gemini_api():
+                vision_shipper = extract_vision_meta(pdf_path)
+                if vision_shipper:
+                    logger.info(f"Gemini Vision identified shipper: {vision_shipper}")
+                    cleaned = clean_company_name(vision_shipper)
+                    add_company_to_database(cleaned)
+                    return cleaned
+                logger.info("Gemini Vision returned no shipper — falling back to OCR")
+            # ── OCR fallback ─────────────────────────────────────────────────────
             logger.info("PDF identified as image-based - using OCR methods")
             if is_bloc_pdf:
                 with open(pdf_path, 'rb') as file:
