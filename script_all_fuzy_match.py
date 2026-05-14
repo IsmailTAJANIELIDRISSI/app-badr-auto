@@ -2667,6 +2667,20 @@ def create_missing_files_error(dir_path, directory_name, missing_files, expected
     except Exception as e:
         print(f"      Error creating missing files error report: {e}")
 
+def _strip_arabic(text):
+    """Remove Arabic/RTL characters from a string, keeping only the Latin portion.
+    Example: 'EnesYaziciogluعندبقال اترك...' -> 'EnesYazicioglu'
+    """
+    if not text or not isinstance(text, str):
+        return text
+    import re
+    match = re.search(r'[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF\u200F\u200E]', text)
+    if match:
+        cleaned = text[:match.start()].strip()
+        return cleaned if cleaned else text
+    return text
+
+
 def validate_and_correct_article_values(file_path):
     """Validate and correct article values to ensure no value exceeds 499 MAD
     
@@ -2692,7 +2706,20 @@ def validate_and_correct_article_values(file_path):
         
         if not value_col:
             return True  # Column not found, skip validation
-        
+
+        # Strip Arabic/RTL characters from all string cells
+        arabic_cells_cleaned = 0
+        for row_idx in range(1, ws.max_row + 1):
+            for col_idx in range(1, ws.max_column + 1):
+                cell = ws.cell(row_idx, col_idx)
+                if isinstance(cell.value, str):
+                    cleaned = _strip_arabic(cell.value)
+                    if cleaned != cell.value:
+                        cell.value = cleaned
+                        arabic_cells_cleaned += 1
+        if arabic_cells_cleaned:
+            print(f"      🧹 Cleaned {arabic_cells_cleaned} cell(s) with Arabic/RTL text")
+
         # Collect all article values (skip header row 1)
         articles = []
         for row_idx in range(2, ws.max_row + 1):
@@ -2716,6 +2743,9 @@ def validate_and_correct_article_values(file_path):
                 continue
         
         if not articles:
+            if arabic_cells_cleaned:
+                wb.save(file_path)
+                wb.close()
             return True  # No articles to process
         
         # Calculate total before correction
@@ -2726,6 +2756,9 @@ def validate_and_correct_article_values(file_path):
         low_value_articles = [art for art in articles if art['value'] <= 150 and art['value'] > 0]
         
         if not exceeding_articles:
+            if arabic_cells_cleaned:
+                wb.save(file_path)
+                wb.close()
             return True  # No corrections needed
         
         print(f"      ⚠️  Détection: {len(exceeding_articles)} article(s) avec valeur > 499 MAD")
