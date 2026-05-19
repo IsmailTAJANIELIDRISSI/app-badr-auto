@@ -2668,16 +2668,23 @@ def create_missing_files_error(dir_path, directory_name, missing_files, expected
         print(f"      Error creating missing files error report: {e}")
 
 def _strip_arabic(text):
-    """Remove Arabic/RTL characters from a string, keeping only the Latin portion.
-    Example: 'EnesYaziciogluعندبقال اترك...' -> 'EnesYazicioglu'
+    """Remove Arabic/RTL garbage that is glued directly onto a Latin name (no space separator).
+    Only strips when Arabic starts WITHOUT a preceding space — preserving legitimate
+    bilingual names like 'hanane بولغا' where the Arabic word is space-separated.
+
+    Strip:  'EnesYaziciogluعندبقال اترك...' -> 'EnesYazicioglu'
+    Keep:   'hanane بولغا'                  -> 'hanane بولغا'  (unchanged)
     """
     if not text or not isinstance(text, str):
         return text
     import re
     match = re.search(r'[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF\u200F\u200E]', text)
     if match:
-        cleaned = text[:match.start()].strip()
-        return cleaned if cleaned else text
+        pos = match.start()
+        # Only strip if the Arabic character is glued directly to the preceding Latin text
+        if pos > 0 and text[pos - 1] != ' ':
+            cleaned = text[:pos].strip()
+            return cleaned if cleaned else text
     return text
 
 
