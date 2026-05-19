@@ -447,51 +447,196 @@ def start_fresh_edge():
     print("✓ Edge lancé avec un profil vierge")
     return profile_path, debug_port
 
+def _get_edge_browser_version():
+    """Detect installed Edge browser major version (returns int or None)"""
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                             r"Software\Microsoft\Edge\BLBeacon")
+        version_str, _ = winreg.QueryValueEx(key, "version")
+        winreg.CloseKey(key)
+        return int(version_str.split(".")[0])
+    except Exception:
+        pass
+    # Fallback: query msedge.exe directly
+    try:
+        result = subprocess.run(
+            ["powershell", "-Command",
+             "(Get-Item 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe').VersionInfo.FileVersion"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return int(result.stdout.strip().split(".")[0])
+    except Exception:
+        pass
+    return None
+
+
+def _get_driver_version(driver_exe):
+    """Return major version of an msedgedriver.exe (int or None)"""
+    try:
+        result = subprocess.run([driver_exe, "--version"],
+                                capture_output=True, text=True, timeout=5)
+        # Output: "MSEdgeDriver 146.0.xxxx.xx (hash)"
+        import re
+        m = re.search(r'MSEdgeDriver\s+(\d+)', result.stdout)
+        if m:
+            return int(m.group(1))
+    except Exception:
+        pass
+    return None
+
+
+_DRIVER_CACHE_DIR = r"C:\edgedriver_win64"
+
+
+def _find_bundled_driver():
+    """Find msedgedriver.exe bundled inside the Edge installation directory (no internet needed)."""
+    import glob
+    for base in [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application",
+        r"C:\Program Files\Microsoft\Edge\Application",
+    ]:
+        matches = glob.glob(os.path.join(base, "*", "msedgedriver.exe"))
+        for path in sorted(matches, reverse=True):
+            if os.path.exists(path):
+                drv_ver = _get_driver_version(path)
+                print(f"   ✓ Driver intégré Edge trouvé (v{drv_ver}): {path}")
+                return path
+    return None
+
+
+def _find_cached_driver(browser_ver):
+    """Look for a previously saved versioned driver in the local cache dir (offline-safe)."""
+    if not browser_ver:
+        return None
+    versioned = os.path.join(_DRIVER_CACHE_DIR, f"msedgedriver_{browser_ver}.exe")
+    if os.path.exists(versioned):
+        print(f"   ✓ Driver en cache local (v{browser_ver}): {versioned}")
+        return versioned
+    return None
+
+
+def _save_to_cache(driver_path, browser_ver):
+    """Copy a freshly-downloaded driver to the versioned cache so it survives offline."""
+    if not browser_ver or not driver_path or not os.path.exists(driver_path):
+        return
+    try:
+        import shutil
+        os.makedirs(_DRIVER_CACHE_DIR, exist_ok=True)
+        dest = os.path.join(_DRIVER_CACHE_DIR, f"msedgedriver_{browser_ver}.exe")
+        if not os.path.exists(dest):
+            shutil.copy2(driver_path, dest)
+            print(f"   💾 Driver sauvegardé en cache local: {dest}")
+    except Exception:
+        pass
+
+
+def _auto_download_driver(browser_ver=None):
+    """Get the matching EdgeDriver — checks all offline sources first, then downloads."""
+    # 0. Driver bundled with Edge installation
+    path = _find_bundled_driver()
+    if path:
+        _save_to_cache(path, browser_ver)
+        return path
+
+    # 1. Local versioned cache (offline-safe — populated on previous successful run)
+    path = _find_cached_driver(browser_ver)
+    if path:
+        return path
+
+    # 2. webdriver-manager (needs internet)
+    try:
+        print("   📥 Tentative webdriver-manager...")
+        from webdriver_manager.microsoft import EdgeChromiumDriverManager
+        os.environ.setdefault('WDM_TIMEOUT', '30')
+        driver_path = EdgeChromiumDriverManager().install()
+        if driver_path and os.path.exists(driver_path):
+            print(f"   ✓ Driver téléchargé via webdriver-manager: {driver_path}")
+            _save_to_cache(driver_path, browser_ver)
+            return driver_path
+    except Exception as e:
+        print(f"   ⚠️  Échec webdriver-manager: {str(e)[:150]}")
+
+    # 3. Selenium Manager (Rust binary bundled with Selenium 4.6+, different CDN)
+    try:
+        print("   📥 Tentative Selenium Manager (intégré Selenium)...")
+        from selenium.webdriver.common.driver_finder import DriverFinder
+        from selenium.webdriver.edge.service import Service as _EdgeService
+        from selenium.webdriver.edge.options import Options as _EdgeOptions
+        _tmp_service = _EdgeService()
+        _tmp_opts = _EdgeOptions()
+        finder = DriverFinder(_tmp_service, _tmp_opts)
+        driver_path = finder.get_driver_path()
+        if driver_path and os.path.exists(driver_path):
+            print(f"   ✓ Driver téléchargé via Selenium Manager: {driver_path}")
+            _save_to_cache(driver_path, browser_ver)
+            return driver_path
+    except Exception as e:
+        print(f"   ⚠️  Échec Selenium Manager: {str(e)[:150]}")
+
+    return None
+
+
 def _get_edge_driver_path():
-    """Get Edge driver path with caching and fallback strategy"""
+    """Get Edge driver path — always ensures version matches the installed Edge browser"""
     global _CACHED_DRIVER_PATH
+
+    # Detect current Edge browser major version once
+    browser_ver = _get_edge_browser_version()
+    if browser_ver:
+        print(f"   🌐 Edge browser détecté: version {browser_ver}")
     
-    # Return cached path if available
-    if _CACHED_DRIVER_PATH:
-        if os.path.exists(_CACHED_DRIVER_PATH):
+    # Return cached path only if it still matches current browser version
+    if _CACHED_DRIVER_PATH and os.path.exists(_CACHED_DRIVER_PATH):
+        cached_ver = _get_driver_version(_CACHED_DRIVER_PATH)
+        if browser_ver is None or cached_ver == browser_ver:
             return _CACHED_DRIVER_PATH
-    
-    # Strategy 1: Try manual driver path from .env (PRIORITÉ)
-    if DRIVER_PATH and os.path.exists(DRIVER_PATH):
-        print(f"   ✓ Utilisation driver manuel: {DRIVER_PATH}")
-        _CACHED_DRIVER_PATH = DRIVER_PATH
-        return DRIVER_PATH
-    
-    # Strategy 2: Search for msedgedriver.exe in common locations
-    common_paths = [
+        print(f"   ⚠️  Driver en cache (v{cached_ver}) incompatible avec Edge v{browser_ver} — re-téléchargement...")
+        _CACHED_DRIVER_PATH = None
+
+    # Strategy 1: Try all offline + online driver sources
+    driver_path = _auto_download_driver(browser_ver)
+    if driver_path:
+        _CACHED_DRIVER_PATH = driver_path
+        return driver_path
+
+    # Strategy 2: Check manual path from .env — only accept if versions match
+    candidates = []
+    if DRIVER_PATH:
+        candidates.append(DRIVER_PATH)
+    candidates += [
+        r"C:\edgedriver_win64\msedgedriver.exe",
         r"C:\Users\pc\Downloads\edgedriver_win64\msedgedriver.exe",
         r"C:\WebDriver\msedgedriver.exe",
         os.path.join(os.getcwd(), "msedgedriver.exe"),
-        os.path.join(os.path.expanduser("~"), "Downloads", "msedgedriver.exe")
+        os.path.join(os.path.expanduser("~"), "Downloads", "msedgedriver.exe"),
     ]
-    
-    for path in common_paths:
-        if os.path.exists(path):
-            print(f"   ✓ Driver trouvé: {path}")
-            _CACHED_DRIVER_PATH = path
-            return path
-    
-    # Strategy 3: Try webdriver-manager as last resort (offline fallback)
-    try:
-        print("   📥 Tentative téléchargement driver auto (webdriver-manager)...")
-        from webdriver_manager.microsoft import EdgeChromiumDriverManager
-        
-        # Set timeout for download
-        os.environ['WDM_TIMEOUT'] = '10'  # 10 seconds timeout
-        
-        driver_path = EdgeChromiumDriverManager().install()
-        if driver_path and os.path.exists(driver_path):
-            print(f"   ✓ Driver auto installé: {driver_path}")
-            _CACHED_DRIVER_PATH = driver_path
-            return driver_path
-    except Exception as e:
-        print(f"   ⚠️  Échec webdriver-manager: {str(e)[:100]}")
-    
+
+    last_resort = None
+    for path in candidates:
+        if not path or not os.path.exists(path):
+            continue
+        drv_ver = _get_driver_version(path)
+        if browser_ver and drv_ver and drv_ver != browser_ver:
+            print(f"   ⚠️  Driver v{drv_ver} ≠ Edge v{browser_ver}: {path}")
+            if last_resort is None:
+                last_resort = path  # remember as emergency fallback
+            continue
+        print(f"   ✓ Utilisation driver manuel: {path}")
+        _CACHED_DRIVER_PATH = path
+        return path
+
+    # Last resort: use mismatched driver with a clear warning rather than crash
+    if last_resort:
+        drv_ver = _get_driver_version(last_resort)
+        print(f"   ⚠️  DERNIER RECOURS — driver v{drv_ver} (Edge v{browser_ver}) : {last_resort}")
+        print(f"   ⚠️  Version incompatible. Téléchargez msedgedriver v{browser_ver} sur:")
+        print(f"   ⚠️  https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/")
+        print(f"   ⚠️  Placez-le dans: C:\\edgedriver_win64\\msedgedriver.exe")
+        _CACHED_DRIVER_PATH = last_resort
+        return last_resort
+
     print("   ❌ Aucun driver trouvé")
     return None
 
