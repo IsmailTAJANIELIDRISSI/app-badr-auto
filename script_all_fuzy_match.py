@@ -2269,6 +2269,20 @@ def validate_logical_values_from_summary(summary_file_path, directory):
                     val = ws.cell(row=row, column=col_indices['Total poid brute']).value
                     if val: total_poid_brute = float(str(val).replace(',', '.').strip())
                 
+                # Validate: no negative values
+                for val, label in [
+                    (total_value, 'Total Value'), (total_freight, 'Total freight'),
+                    (total_poid_net, 'Total poid net'), (total_poid_brute, 'Total poid brute')
+                ]:
+                    if val is not None and val < 0:
+                        errors.append({
+                            'source': 'summary_file',
+                            'sheet': sheet_name_str,
+                            'type': f'Valeur négative ({label})',
+                            'value': val
+                        })
+                        print(f"    ❌ {sheet_name_str}: {label} = {val} — NÉGATIF, ILLOGIQUE!")
+
                 # Validate: Freight <= Value
                 if total_freight and total_value:
                     if total_freight > total_value:
@@ -2373,7 +2387,18 @@ def validate_logical_values(generated_excel_path, directory):
         # Validate each DUM
         for dum in dum_data:
             dum_num = dum.get('dum_number', '?')
-            
+
+            # Check: no negative values
+            for field, label in [('P', 'P'), ('V', 'V (Valeur)'), ('P_NET', 'P,NET'), ('P_BRUT', 'P,BRUT'), ('Fret', 'Fret')]:
+                if field in dum and dum[field] < 0:
+                    errors.append({
+                        'source': 'generated_excel',
+                        'dum': dum_num,
+                        'type': f'Valeur négative ({label})',
+                        'value': dum[field]
+                    })
+                    print(f"    ❌ DUM {dum_num}: {label} = {dum[field]} — NÉGATIF, ILLOGIQUE!")
+
             # Check: Freight should be less than Value
             if 'Fret' in dum and 'V' in dum:
                 if dum['Fret'] > dum['V']:
@@ -3078,6 +3103,38 @@ def process_excel_file(file_path):
         import traceback
         traceback.print_exc()
 
+def create_missing_mawb_error(dir_path, directory_name):
+    """Create error report when no MAWB PDF or doc PDF is found in the folder."""
+    error_path = os.path.join(os.getcwd(), "!-------ERROR - Missing Files--------.txt")
+    try:
+        existing_content = ""
+        if os.path.exists(error_path):
+            with open(error_path, 'r', encoding='utf-8') as f:
+                existing_content = f.read()
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        report = f"\n{'='*60}\n"
+        report += f"❌ ERREUR: DOCUMENT MAWB MANQUANT - {directory_name}\n"
+        report += f"Date: {timestamp}\n"
+        report += f"{'='*60}\n\n"
+        report += f"❌ TRAITEMENT ARRÊTÉ — Aucun fichier PDF MAWB trouvé!\n\n"
+        report += f"Le dossier '{directory_name}' ne contient aucun fichier:\n"
+        report += f"   • MAWB*.pdf  (ex: MAWB 123-45678901.pdf)\n"
+        report += f"   • doc*.pdf   (fichier alternatif accepté)\n\n"
+        report += f"Ce document est indispensable pour extraire le nom de l'expéditeur.\n\n"
+        report += f"🔧 ACTION REQUISE:\n"
+        report += f"   1. Ajouter le fichier PDF LTA/MAWB dans le dossier '{directory_name}'\n"
+        report += f"   2. Le nommer 'MAWB <numéro>.pdf' ou 'doc.pdf'\n"
+        report += f"   3. Relancer le script après correction\n\n"
+        report += f"ℹ️  NOTE: Aucun fichier n'a été modifié pour ce dossier.\n"
+        report += f"{'-'*60}\n"
+        with open(error_path, 'w', encoding='utf-8') as f:
+            f.write(existing_content + report)
+        logger.warning(f"Missing MAWB PDF error created for {directory_name}")
+        print(f"      ✓ Missing MAWB PDF error report created")
+    except Exception as e:
+        print(f"      Error creating missing MAWB error report: {e}")
+
+
 def process_directory(dir_path, directory_name):
     """Process a single directory with all operations"""
     print(f"\nProcessing directory: '{directory_name}'")
@@ -3087,7 +3144,16 @@ def process_directory(dir_path, directory_name):
     # PHASE 1: VALIDATION ONLY (no file modifications)
     # ===========================================================================
     print("\n  📋 PHASE 1: Validating all requirements...")
-    
+
+    # Step 1.0: Ensure a MAWB/doc PDF exists (required for shipper name extraction)
+    mawb_pdfs = glob.glob(os.path.join(dir_path, "MAWB*.pdf"))
+    doc_pdfs  = glob.glob(os.path.join(dir_path, "doc*.pdf"))
+    if not mawb_pdfs and not doc_pdfs:
+        create_missing_mawb_error(dir_path, directory_name)
+        print(f"  ⚠️  SKIPPING ALL PROCESSING for '{directory_name}' — aucun fichier PDF MAWB/doc trouvé")
+        print(f"  ⚠️  Ajoutez le fichier MAWB*.pdf ou doc*.pdf et relancez")
+        return
+
     # Step 1.1: Validate MAWB match (without renaming)
     mawb_number, mawb_validation_passed = rename_mawb_pdfs_and_create_bloc_note(dir_path, directory_name, skip_rename=True)
     
