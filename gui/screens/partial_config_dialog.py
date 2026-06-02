@@ -497,7 +497,31 @@ class PartialConfigDialog:
         weight_var.trace('w', lambda *args: self._update_distribution_preview())
         
         return frame
-    
+
+    def _detect_exception_partial_indices(self, partial_weights):
+        """
+        Detect which partials are true 'exception' (airport complement) by running
+        a normal sequential distribution and checking if a partial contains exactly
+        one DUM entry that is a split (no complete DUMs).
+
+        Rule: a partial is an exception ONLY if it contains a single split piece of
+        one DUM — it represents a 'complement' cleared at the airport (DS MEAD).
+        Any partial containing more than one DUM, or at least one complete DUM,
+        is a normal depotage partial and must NOT be treated as an exception.
+        """
+        if not partial_weights or not self.lta_data.get('dums'):
+            return []
+        try:
+            normal_dist = self._calculate_dum_distribution(partial_weights)
+            return [
+                idx for idx, entry in enumerate(normal_dist)
+                if len(entry.get('dums', [])) == 1 and entry['dums'][0].get('is_split', False)
+            ]
+        except Exception:
+            # Fallback to old weight-based criterion if distribution fails
+            max_dum_weight = max(dum['weight'] for dum in self.lta_data['dums'])
+            return [i for i, w in enumerate(partial_weights) if w > 0 and w < max_dum_weight]
+
     def _update_distribution_preview(self):
         """Update the DUM distribution preview for all partials"""
         try:
@@ -559,13 +583,11 @@ class PartialConfigDialog:
                     dums_text.configure(state='disabled')
                 return
 
-            # Detect exception case: any partial weight < max DUM weight
-            # (means that partial contains only a fraction of a DUM — cleared at airport)
-            max_dum_weight = max(dum['weight'] for dum in self.lta_data['dums'])
-            small_partial_indices = [
-                i for i, w in enumerate(partial_weights)
-                if w > 0 and w < max_dum_weight
-            ]
+            # Detect exception case: run a normal distribution to find partials that contain
+            # exactly one split DUM (airport complement — no complete DUM, no multiple DUMs).
+            # Using w < max_dum_weight was too broad and falsely flagged partials that
+            # contain a complete smaller DUM plus a split of a larger one.
+            small_partial_indices = self._detect_exception_partial_indices(partial_weights)
             is_exception_case = len(small_partial_indices) > 0
             small_partial_nums = [i + 1 for i in small_partial_indices]
 
@@ -1080,11 +1102,7 @@ class PartialConfigDialog:
             # Get exception case positions if provided (same logic as in _update_distribution_preview)
             smallest_partial_positions = None
             smallest_partial_idx = None
-            max_dum_weight = max(dum['weight'] for dum in self.lta_data['dums'])
-            small_partial_indices = [
-                i for i, w in enumerate(partial_weights)
-                if w > 0 and w < max_dum_weight
-            ]
+            small_partial_indices = self._detect_exception_partial_indices(partial_weights)
             is_exception_case = len(small_partial_indices) > 0
             small_partial_nums_set = [i + 1 for i in small_partial_indices]
 
