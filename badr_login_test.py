@@ -447,196 +447,51 @@ def start_fresh_edge():
     print("✓ Edge lancé avec un profil vierge")
     return profile_path, debug_port
 
-def _get_edge_browser_version():
-    """Detect installed Edge browser major version (returns int or None)"""
-    try:
-        import winreg
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                             r"Software\Microsoft\Edge\BLBeacon")
-        version_str, _ = winreg.QueryValueEx(key, "version")
-        winreg.CloseKey(key)
-        return int(version_str.split(".")[0])
-    except Exception:
-        pass
-    # Fallback: query msedge.exe directly
-    try:
-        result = subprocess.run(
-            ["powershell", "-Command",
-             "(Get-Item 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe').VersionInfo.FileVersion"],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return int(result.stdout.strip().split(".")[0])
-    except Exception:
-        pass
-    return None
-
-
-def _get_driver_version(driver_exe):
-    """Return major version of an msedgedriver.exe (int or None)"""
-    try:
-        result = subprocess.run([driver_exe, "--version"],
-                                capture_output=True, text=True, timeout=5)
-        # Output: "MSEdgeDriver 146.0.xxxx.xx (hash)"
-        import re
-        m = re.search(r'MSEdgeDriver\s+(\d+)', result.stdout)
-        if m:
-            return int(m.group(1))
-    except Exception:
-        pass
-    return None
-
-
-_DRIVER_CACHE_DIR = r"C:\edgedriver_win64"
-
-
-def _find_bundled_driver():
-    """Find msedgedriver.exe bundled inside the Edge installation directory (no internet needed)."""
-    import glob
-    for base in [
-        r"C:\Program Files (x86)\Microsoft\Edge\Application",
-        r"C:\Program Files\Microsoft\Edge\Application",
-    ]:
-        matches = glob.glob(os.path.join(base, "*", "msedgedriver.exe"))
-        for path in sorted(matches, reverse=True):
-            if os.path.exists(path):
-                drv_ver = _get_driver_version(path)
-                print(f"   ✓ Driver intégré Edge trouvé (v{drv_ver}): {path}")
-                return path
-    return None
-
-
-def _find_cached_driver(browser_ver):
-    """Look for a previously saved versioned driver in the local cache dir (offline-safe)."""
-    if not browser_ver:
-        return None
-    versioned = os.path.join(_DRIVER_CACHE_DIR, f"msedgedriver_{browser_ver}.exe")
-    if os.path.exists(versioned):
-        print(f"   ✓ Driver en cache local (v{browser_ver}): {versioned}")
-        return versioned
-    return None
-
-
-def _save_to_cache(driver_path, browser_ver):
-    """Copy a freshly-downloaded driver to the versioned cache so it survives offline."""
-    if not browser_ver or not driver_path or not os.path.exists(driver_path):
-        return
-    try:
-        import shutil
-        os.makedirs(_DRIVER_CACHE_DIR, exist_ok=True)
-        dest = os.path.join(_DRIVER_CACHE_DIR, f"msedgedriver_{browser_ver}.exe")
-        if not os.path.exists(dest):
-            shutil.copy2(driver_path, dest)
-            print(f"   💾 Driver sauvegardé en cache local: {dest}")
-    except Exception:
-        pass
-
-
-def _auto_download_driver(browser_ver=None):
-    """Get the matching EdgeDriver — checks all offline sources first, then downloads."""
-    # 0. Driver bundled with Edge installation
-    path = _find_bundled_driver()
-    if path:
-        _save_to_cache(path, browser_ver)
-        return path
-
-    # 1. Local versioned cache (offline-safe — populated on previous successful run)
-    path = _find_cached_driver(browser_ver)
-    if path:
-        return path
-
-    # 2. webdriver-manager (needs internet)
-    try:
-        print("   📥 Tentative webdriver-manager...")
-        from webdriver_manager.microsoft import EdgeChromiumDriverManager
-        os.environ.setdefault('WDM_TIMEOUT', '30')
-        driver_path = EdgeChromiumDriverManager().install()
-        if driver_path and os.path.exists(driver_path):
-            print(f"   ✓ Driver téléchargé via webdriver-manager: {driver_path}")
-            _save_to_cache(driver_path, browser_ver)
-            return driver_path
-    except Exception as e:
-        print(f"   ⚠️  Échec webdriver-manager: {str(e)[:150]}")
-
-    # 3. Selenium Manager (Rust binary bundled with Selenium 4.6+, different CDN)
-    try:
-        print("   📥 Tentative Selenium Manager (intégré Selenium)...")
-        from selenium.webdriver.common.driver_finder import DriverFinder
-        from selenium.webdriver.edge.service import Service as _EdgeService
-        from selenium.webdriver.edge.options import Options as _EdgeOptions
-        _tmp_service = _EdgeService()
-        _tmp_opts = _EdgeOptions()
-        finder = DriverFinder(_tmp_service, _tmp_opts)
-        driver_path = finder.get_driver_path()
-        if driver_path and os.path.exists(driver_path):
-            print(f"   ✓ Driver téléchargé via Selenium Manager: {driver_path}")
-            _save_to_cache(driver_path, browser_ver)
-            return driver_path
-    except Exception as e:
-        print(f"   ⚠️  Échec Selenium Manager: {str(e)[:150]}")
-
-    return None
-
-
 def _get_edge_driver_path():
-    """Get Edge driver path — always ensures version matches the installed Edge browser"""
+    """Get Edge driver path with caching and fallback strategy"""
     global _CACHED_DRIVER_PATH
-
-    # Detect current Edge browser major version once
-    browser_ver = _get_edge_browser_version()
-    if browser_ver:
-        print(f"   🌐 Edge browser détecté: version {browser_ver}")
     
-    # Return cached path only if it still matches current browser version
-    if _CACHED_DRIVER_PATH and os.path.exists(_CACHED_DRIVER_PATH):
-        cached_ver = _get_driver_version(_CACHED_DRIVER_PATH)
-        if browser_ver is None or cached_ver == browser_ver:
+    # Return cached path if available
+    if _CACHED_DRIVER_PATH:
+        if os.path.exists(_CACHED_DRIVER_PATH):
             return _CACHED_DRIVER_PATH
-        print(f"   ⚠️  Driver en cache (v{cached_ver}) incompatible avec Edge v{browser_ver} — re-téléchargement...")
-        _CACHED_DRIVER_PATH = None
-
-    # Strategy 1: Try all offline + online driver sources
-    driver_path = _auto_download_driver(browser_ver)
-    if driver_path:
-        _CACHED_DRIVER_PATH = driver_path
-        return driver_path
-
-    # Strategy 2: Check manual path from .env — only accept if versions match
-    candidates = []
-    if DRIVER_PATH:
-        candidates.append(DRIVER_PATH)
-    candidates += [
-        r"C:\edgedriver_win64\msedgedriver.exe",
+    
+    # Strategy 1: Try manual driver path from .env (PRIORITÉ)
+    if DRIVER_PATH and os.path.exists(DRIVER_PATH):
+        print(f"   ✓ Utilisation driver manuel: {DRIVER_PATH}")
+        _CACHED_DRIVER_PATH = DRIVER_PATH
+        return DRIVER_PATH
+    
+    # Strategy 2: Search for msedgedriver.exe in common locations
+    common_paths = [
         r"C:\Users\pc\Downloads\edgedriver_win64\msedgedriver.exe",
         r"C:\WebDriver\msedgedriver.exe",
         os.path.join(os.getcwd(), "msedgedriver.exe"),
-        os.path.join(os.path.expanduser("~"), "Downloads", "msedgedriver.exe"),
+        os.path.join(os.path.expanduser("~"), "Downloads", "msedgedriver.exe")
     ]
-
-    last_resort = None
-    for path in candidates:
-        if not path or not os.path.exists(path):
-            continue
-        drv_ver = _get_driver_version(path)
-        if browser_ver and drv_ver and drv_ver != browser_ver:
-            print(f"   ⚠️  Driver v{drv_ver} ≠ Edge v{browser_ver}: {path}")
-            if last_resort is None:
-                last_resort = path  # remember as emergency fallback
-            continue
-        print(f"   ✓ Utilisation driver manuel: {path}")
-        _CACHED_DRIVER_PATH = path
-        return path
-
-    # Last resort: use mismatched driver with a clear warning rather than crash
-    if last_resort:
-        drv_ver = _get_driver_version(last_resort)
-        print(f"   ⚠️  DERNIER RECOURS — driver v{drv_ver} (Edge v{browser_ver}) : {last_resort}")
-        print(f"   ⚠️  Version incompatible. Téléchargez msedgedriver v{browser_ver} sur:")
-        print(f"   ⚠️  https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/")
-        print(f"   ⚠️  Placez-le dans: C:\\edgedriver_win64\\msedgedriver.exe")
-        _CACHED_DRIVER_PATH = last_resort
-        return last_resort
-
+    
+    for path in common_paths:
+        if os.path.exists(path):
+            print(f"   ✓ Driver trouvé: {path}")
+            _CACHED_DRIVER_PATH = path
+            return path
+    
+    # Strategy 3: Try webdriver-manager as last resort (offline fallback)
+    try:
+        print("   📥 Tentative téléchargement driver auto (webdriver-manager)...")
+        from webdriver_manager.microsoft import EdgeChromiumDriverManager
+        
+        # Set timeout for download
+        os.environ['WDM_TIMEOUT'] = '10'  # 10 seconds timeout
+        
+        driver_path = EdgeChromiumDriverManager().install()
+        if driver_path and os.path.exists(driver_path):
+            print(f"   ✓ Driver auto installé: {driver_path}")
+            _CACHED_DRIVER_PATH = driver_path
+            return driver_path
+    except Exception as e:
+        print(f"   ⚠️  Échec webdriver-manager: {str(e)[:100]}")
+    
     print("   ❌ Aucun driver trouvé")
     return None
 
@@ -3393,8 +3248,8 @@ def get_dum_preapurement_lots(dum_number, partial_config, validated_lta_referenc
                 (s for s in split_pieces if s.get('partial') in smallest_partial_nums_list),
                 None
             )
-            # If no split metadata, fall back to legacy 2-lot behavior
-            if not split_pieces or small_piece is None:
+            # If no split metadata at all, fall back to legacy 2-lot behavior
+            if not split_pieces:
                 # Legacy: create single DS MEAD lot + single Depotage lot
                 legacy_pnum = smallest_partial_nums_list[0]
                 legacy_ref = airport_refs_dict.get(str(legacy_pnum), '')
@@ -3437,55 +3292,62 @@ def get_dum_preapurement_lots(dum_number, partial_config, validated_lta_referenc
                         break
                 return lots
 
-            # --- General multi-smallest logic ---
-            # Airport reference base for Depotage lots = airport ref of the co-split small partial
-            airport_ref_for_dum = airport_refs_dict.get(str(small_piece['partial']), validated_lta_reference)
-            lots = []
+            # If DUM has split pieces but none belong to an exception partial,
+            # this DUM is a plain cross-partial split with no exception involvement.
+            # Fall through to the non-exception split_dums handling below.
+            if small_piece is None:
+                pass  # exits exception block; reaches regular split DUM path
 
-            for split in split_pieces:
-                split_partial_num = split.get('partial')
-                if split_partial_num in smallest_partial_nums_list:
-                    # DS MEAD lot for this small partial
-                    small_partial_data = find_partial_by_number(partial_config, split_partial_num)
-                    if small_partial_data:
-                        pref = airport_refs_dict.get(str(split_partial_num), '')
-                        pos = positions_map.get(str(split_partial_num), split.get('positions', 0))
-                        lots.append({
-                            'reference': pref,
-                            'ds_serie': small_partial_data['ds_serie'],
-                            'ds_cle': small_partial_data['ds_cle'],
-                            'split_id': None,
-                            'weight': split.get('weight', 0),
-                            'positions': pos,
-                            'is_exception_smallest': True
-                        })
-                else:
-                    # Depotage lot for big partial piece
-                    partial_data = find_partial_by_number(partial_config, split_partial_num)
-                    if not partial_data:
-                        continue
-                    signed = partial_data.get('signed_series', '')
-                    if signed and ' ' in signed:
-                        s_parts = signed.split()
-                        ds_serie, ds_cle = s_parts[0], s_parts[1]
+            else:
+                # --- General multi-smallest logic ---
+                # Airport reference base for Depotage lots = airport ref of the co-split small partial
+                airport_ref_for_dum = airport_refs_dict.get(str(small_piece['partial']), validated_lta_reference)
+                lots = []
+
+                for split in split_pieces:
+                    split_partial_num = split.get('partial')
+                    if split_partial_num in smallest_partial_nums_list:
+                        # DS MEAD lot for this small partial
+                        small_partial_data = find_partial_by_number(partial_config, split_partial_num)
+                        if small_partial_data:
+                            pref = airport_refs_dict.get(str(split_partial_num), '')
+                            pos = positions_map.get(str(split_partial_num), split.get('positions', 0))
+                            lots.append({
+                                'reference': pref,
+                                'ds_serie': small_partial_data['ds_serie'],
+                                'ds_cle': small_partial_data['ds_cle'],
+                                'split_id': None,
+                                'weight': split.get('weight', 0),
+                                'positions': pos,
+                                'is_exception_smallest': True
+                            })
                     else:
-                        ds_serie = partial_data['ds_serie']
-                        ds_cle = partial_data['ds_cle']
-                    split_id = split.get('split_id', '')
-                    reference = (
-                        f"{airport_ref_for_dum}/{split_id}"
-                        if split_id else f"{airport_ref_for_dum}/{dum_str}"
-                    )
-                    lots.append({
-                        'reference': reference,
-                        'ds_serie': ds_serie,
-                        'ds_cle': ds_cle,
-                        'split_id': split_id if split_id else None,
-                        'weight': split.get('weight', 0),
-                        'positions': split.get('positions', 0)
-                    })
+                        # Depotage lot for big partial piece
+                        partial_data = find_partial_by_number(partial_config, split_partial_num)
+                        if not partial_data:
+                            continue
+                        signed = partial_data.get('signed_series', '')
+                        if signed and ' ' in signed:
+                            s_parts = signed.split()
+                            ds_serie, ds_cle = s_parts[0], s_parts[1]
+                        else:
+                            ds_serie = partial_data['ds_serie']
+                            ds_cle = partial_data['ds_cle']
+                        split_id = split.get('split_id', '')
+                        reference = (
+                            f"{airport_ref_for_dum}/{split_id}"
+                            if split_id else f"{airport_ref_for_dum}/{dum_str}"
+                        )
+                        lots.append({
+                            'reference': reference,
+                            'ds_serie': ds_serie,
+                            'ds_cle': ds_cle,
+                            'split_id': split_id if split_id else None,
+                            'weight': split.get('weight', 0),
+                            'positions': split.get('positions', 0)
+                        })
 
-            return lots
+                return lots
     
     # Check if DUM is split (non-exception case)
     if dum_str in partial_config.get('split_dums', {}):
@@ -9076,11 +8938,11 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                                     from datetime import datetime
                                     current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                     
-                                    error_type = "SPLIT" if is_split_dum else "EXCEPTION" if is_exception_dum1_multiple_lots else "MULTIPLE_LOTS"
+                                    error_type = "SPLIT" if is_split_dum else "EXCEPTION" if is_exception_split_dum_multiple_lots else "MULTIPLE_LOTS"
                                     with open(error_filepath, 'w', encoding='utf-8') as f:
                                         f.write(f"ERREUR - Préapurement DS - Données Incohérentes (DUM {error_type})\n\n")
                                         f.write(f"LTA: {lta_name} - {validated_lta_reference}\n")
-                                        if is_exception_dum1_multiple_lots:
+                                        if is_exception_split_dum_multiple_lots:
                                             f.write(f"DUM: {dum_number} (CAS D'EXCEPTION - {num_lots_to_add} lots)\n")
                                         else:
                                             f.write(f"DUM: {dum_number} (SPLIT en {num_lots_to_add} lots)\n")
@@ -11635,6 +11497,15 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
                     print(f"   Référence aéroport: {ref_val}")
                     print(f"   DS: {partial['ds_serie']} {partial['ds_cle']}")
                     print(f"   ℹ️  Déjà dédouané à l'aéroport - Pas d'état de dépotage requis")
+                    continue
+
+                # Skip already-validated partials (resume after a crash/retry)
+                if partial.get('ds_validated'):
+                    print(f"\n{'='*70}")
+                    print(f"⏭️  PARTIEL {partial_num} IGNORÉ (ED déjà validé: {partial['ds_validated']})")
+                    print(f"{'='*70}")
+                    print(f"   DS: {partial['ds_serie']} {partial['ds_cle']} — référence: {partial['ds_validated']}")
+                    print(f"   ℹ️  Reprise après interruption — ce partiel est déjà traité")
                     continue
                 
                 print(f"\n{'='*70}")
