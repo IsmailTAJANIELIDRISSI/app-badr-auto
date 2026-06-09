@@ -1358,11 +1358,19 @@ def extract_shipper_name(pdf_path):
             logger.info("PDF identified as text-based - using exact extraction")
             extracted_candidates = extract_shipper_name_text_based(pdf_path)
             
-            # If text-based extraction failed, treat it as image-based PDF with full OCR + cropping
+            # If text-based extraction failed, fallback to Gemini Vision
             if not extracted_candidates:
-                logger.warning("Text-based extraction failed - treating as image-based PDF with OCR + cropping")
-                # Use the exact same OCR methods as image-based PDFs
-                extracted_candidates = extract_shipper_name_ocr(pdf_path)
+                logger.warning("Text-based extraction failed - falling back to Gemini Vision")
+                if setup_gemini_api():
+                    vision_shipper = extract_vision_meta(pdf_path)
+                    if vision_shipper:
+                        logger.info(f"Gemini Vision identified shipper: {vision_shipper}")
+                        cleaned = clean_company_name(vision_shipper)
+                        add_company_to_database(cleaned)
+                        return cleaned
+                    logger.warning("Gemini Vision returned no shipper")
+                # # OCR fallback (COMMENTED OUT - using Gemini Vision only)
+                # extracted_candidates = extract_shipper_name_ocr(pdf_path)
         else:
             logger.info("PDF identified as image-based - trying Gemini Vision first")
             # ── Gemini Vision (mirrors extractVisionMeta in mawbShipperExtract.js) ──
@@ -1373,24 +1381,24 @@ def extract_shipper_name(pdf_path):
                     cleaned = clean_company_name(vision_shipper)
                     add_company_to_database(cleaned)
                     return cleaned
-                logger.info("Gemini Vision returned no shipper — falling back to OCR")
-            # ── OCR fallback ─────────────────────────────────────────────────────
-            logger.info("PDF identified as image-based - using OCR methods")
-            if is_bloc_pdf:
-                with open(pdf_path, 'rb') as file:
-                    pdf_reader = PdfReader(file)
-                    page_count = len(pdf_reader.pages)
-                if page_count == 2:
-                    logger.info(f"Multi-page bloc PDF detected ({page_count} pages) - extracting second page")
-                    with tempfile.TemporaryDirectory() as temp_dir:
-                        second_page_pdf = extract_specific_page_to_file(pdf_path, 1, temp_dir)
-                        if second_page_pdf:
-                            extracted_candidates = extract_shipper_name_ocr(second_page_pdf)
-                else:
-                    logger.info(f"Bloc PDF with {page_count} page(s) - using smart page detection")
-                    extracted_candidates = process_multi_page_pdf_with_detection(pdf_path)
-            else:
-                extracted_candidates = process_multi_page_pdf_with_detection(pdf_path)
+                logger.warning("Gemini Vision returned no shipper")
+            # # ── OCR fallback (COMMENTED OUT - using Gemini Vision only) ──────────
+            # logger.info("PDF identified as image-based - using OCR methods")
+            # if is_bloc_pdf:
+            #     with open(pdf_path, 'rb') as file:
+            #         pdf_reader = PdfReader(file)
+            #         page_count = len(pdf_reader.pages)
+            #     if page_count == 2:
+            #         logger.info(f"Multi-page bloc PDF detected ({page_count} pages) - extracting second page")
+            #         with tempfile.TemporaryDirectory() as temp_dir:
+            #             second_page_pdf = extract_specific_page_to_file(pdf_path, 1, temp_dir)
+            #             if second_page_pdf:
+            #                 extracted_candidates = extract_shipper_name_ocr(second_page_pdf)
+            #     else:
+            #         logger.info(f"Bloc PDF with {page_count} page(s) - using smart page detection")
+            #         extracted_candidates = process_multi_page_pdf_with_detection(pdf_path)
+            # else:
+            #     extracted_candidates = process_multi_page_pdf_with_detection(pdf_path)
         if not extracted_candidates:
             logger.warning("No shipper name extracted from PDF")
             return None

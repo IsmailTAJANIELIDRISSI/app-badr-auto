@@ -11498,15 +11498,6 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
                     print(f"   DS: {partial['ds_serie']} {partial['ds_cle']}")
                     print(f"   ℹ️  Déjà dédouané à l'aéroport - Pas d'état de dépotage requis")
                     continue
-
-                # Skip already-validated partials (resume after a crash/retry)
-                if partial.get('ds_validated'):
-                    print(f"\n{'='*70}")
-                    print(f"⏭️  PARTIEL {partial_num} IGNORÉ (ED déjà validé: {partial['ds_validated']})")
-                    print(f"{'='*70}")
-                    print(f"   DS: {partial['ds_serie']} {partial['ds_cle']} — référence: {partial['ds_validated']}")
-                    print(f"   ℹ️  Reprise après interruption — ce partiel est déjà traité")
-                    continue
                 
                 print(f"\n{'='*70}")
                 print(f"📦 TRAITEMENT PARTIEL {partial_num}/{len(partial_config['partials'])}")
