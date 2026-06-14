@@ -3741,11 +3741,15 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
             
             # Format 3: Avec tirets, SANS /1 (ex: "235-94908726")
             lta_reference_format3 = "-".join(ref_parts)
-            
+
+            # Format 4: Avec tirets, avec "/" final (ex: "235-94908726/")
+            lta_reference_format4 = lta_reference_format3 + "/"
+
             print(f"      📄 Référence LTA brute: {lta_reference_raw}")
             print(f"      📄 Format 1 (avec /1): {lta_reference_format1}")
             print(f"      📄 Format 2 (sans tirets): {lta_reference_format2}")
             print(f"      📄 Format 3 (avec tirets, sans /1): {lta_reference_format3}")
+            print(f"      📄 Format 4 (avec tirets, avec / final): {lta_reference_format4}")
             
             # Essayer d'abord le Format 1 (avec /1)
             reference_input = wait.until(
@@ -3964,86 +3968,145 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                         if error_msg_retry3 and len(error_msg_retry3) > 0:
                             error_text_retry3 = error_msg_retry3[0].text.strip()
                             print(f"      ❌ Format 3 aussi rejeté: {error_text_retry3}")
-                            
-                            # Tous les formats ont échoué - créer fichier log
-                            lta_name = os.path.basename(lta_folder_path)
-                            parent_dir = os.path.dirname(lta_folder_path)
-                            lta_name_with_underscore = lta_name.replace(" ", "_")
-                            error_log_filename = f"error-creating-ds-depotage-{lta_name_with_underscore}.log"
-                            error_log_filepath = os.path.join(parent_dir, error_log_filename)
-                            
-                            from datetime import datetime
-                            current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            
-                            with open(error_log_filepath, 'w', encoding='utf-8') as f:
-                                f.write(f"ERREUR - Création Etat de Dépotage - Phase 1\n")
-                                f.write(f"=" * 70 + "\n\n")
-                                f.write(f"LTA: {lta_name}\n")
-                                f.write(f"Date: {current_datetime}\n")
-                                f.write(f"Étape: Validation de la référence LTA\n\n")
-                                f.write(f"TENTATIVES:\n")
-                                f.write(f"1. Format avec /1: {lta_reference_format1}\n")
-                                f.write(f"   Erreur: {error_text}\n\n")
-                                f.write(f"2. Format sans tirets: {lta_reference_format2}\n")
-                                f.write(f"   Erreur: {error_text_retry2}\n\n")
-                                f.write(f"3. Format avec tirets, sans /1: {lta_reference_format3}\n")
-                                f.write(f"   Erreur: {error_text_retry3}\n\n")
-                                f.write(f"RÉFÉRENCE BRUTE (PDF):\n")
-                                f.write(f"{lta_reference_raw}\n\n")
-                                f.write(f"DONNÉES DS MEAD:\n")
-                                f.write(f"- Série: {shipper_data['serie']}\n")
-                                f.write(f"- Clé: {shipper_data['cle']}\n")
-                                if shipper_data.get('loading_location'):
-                                    f.write(f"- Lieu de chargement: {shipper_data['loading_location']}\n")
-                                f.write(f"\n")
-                                f.write(f"MESSAGE:\n")
-                                f.write(f"La référence LTA n'a pas pu être validée avec aucun des 3 formats.\n")
-                                f.write(f"Vérifiez que:\n")
-                                f.write(f"1. La référence LTA dans le nom du fichier PDF est correcte\n")
-                                f.write(f"2. Le lot existe bien dans le système BADR\n")
-                                f.write(f"3. Le lot n'est pas déjà dépoté\n\n")
-                                f.write(f"ACTIONS RECOMMANDÉES:\n")
-                                f.write(f"- Vérifier manuellement la référence sur BADR\n")
-                                f.write(f"- Corriger le nom du fichier PDF si nécessaire\n")
-                                f.write(f"- Créer l'Etat de Dépotage manuellement si l'erreur persiste\n")
-                            
-                            print(f"      ✓ Fichier log créé: {error_log_filename}")
-                            
-                            # Fermer l'erreur avant de sortir
+                            print(f"      🔄 Tentative Format 4 (avec tirets, avec / final)...")
+
+                            # Fermer le message d'erreur
                             try:
                                 close_btn = driver.find_element(By.CSS_SELECTOR, "a.ui-messages-close")
                                 close_btn.click()
                                 time.sleep(0.5)
                             except:
                                 pass
-                            
-                            # IMPORTANT: Retourner à l'accueil avant de sortir
-                            print("\n      🏠 Retour à l'accueil après erreur...")
-                            try:
-                                driver.switch_to.default_content()
-                                print("         ✓ Sorti de l'iframe")
-                                
-                                # Cliquer sur le bouton Accueil
-                                accueil_btn = WebDriverWait(driver, 10).until(
-                                    EC.element_to_be_clickable((By.ID, "quitter"))
-                                )
+
+                            # Essayer Format 4 (avec tirets, avec "/" final)
+                            reference_input = wait.until(
+                                EC.presence_of_element_located((By.ID, "mainTab:form1:referenceLotID"))
+                            )
+                            reference_input.clear()
+                            time.sleep(0.3)
+                            reference_input.send_keys(lta_reference_format4)
+                            print(f"      ✓ Référence Format 4 saisie: {lta_reference_format4}")
+                            time.sleep(0.5)
+
+                            # Re-valider avec protection anti-interception
+                            max_retries = 3
+                            for attempt in range(max_retries):
                                 try:
-                                    accueil_btn.click()
-                                except:
-                                    driver.execute_script("arguments[0].click();", accueil_btn)
-                                print("         ✓ Bouton 'Accueil' cliqué")
-                                time.sleep(3)
-                            except Exception as nav_err:
-                                print(f"         ⚠️  Erreur navigation: {nav_err}")
-                                # Fallback: navigation directe
-                                try:
-                                    driver.get("https://badr.douane.gov.ma:40444/badr/views/hab/hab_index.xhtml")
+                                    wait.until(
+                                        EC.invisibility_of_element_located((By.CSS_SELECTOR, "div.ui-blockui"))
+                                    )
+                                    time.sleep(0.5)
+
+                                    valider_ref_btn = wait.until(
+                                        EC.element_to_be_clickable((By.ID, "mainTab:form1:confirmerRef"))
+                                    )
+                                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", valider_ref_btn)
+                                    time.sleep(0.5)
+                                    valider_ref_btn.click()
+                                    print("      ✓ Bouton 'Valider' re-cliqué")
                                     time.sleep(3)
-                                    print("         ✓ Navigation directe vers accueil")
+                                    break
+                                except Exception as retry_e:
+                                    if attempt < max_retries - 1:
+                                        print(f"      ⏳ Retry {attempt + 1}/{max_retries}...")
+                                        time.sleep(2)
+                                    else:
+                                        raise retry_e
+
+                            # Vérifier résultat Format 4
+                            time.sleep(1)
+                            error_msg_retry4 = driver.find_elements(By.CSS_SELECTOR, "div.ui-messages-error-detail")
+                            if not error_msg_retry4 or len(error_msg_retry4) == 0:
+                                error_msg_retry4 = driver.find_elements(By.CSS_SELECTOR, "span.ui-messages-error-detail")
+
+                            if error_msg_retry4 and len(error_msg_retry4) > 0:
+                                error_text_retry4 = error_msg_retry4[0].text.strip()
+                                print(f"      ❌ Format 4 aussi rejeté: {error_text_retry4}")
+
+                                # Tous les formats ont échoué - créer fichier log
+                                lta_name = os.path.basename(lta_folder_path)
+                                parent_dir = os.path.dirname(lta_folder_path)
+                                lta_name_with_underscore = lta_name.replace(" ", "_")
+                                error_log_filename = f"error-creating-ds-depotage-{lta_name_with_underscore}.log"
+                                error_log_filepath = os.path.join(parent_dir, error_log_filename)
+
+                                from datetime import datetime
+                                current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                                with open(error_log_filepath, 'w', encoding='utf-8') as f:
+                                    f.write(f"ERREUR - Création Etat de Dépotage - Phase 1\n")
+                                    f.write(f"=" * 70 + "\n\n")
+                                    f.write(f"LTA: {lta_name}\n")
+                                    f.write(f"Date: {current_datetime}\n")
+                                    f.write(f"Étape: Validation de la référence LTA\n\n")
+                                    f.write(f"TENTATIVES:\n")
+                                    f.write(f"1. Format avec /1: {lta_reference_format1}\n")
+                                    f.write(f"   Erreur: {error_text}\n\n")
+                                    f.write(f"2. Format sans tirets: {lta_reference_format2}\n")
+                                    f.write(f"   Erreur: {error_text_retry2}\n\n")
+                                    f.write(f"3. Format avec tirets, sans /1: {lta_reference_format3}\n")
+                                    f.write(f"   Erreur: {error_text_retry3}\n\n")
+                                    f.write(f"4. Format avec tirets, avec / final: {lta_reference_format4}\n")
+                                    f.write(f"   Erreur: {error_text_retry4}\n\n")
+                                    f.write(f"RÉFÉRENCE BRUTE (PDF):\n")
+                                    f.write(f"{lta_reference_raw}\n\n")
+                                    f.write(f"DONNÉES DS MEAD:\n")
+                                    f.write(f"- Série: {shipper_data['serie']}\n")
+                                    f.write(f"- Clé: {shipper_data['cle']}\n")
+                                    if shipper_data.get('loading_location'):
+                                        f.write(f"- Lieu de chargement: {shipper_data['loading_location']}\n")
+                                    f.write(f"\n")
+                                    f.write(f"MESSAGE:\n")
+                                    f.write(f"La référence LTA n'a pas pu être validée avec aucun des 4 formats.\n")
+                                    f.write(f"Vérifiez que:\n")
+                                    f.write(f"1. La référence LTA dans le nom du fichier PDF est correcte\n")
+                                    f.write(f"2. Le lot existe bien dans le système BADR\n")
+                                    f.write(f"3. Le lot n'est pas déjà dépoté\n\n")
+                                    f.write(f"ACTIONS RECOMMANDÉES:\n")
+                                    f.write(f"- Vérifier manuellement la référence sur BADR\n")
+                                    f.write(f"- Corriger le nom du fichier PDF si nécessaire\n")
+                                    f.write(f"- Créer l'Etat de Dépotage manuellement si l'erreur persiste\n")
+
+                                print(f"      ✓ Fichier log créé: {error_log_filename}")
+
+                                # Fermer l'erreur avant de sortir
+                                try:
+                                    close_btn = driver.find_element(By.CSS_SELECTOR, "a.ui-messages-close")
+                                    close_btn.click()
+                                    time.sleep(0.5)
                                 except:
                                     pass
-                            
-                            return False
+
+                                # IMPORTANT: Retourner à l'accueil avant de sortir
+                                print("\n      🏠 Retour à l'accueil après erreur...")
+                                try:
+                                    driver.switch_to.default_content()
+                                    print("         ✓ Sorti de l'iframe")
+
+                                    # Cliquer sur le bouton Accueil
+                                    accueil_btn = WebDriverWait(driver, 10).until(
+                                        EC.element_to_be_clickable((By.ID, "quitter"))
+                                    )
+                                    try:
+                                        accueil_btn.click()
+                                    except:
+                                        driver.execute_script("arguments[0].click();", accueil_btn)
+                                    print("         ✓ Bouton 'Accueil' cliqué")
+                                    time.sleep(3)
+                                except Exception as nav_err:
+                                    print(f"         ⚠️  Erreur navigation: {nav_err}")
+                                    # Fallback: navigation directe
+                                    try:
+                                        driver.get("https://badr.douane.gov.ma:40444/badr/views/hab/hab_index.xhtml")
+                                        time.sleep(3)
+                                        print("         ✓ Navigation directe vers accueil")
+                                    except:
+                                        pass
+
+                                return False
+                            else:
+                                print("      ✅ Format 4 accepté!")
+                                error_detected = False
                         else:
                             print("      ✅ Format 3 accepté!")
                             error_detected = False
@@ -4138,6 +4201,10 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
                     reference_input_value = driver.find_element(By.ID, "mainTab:form1:referenceLotID").get_attribute("value")
                     # Garder la référence EXACTE (avec /1 si présent)
                     lta_reference_clean = reference_input_value.strip()
+                    # Si le Format 4 (avec "/" final) a été accepté, retirer le "/" final
+                    # pour ne pas générer de références lot du type "235-96092754//1"
+                    if lta_reference_clean.endswith('/'):
+                        lta_reference_clean = lta_reference_clean.rstrip('/')
                     print(f"      📋 Référence validée à utiliser pour les lots: {lta_reference_clean}")
                     
                     # ED.3.5: Enregistrer la référence validée dans le fichier shipper (ligne 5)
