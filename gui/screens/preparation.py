@@ -11,10 +11,10 @@ import os
 import subprocess
 import platform
 from gui.utils.script_manager import ScriptManager
-from gui.utils.file_utils import (detect_ltas, write_shipper_file, 
+from gui.utils.file_utils import (detect_ltas, write_shipper_file,
                                   get_lta_shipper_name, update_lta_shipper_name,
                                   get_lta_blocage_info, update_lta_blocage,
-                                  find_lta_pdf)
+                                  find_lta_pdf, scan_lta_errors)
 from gui.utils.validators import validate_ds_series, validate_location, validate_folder_path, normalize_ds_series
 
 logger = logging.getLogger(__name__)
@@ -293,19 +293,69 @@ class PreparationScreen:
         checkbox_vars = []
         checkbox_widgets = []
         
+        # Scan for errors/warnings written by the preparation script
+        lta_error_map = scan_lta_errors(folder)
+
         for idx, lta in enumerate(ltas):
+            lta_errors = lta_error_map.get(lta['name'], [])
+            has_error = any(e['severity'] == 'error' for e in lta_errors)
+            has_warning = any(e['severity'] == 'warning' for e in lta_errors)
+            status_prefix = "❌ " if has_error else ("⚠️ " if has_warning else "")
+
             # Card frame for each LTA
             card = ttk.LabelFrame(
                 self.table_frame_content,
-                text=f"  {lta['name']}  ",
+                text=f"  {status_prefix}{lta['name']}  ",
                 padding="15",
                 relief="raised"
             )
             card.grid(row=idx, column=0, sticky=(tk.W, tk.E), padx=10, pady=8)
             card.columnconfigure(1, weight=1)
-            
+
             row_num = 0
-            
+
+            # Error / warning banner
+            if lta_errors:
+                bg_color = '#dc3545' if has_error else '#e67e22'
+                icon = '❌' if has_error else '⚠️'
+
+                banner = tk.Frame(card, bg=bg_color, pady=6, padx=8)
+                banner.grid(row=row_num, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 8))
+
+                descriptions = "  |  ".join(e['description'] for e in lta_errors)
+                tk.Label(
+                    banner,
+                    text=f" {icon}  {descriptions}",
+                    bg=bg_color,
+                    fg='white',
+                    font=('Arial', 9, 'bold'),
+                    justify=tk.LEFT,
+                    anchor=tk.W,
+                    wraplength=480,
+                ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+                def _make_open_file(fp):
+                    def _open():
+                        try:
+                            os.startfile(fp)
+                        except Exception as exc:
+                            messagebox.showerror("Erreur", f"Impossible d'ouvrir:\n{fp}\n{exc}")
+                    return _open
+
+                tk.Button(
+                    banner,
+                    text="📄 Voir détails",
+                    bg='white',
+                    fg=bg_color,
+                    font=('Arial', 8, 'bold'),
+                    relief='flat',
+                    cursor='hand2',
+                    padx=8, pady=2,
+                    command=_make_open_file(lta_errors[0]['filepath']),
+                ).pack(side=tk.RIGHT, padx=(5, 0))
+
+                row_num += 1
+
             # === ROW 1: Checkbox + LTA Reference ===
             cb_var = tk.BooleanVar(value=True)
             checkbox_vars.append(cb_var)

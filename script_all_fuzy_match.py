@@ -1729,7 +1729,10 @@ def rename_mawb_pdfs_and_create_bloc_note(dir_path, directory_name, skip_rename=
             use_doc_file = True
         else:
             print("    ❌ No MAWB*.pdf or doc*.pdf files found")
-    
+            print(f"    ❌ Le PDF MAWB est requis pour extraire le shipper name - traitement annulé")
+            create_no_mawb_error(directory_name)
+            return None, False
+
     # First, extract MAWB from generated_excel for validation
     excel_mawb = extract_mawb_from_generated_excel(dir_path)
     if excel_mawb:
@@ -2175,6 +2178,43 @@ def create_warning_report(directory, differences):
     except Exception as e:
         print(f"      Error creating warning report: {e}")
 
+def create_no_mawb_error(directory_name):
+    """Create error report when no MAWB PDF (MAWB*.pdf or doc*.pdf) is found"""
+    warning_path = os.path.join(os.getcwd(), "!-------Warning - LTA vs Generated--------.txt")
+    try:
+        existing_content = ""
+        if os.path.exists(warning_path):
+            with open(warning_path, 'r', encoding='utf-8') as f:
+                existing_content = f.read()
+
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        report = f"\n{'='*60}\n"
+        report += f"⚠️  ERREUR: PDF MAWB MANQUANT - {directory_name}\n"
+        report += f"Date: {timestamp}\n"
+        report += f"{'='*60}\n\n"
+        report += f"❌ TRAITEMENT IGNORÉ - Le PDF MAWB est introuvable!\n\n"
+        report += f"Le dossier '{directory_name}' ne contient aucun fichier PDF MAWB:\n\n"
+        report += f"  📄 Formats recherchés:\n"
+        report += f"     - MAWB*.pdf\n"
+        report += f"     - doc*.pdf\n\n"
+        report += f"🔧 ACTION REQUISE:\n"
+        report += f"   1. Ajouter le PDF MAWB dans le dossier '{directory_name}'\n"
+        report += f"   2. Nommer le fichier: MAWB [numéro].pdf (ex: MAWB 072-74354991.pdf)\n"
+        report += f"   3. Relancer le script après correction\n\n"
+        report += f"ℹ️  NOTE: Aucun fichier n'a été modifié pour ce dossier.\n"
+        report += f"         Le traitement a été sauté car le PDF est nécessaire pour extraire\n"
+        report += f"         le nom de l'expéditeur (shipper name).\n"
+        report += f"{'-'*60}\n"
+
+        with open(warning_path, 'w', encoding='utf-8') as f:
+            f.write(existing_content + report)
+
+        logger.warning(f"No MAWB PDF error created for {directory_name}")
+        print(f"      ✓ Fichier log d'erreur créé: {os.path.basename(warning_path)}")
+    except Exception as e:
+        print(f"      Error creating no-MAWB error report: {e}")
+
+
 def create_mawb_mismatch_warning(directory, pdf_mawb, excel_mawb):
     """Create warning report for MAWB mismatch - files don't belong together"""
     warning_path = os.path.join(os.getcwd(), "!-------Warning - LTA vs Generated--------.txt")
@@ -2277,6 +2317,19 @@ def validate_logical_values_from_summary(summary_file_path, directory):
                     val = ws.cell(row=row, column=col_indices['Total poid brute']).value
                     if val: total_poid_brute = float(str(val).replace(',', '.').strip())
                 
+                # Check: No negative or zero values allowed
+                for val, label in [(total_value, 'V'), (total_freight, 'Fret'), (total_poid_net, 'P,NET'), (total_poid_brute, 'P,BRUT')]:
+                    if val is not None and val <= 0:
+                        error = {
+                            'source': 'summary_file',
+                            'sheet': sheet_name_str,
+                            'type': 'Negative/Zero Value',
+                            'field': label,
+                            'value': val
+                        }
+                        errors.append(error)
+                        print(f"    ❌ {sheet_name_str}: {label} = {val} - VALEUR INVALIDE (≤ 0)!")
+
                 # Validate: Freight <= Value
                 if total_freight and total_value:
                     if total_freight > total_value:
@@ -2289,7 +2342,7 @@ def validate_logical_values_from_summary(summary_file_path, directory):
                         }
                         errors.append(error)
                         print(f"    ❌ {sheet_name_str}: Fret ({total_freight}) > Value ({total_value}) - ILLOGIQUE!")
-                
+
                 # Validate: P_NET <= P_BRUT
                 if total_poid_net and total_poid_brute:
                     if total_poid_net > total_poid_brute:
@@ -2381,7 +2434,20 @@ def validate_logical_values(generated_excel_path, directory):
         # Validate each DUM
         for dum in dum_data:
             dum_num = dum.get('dum_number', '?')
-            
+
+            # Check: No negative or zero values allowed
+            for field_key, field_label in [('P', 'P'), ('V', 'V'), ('P_NET', 'P,NET'), ('P_BRUT', 'P,BRUT'), ('Fret', 'Fret')]:
+                if field_key in dum and dum[field_key] <= 0:
+                    error = {
+                        'source': 'generated_excel',
+                        'dum': dum_num,
+                        'type': 'Negative/Zero Value',
+                        'field': field_label,
+                        'value': dum[field_key]
+                    }
+                    errors.append(error)
+                    print(f"    ❌ DUM {dum_num}: {field_label} = {dum[field_key]} - VALEUR INVALIDE (≤ 0)!")
+
             # Check: Freight should be less than Value
             if 'Fret' in dum and 'V' in dum:
                 if dum['Fret'] > dum['V']:
@@ -2394,7 +2460,7 @@ def validate_logical_values(generated_excel_path, directory):
                     }
                     errors.append(error)
                     print(f"    ❌ DUM {dum_num}: Fret ({dum['Fret']}) > V ({dum['V']}) - ILLOGIQUE!")
-            
+
             # Check: P_NET should be less than P_BRUT
             if 'P_NET' in dum and 'P_BRUT' in dum:
                 if dum['P_NET'] > dum['P_BRUT']:
@@ -2440,8 +2506,12 @@ def create_logical_error_warning(directory, errors):
         for error in errors:
             source_file = error.get('source', 'generated_excel')
             location = error.get('sheet') if 'sheet' in error else f"DUM {error.get('dum', '?')}"
-            
-            if error['type'] == 'Freight > Value':
+
+            if error['type'] == 'Negative/Zero Value':
+                report += f"  🚫 {location} ({source_file}):\n"
+                report += f"     {error['field']}: {error['value']}\n"
+                report += f"     ❌ Les valeurs négatives ou nulles sont interdites!\n\n"
+            elif error['type'] == 'Freight > Value':
                 report += f"  📦 {location} ({source_file}):\n"
                 report += f"     Fret: {error['freight']:,.2f}\n"
                 report += f"     Valeur: {error['value']:,.2f}\n"
@@ -3094,8 +3164,8 @@ def process_directory(dir_path, directory_name):
     
     # If MAWB validation failed, skip entire folder processing
     if not mawb_validation_passed:
-        print(f"  ⚠️  SKIPPING ALL PROCESSING for '{directory_name}' due to MAWB mismatch")
-        print(f"  ⚠️  Please fix the mismatch and re-run the script")
+        print(f"  ⚠️  SKIPPING ALL PROCESSING for '{directory_name}' due to MAWB error")
+        print(f"  ⚠️  MAWB file NOT renamed - please check the error report and fix the issue")
         return  # Exit early - do not process this folder at all
     
     # Step 1.2: Validate that all required files (Sheet X.xlsx and Sheet X.pdf) are present

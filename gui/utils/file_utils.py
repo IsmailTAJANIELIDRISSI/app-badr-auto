@@ -755,3 +755,66 @@ def update_partial_signed_series(lta_folder_path, folder_name, partial_number, s
     except Exception as e:
         logger.error(f"Error updating partial signed series: {e}")
         return False
+
+
+def scan_lta_errors(folder):
+    """
+    Scan the LTA parent folder for error/warning files written by script_all_fuzy_match.py.
+
+    Returns dict: {lta_name: [{'severity': 'error'|'warning', 'description': str, 'filepath': str}]}
+    - 'error'   → LTA processing was SKIPPED (hard error, files unchanged)
+    - 'warning' → LTA was processed but auto-corrections were applied (soft warning)
+    """
+    result = {}
+
+    files_to_check = [
+        {
+            'filename': '!-------ERROR - Missing Files--------.txt',
+            'severity': 'error',
+            'markers': [
+                ('ERREUR: FICHIERS MANQUANTS', 'Fichiers manquants (Sheet Excel / PDF)'),
+            ],
+        },
+        {
+            'filename': '!-------Warning - LTA vs Generated--------.txt',
+            'severity': 'error',
+            'markers': [
+                ('ALERTE: INCOHÉRENCE MAWB', 'Incohérence MAWB – PDF et Excel ne correspondent pas'),
+                ('ALERTE: VALEURS ILLOGIQUES', 'Valeurs invalides (négatif, nul, Fret>V ou P,NET>P,BRUT)'),
+            ],
+        },
+        {
+            'filename': '!---------------------------Warning-----------------------.txt',
+            'severity': 'warning',
+            'markers': [
+                ('RAPPORT DE CORRECTION', 'Corrections automatiques appliquées sur les valeurs'),
+            ],
+        },
+    ]
+
+    for file_info in files_to_check:
+        filepath = os.path.join(folder, file_info['filename'])
+        if not os.path.exists(filepath):
+            continue
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                content = f.read()
+            for line in content.splitlines():
+                for marker, description in file_info['markers']:
+                    if marker in line and ' - ' in line:
+                        # Line format: "⚠️  ERREUR: FICHIERS MANQUANTS - 11eme LTA"
+                        lta_name = line.split(' - ', 1)[-1].strip()
+                        if not lta_name:
+                            continue
+                        if lta_name not in result:
+                            result[lta_name] = []
+                        if not any(e['description'] == description for e in result[lta_name]):
+                            result[lta_name].append({
+                                'severity': file_info['severity'],
+                                'description': description,
+                                'filepath': filepath,
+                            })
+        except Exception as e:
+            logger.warning(f"scan_lta_errors: could not read {file_info['filename']}: {e}")
+
+    return result
