@@ -8546,6 +8546,18 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             # IMPORTANT: Compter les DUMs dans generated_excel (C11, C18, C25, C32, C39...)
             # car summary_file peut être modifié par l'utilisateur après erreur
             # Si LTA avait plusieurs DUMs à l'origine, ne pas faire la division
+            #
+            # ⚠️ EXCEPTION BLOCAGE: La division automatique /1 et /2 ne s'applique QUE
+            # pour une LTA normale (non-blocage) avec 1 seul DUM. Si la LTA est un
+            # "blocage", on n'invente PAS un 2ème lot — on entre uniquement le(s)
+            # DUM(s) réel(s) de cette LTA (1 ou plusieurs).
+            is_blocage_lta = False
+            try:
+                blocage_check = detect_blocage_from_lta_file(lta_folder_path)
+                is_blocage_lta = bool(blocage_check.get('is_blocage'))
+            except Exception as bloc_err:
+                print(f"      ⚠️  Erreur détection blocage (PDS): {bloc_err}")
+
             is_single_dum = False
             try:
                 generated_excel_files = glob.glob(os.path.join(lta_folder_path, "generated_excel*.xlsx"))
@@ -8572,8 +8584,12 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                     wb_check.close()
                     
                     # Division automatique SEULEMENT si 1 DUM à l'origine ET c'est Sheet 1
-                    is_single_dum = (original_dum_count == 1 and dum_number == '1')
-                    
+                    # ET que la LTA n'est PAS un blocage.
+                    is_single_dum = (original_dum_count == 1 and dum_number == '1' and not is_blocage_lta)
+
+                    if is_blocage_lta and original_dum_count == 1 and dum_number == '1':
+                        print(f"      🔒 LTA blocage détecté - pas de division /1 et /2 "
+                              f"(référence unique {validated_lta_reference}/{dum_number})")
                     if original_dum_count > 1:
                         print(f"      ℹ️  LTA original avec {original_dum_count} DUMs - pas de division automatique")
             except Exception as check_err:
