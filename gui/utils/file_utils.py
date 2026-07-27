@@ -772,7 +772,7 @@ def scan_lta_errors(folder):
             'filename': '!-------ERROR - Missing Files--------.txt',
             'severity': 'error',
             'markers': [
-                ('ERREUR: FICHIERS MANQUANTS', 'Fichiers manquants (Sheet Excel / PDF)'),
+                ('ERREUR: FICHIERS MANQUANTS', 'Fichiers requis manquants (generated_excel / Sheet Excel / PDF)'),
             ],
         },
         {

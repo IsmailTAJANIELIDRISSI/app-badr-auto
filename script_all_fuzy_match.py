@@ -2652,12 +2652,29 @@ def validate_required_files_present(dir_path, directory_name):
     Returns: (is_valid, missing_files)
     """
     missing_files = []
-    
+
+    # generated_excel*.xlsx is required for ALL downstream processing
+    # (DUM counting, P-value extraction, logical validation, summary comparison).
+    # If it's missing, flag it as a hard missing-files error instead of silently
+    # continuing — without it the folder cannot be processed correctly.
+    generated_excel_found = glob.glob(os.path.join(dir_path, "generated_excel*.xlsx"))
+    if not generated_excel_found:
+        missing_files.append({
+            'type': 'Generated Excel',
+            'filename': 'generated_excel*.xlsx',
+            'sheet_number': 0
+        })
+        print(f"    ❌ Missing: generated_excel*.xlsx file")
+
     # Count expected DUMs
     expected_count, source_file, expected_sheet_numbers = count_expected_dums(dir_path)
-    
+
     if expected_count == 0:
-        # Cannot validate if we don't know how many DUMs are expected
+        # Cannot validate the Sheet files if we don't know how many DUMs are expected.
+        # But a missing generated_excel is already a hard error on its own.
+        if missing_files:
+            print(f"  ❌ {len(missing_files)} required file(s) missing")
+            return False, missing_files
         print("  ⚠️  Cannot determine expected number of DUMs - skipping file validation")
         return True, []
     
@@ -2709,13 +2726,22 @@ def create_missing_files_error(dir_path, directory_name, missing_files, expected
         report += f"Date: {timestamp}\n"
         report += f"{'='*60}\n\n"
         report += f"❌ TRAITEMENT ARRÊTÉ - Fichiers requis manquants!\n\n"
-        report += f"Le dossier '{directory_name}' devrait contenir {expected_count} DUMs\n"
-        report += f"(d'après {source_file}), mais certains fichiers sont manquants:\n\n"
-        
+        if source_file:
+            report += f"Le dossier '{directory_name}' devrait contenir {expected_count} DUMs\n"
+            report += f"(d'après {source_file}), mais certains fichiers sont manquants:\n\n"
+        else:
+            report += f"Le dossier '{directory_name}' est incomplet - fichiers requis manquants:\n\n"
+
         # Group missing files by type
+        missing_generated_excel = [f for f in missing_files if f['type'] == 'Generated Excel']
         missing_sheet_excel = [f for f in missing_files if f['type'] == 'Sheet Excel']
         missing_sheet_pdf = [f for f in missing_files if f['type'] == 'Sheet PDF']
-        
+
+        if missing_generated_excel:
+            report += f"📊 FICHIER GENERATED_EXCEL MANQUANT:\n"
+            report += f"   - generated_excel*.xlsx (fichier requis pour le traitement)\n"
+            report += "\n"
+
         if missing_sheet_excel:
             report += f"📋 FICHIERS EXCEL MANQUANTS ({len(missing_sheet_excel)} fichier(s)):\n"
             for file_info in sorted(missing_sheet_excel, key=lambda x: x['sheet_number']):
@@ -2729,10 +2755,16 @@ def create_missing_files_error(dir_path, directory_name, missing_files, expected
             report += "\n"
         
         report += f"🔧 ACTION REQUISE:\n"
-        report += f"   1. Vérifier que tous les fichiers 'Sheet X - *.xlsx' ou 'Sheet X (*).xlsx' sont présents\n"
-        report += f"   2. Vérifier que tous les fichiers 'Sheet X - *.pdf' ou 'Sheet X (*).pdf' sont présents\n"
-        report += f"   3. Corriger {source_file} si le nombre de DUMs est incorrect\n"
-        report += f"   4. Relancer le script après correction\n\n"
+        if missing_generated_excel:
+            report += f"   1. Ajouter le fichier 'generated_excel*.xlsx' dans le dossier (fichier requis)\n"
+            report += f"   2. Vérifier que tous les fichiers 'Sheet X - *.xlsx' ou 'Sheet X (*).xlsx' sont présents\n"
+            report += f"   3. Vérifier que tous les fichiers 'Sheet X - *.pdf' ou 'Sheet X (*).pdf' sont présents\n"
+            report += f"   4. Relancer le script après correction\n\n"
+        else:
+            report += f"   1. Vérifier que tous les fichiers 'Sheet X - *.xlsx' ou 'Sheet X (*).xlsx' sont présents\n"
+            report += f"   2. Vérifier que tous les fichiers 'Sheet X - *.pdf' ou 'Sheet X (*).pdf' sont présents\n"
+            report += f"   3. Corriger {source_file} si le nombre de DUMs est incorrect\n"
+            report += f"   4. Relancer le script après correction\n\n"
         report += f"ℹ️  NOTE: Aucun fichier n'a été renommé ou modifié pour ce dossier.\n"
         report += f"         Le traitement a été arrêté pour éviter des erreurs.\n"
         report += f"{'-'*60}\n"
