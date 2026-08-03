@@ -2569,7 +2569,12 @@ def correct_blocage_weights(lta_folder_path, corrected_weight):
                 
                 # Parcourir les DUMs en ordre inverse pour soustraire (du dernier au premier)
                 for i in range(len(dum_pbrut_cells) - 1, -1, -1):
-                    if remaining_to_subtract <= 0.01:
+                    # Epsilon = 0.005 (moitié du plus petit incrément de 0.01 kg).
+                    # Un reste de PILE 0.01 kg est un VRAI ajustement à appliquer —
+                    # avec l'ancien seuil `<= 0.01` la boucle sortait immédiatement et
+                    # ne soustrayait jamais ce 0.01, laissant la somme fausse
+                    # (ex: 784.32 au lieu de 784.31).
+                    if remaining_to_subtract < 0.005:
                         break
                     
                     dum = dum_pbrut_cells[i]
@@ -2634,7 +2639,7 @@ def correct_blocage_weights(lta_folder_path, corrected_weight):
                     else:
                         print(f"         ⚠️  DUM {dum['dum_number']}: Marge insuffisante (P,BRUT={dum['pbrut_value']}, P,NET={dum['pnet_value']}, disponible={max(0, available_margin)} kg)")
                 
-                if remaining_to_subtract > 0.01:
+                if remaining_to_subtract > 0.005:
                     print(f"         ⚠️  ATTENTION: {remaining_to_subtract} kg n'ont pas pu être soustraits (marges insuffisantes)")
                 else:
                     print(f"         ✅ Soustraction complète réussie")
