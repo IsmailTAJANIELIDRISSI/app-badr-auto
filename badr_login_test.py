@@ -88,6 +88,16 @@ else:
 
 print(f"🌐 Navigateur configuré: {BROWSER_LABEL} (BROWSER={BROWSER})")
 
+# ============================================================================
+# 🛑 DEBUG (PROVISOIRE) — Arrêt après la sauvegarde de la déclaration
+# ----------------------------------------------------------------------------
+# Quand True: après un "SAUVEGARDER" réussi, on SAUTE complètement l'onglet
+# "Documents" (annexation) et toute la suite. On extrait uniquement la série
+# et on l'écrit dans generated_excel, puis le DUM est terminé (retour accueil).
+# Mettre False pour rétablir le flux complet (Documents + validation finale).
+# ============================================================================
+DEBUG_STOP_AFTER_SAVE = True
+
 # Returned by create_etat_depotage() on E2800124 / weight mismatch — caller must NOT run a full ED restart
 ED_CREATE_BUSINESS_ERROR = object()
 
@@ -7924,6 +7934,152 @@ def is_selenium_error(error):
     # Default: if unsure, assume it's a Selenium error (safer to retry)
     return True
 
+def _extract_and_save_dum_series(driver, wait, lta_folder_path, dum_data):
+    """Extrait la référence (série + clé) de la déclaration depuis la table de
+    référence BADR, puis l'enregistre dans result_LTAS.txt et dans generated_excel.
+
+    Returns:
+        str: la référence extraite (ex: "43050F"), ou un sentinel
+             ("REFERENCE_INCOMPLETE" / "REFERENCE_ERROR" / "REFERENCE_FAILED")
+             si l'extraction échoue (dans ce cas rien n'est écrit dans l'Excel).
+    """
+    print("\n   📋 Extraction de la référence de déclaration...")
+    dum_reference = None
+
+    for extract_attempt in range(3):
+        try:
+            if extract_attempt > 0:
+                print(f"      🔄 Tentative extraction {extract_attempt + 1}/3...")
+                time.sleep(1)
+
+            # Attendre que la page soit stable
+            time.sleep(2)
+            wait_for_ui_blocker_disappear(driver, timeout=5)
+
+            # Re-find the reference table on each attempt to avoid stale element
+            reference_table = wait.until(
+                EC.presence_of_element_located((By.ID, "mainTab:form0:j_id_3p_d"))
+            )
+
+            # Re-find rows to avoid stale element
+            rows = reference_table.find_elements(By.TAG_NAME, "tr")
+            if len(rows) >= 2:
+                # Re-find data row to avoid stale element
+                data_row_cells = rows[1].find_elements(By.TAG_NAME, "td")
+
+                if len(data_row_cells) >= 5:
+                    # Extract data immediately to avoid stale element
+                    serie = data_row_cells[3].text.strip()
+                    cle = data_row_cells[4].text.strip()
+
+                    # Combiner pour créer la référence complète
+                    dum_reference = f"{serie}{cle}"
+
+                    print(f"      ✓ Référence extraite: {dum_reference}")
+                    print(f"         - Série: {serie}")
+                    print(f"         - Clé: {cle}")
+
+                    # Sauvegarder la référence dans result_LTAS.txt
+                    save_dum_reference(lta_folder_path, dum_reference)
+
+                    # Extraire le numéro du DUM depuis sheet_name (ex: "Sheet 1" → 1)
+                    sheet_name = dum_data.get('sheet_name', '')
+                    dum_number = int(sheet_name.split()[-1]) if sheet_name.startswith('Sheet') else 1
+
+                    # Sauvegarder la série dans generated_excel
+                    save_dum_series_to_excel(lta_folder_path, dum_number, dum_reference)
+
+                    # Success - break retry loop
+                    break
+                else:
+                    if extract_attempt < 2:
+                        print(f"      ⚠️  Tentative {extract_attempt + 1}/3: Table de référence incomplète (cellules: {len(data_row_cells)})")
+                        continue
+                    else:
+                        print(f"      ❌ Table de référence incomplète après 3 tentatives (cellules: {len(data_row_cells)})")
+                        dum_reference = "REFERENCE_INCOMPLETE"
+            else:
+                if extract_attempt < 2:
+                    print(f"      ⚠️  Tentative {extract_attempt + 1}/3: Table de référence incomplète (lignes: {len(rows)})")
+                    continue
+                else:
+                    print(f"      ❌ Table de référence incomplète après 3 tentatives (lignes: {len(rows)})")
+                    dum_reference = "REFERENCE_INCOMPLETE"
+
+        except Exception as e:
+            if extract_attempt < 2:
+                print(f"      ⚠️  Tentative {extract_attempt + 1}/3 échouée: {e}")
+                if "stale element" in str(e).lower():
+                    print(f"      ℹ️  Stale element - retry extraction référence")
+            else:
+                print(f"      ❌ Erreur extraction référence après 3 tentatives: {e}")
+                dum_reference = "REFERENCE_ERROR"
+
+    if not dum_reference:
+        print(f"      ❌ Impossible d'extraire la référence après 3 tentatives")
+        dum_reference = "REFERENCE_FAILED"
+
+    return dum_reference
+
+
+def _return_to_home_for_next_dum(driver, wait):
+    """Retour à la page d'accueil (bouton 'quitter') puis sortie de l'iframe, afin
+    que le prochain DUM démarre proprement. Best-effort (ne lève jamais)."""
+    print("\n   🏠 Retour à l'accueil pour le prochain DUM...")
+    try:
+        # Attendre que la page soit complètement stable après validation
+        print("      ⏳ Attente stabilisation page...")
+        time.sleep(3)
+
+        # Attendre que le blocker soit complètement disparu
+        if wait_for_ui_blocker_disappear(driver, timeout=10):
+            print("      ✓ Page stabilisée (blocker disparu)")
+        else:
+            print("      ⚠️  Timeout blocker - continuons")
+
+        # Pause supplémentaire avant de cliquer sur Accueil
+        time.sleep(2)
+
+        # Cliquer sur le bouton "Accueil" (id="quitter")
+        accueil_btn = wait.until(
+            EC.element_to_be_clickable((By.ID, "quitter"))
+        )
+
+        try:
+            accueil_btn.click()
+            print("      ✓ Bouton 'Accueil' cliqué")
+        except Exception as click_error:
+            print(f"      ⚠️  Clic normal intercepté, utilisation de JavaScript...")
+            driver.execute_script("arguments[0].click();", accueil_btn)
+            print("      ✓ Bouton 'Accueil' cliqué (via JavaScript)")
+
+        # Attendre que le blocker de navigation disparaisse
+        print("      ⏳ Attente navigation vers accueil...")
+        if wait_for_ui_blocker_disappear(driver, timeout=10):
+            print("      ✓ Navigation terminée (blocker disparu)")
+        else:
+            print("      ⚠️  Timeout blocker navigation")
+
+        # Attendre le retour à la page d'accueil
+        time.sleep(3)
+
+        # IMPORTANT: Sortir de l'iframe pour revenir au contexte principal
+        driver.switch_to.default_content()
+        print("      ✓ Sorti de l'iframe, retour au contexte principal")
+
+        print("      ✓ Retour à l'accueil réussi")
+
+    except Exception as e:
+        print(f"      ❌ Erreur retour accueil: {e}")
+        traceback.print_exc()
+        # Essayer quand même de sortir de l'iframe
+        try:
+            driver.switch_to.default_content()
+            print("      ⚠️  Sorti de l'iframe malgré l'erreur")
+        except:
+            pass
+
+
 def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_reference_clean):
     """Fill the declaration form with shipper name and DUM data
     
@@ -9336,7 +9492,22 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             mark_dum_as_error_in_excel(lta_folder_path, dum_number)
             
             return False
-        
+
+        # ==================================================================
+        # 🛑 DEBUG (PROVISOIRE): stop après SAUVEGARDER — voir DEBUG_STOP_AFTER_SAVE
+        # On saute l'onglet 'Documents' (annexation) et TOUTE la suite: on extrait
+        # seulement la série, on l'écrit dans generated_excel, puis on termine le DUM.
+        # ==================================================================
+        if DEBUG_STOP_AFTER_SAVE:
+            print("\n   🛑 [DEBUG] DEBUG_STOP_AFTER_SAVE actif — onglet 'Documents' et suite IGNORÉS.")
+            print("   🛑 [DEBUG] Extraction de la série puis écriture dans generated_excel...")
+            dum_reference = _extract_and_save_dum_series(driver, wait, lta_folder_path, dum_data)
+            print(f"   🛑 [DEBUG] Référence: {dum_reference} — DUM terminé (documents ignorés).")
+
+            # Retour à l'accueil pour laisser le prochain DUM démarrer proprement
+            _return_to_home_for_next_dum(driver, wait)
+            return True
+
         # ==================================================================
         # ÉTAPE 7: Naviguer vers "Documents" et uploader les fichiers
         # ==================================================================
@@ -10754,139 +10925,13 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         # ==================================================================
         # ÉTAPE 12: Extraire la référence de déclaration et la sauvegarder
         # ==================================================================
-        print("\n   📋 Extraction de la référence de déclaration...")
-        dum_reference = None
-        
-        for extract_attempt in range(3):
-            try:
-                if extract_attempt > 0:
-                    print(f"      🔄 Tentative extraction {extract_attempt + 1}/3...")
-                    time.sleep(1)
-                
-                # Attendre que la page soit stable
-                time.sleep(2)
-                wait_for_ui_blocker_disappear(driver, timeout=5)
-                
-                # Re-find the reference table on each attempt to avoid stale element
-                reference_table = wait.until(
-                    EC.presence_of_element_located((By.ID, "mainTab:form0:j_id_3p_d"))
-                )
-                
-                # Re-find rows to avoid stale element
-                rows = reference_table.find_elements(By.TAG_NAME, "tr")
-                if len(rows) >= 2:
-                    # Re-find data row to avoid stale element
-                    data_row_cells = rows[1].find_elements(By.TAG_NAME, "td")
-                    
-                    if len(data_row_cells) >= 5:
-                        # Extract data immediately to avoid stale element
-                        serie = data_row_cells[3].text.strip()
-                        cle = data_row_cells[4].text.strip()
-                        
-                        # Combiner pour créer la référence complète
-                        dum_reference = f"{serie}{cle}"
-                        
-                        print(f"      ✓ Référence extraite: {dum_reference}")
-                        print(f"         - Série: {serie}")
-                        print(f"         - Clé: {cle}")
-                        
-                        # Sauvegarder la référence dans result_LTAS.txt
-                        save_dum_reference(lta_folder_path, dum_reference)
-                        
-                        # Extraire le numéro du DUM depuis sheet_name (ex: "Sheet 1" → 1)
-                        sheet_name = dum_data.get('sheet_name', '')
-                        dum_number = int(sheet_name.split()[-1]) if sheet_name.startswith('Sheet') else 1
-                        
-                        # Sauvegarder la série dans generated_excel
-                        save_dum_series_to_excel(lta_folder_path, dum_number, dum_reference)
-                        
-                        # Success - break retry loop
-                        break
-                    else:
-                        if extract_attempt < 2:
-                            print(f"      ⚠️  Tentative {extract_attempt + 1}/3: Table de référence incomplète (cellules: {len(data_row_cells)})")
-                            continue
-                        else:
-                            print(f"      ❌ Table de référence incomplète après 3 tentatives (cellules: {len(data_row_cells)})")
-                            dum_reference = "REFERENCE_INCOMPLETE"
-                else:
-                    if extract_attempt < 2:
-                        print(f"      ⚠️  Tentative {extract_attempt + 1}/3: Table de référence incomplète (lignes: {len(rows)})")
-                        continue
-                    else:
-                        print(f"      ❌ Table de référence incomplète après 3 tentatives (lignes: {len(rows)})")
-                        dum_reference = "REFERENCE_INCOMPLETE"
-                    
-            except Exception as e:
-                if extract_attempt < 2:
-                    print(f"      ⚠️  Tentative {extract_attempt + 1}/3 échouée: {e}")
-                    if "stale element" in str(e).lower():
-                        print(f"      ℹ️  Stale element - retry extraction référence")
-                else:
-                    print(f"      ❌ Erreur extraction référence après 3 tentatives: {e}")
-                    dum_reference = "REFERENCE_ERROR"
-        
-        if not dum_reference:
-            print(f"      ❌ Impossible d'extraire la référence après 3 tentatives")
-            dum_reference = "REFERENCE_FAILED"
-        
+        dum_reference = _extract_and_save_dum_series(driver, wait, lta_folder_path, dum_data)
+
         # ==================================================================
         # ÉTAPE 13: Retour à l'accueil pour traiter le prochain DUM
         # ==================================================================
-        print("\n   🏠 Retour à l'accueil pour le prochain DUM...")
-        try:
-            # Attendre que la page soit complètement stable après validation
-            print("      ⏳ Attente stabilisation page...")
-            time.sleep(3)
-            
-            # Attendre que le blocker soit complètement disparu
-            if wait_for_ui_blocker_disappear(driver, timeout=10):
-                print("      ✓ Page stabilisée (blocker disparu)")
-            else:
-                print("      ⚠️  Timeout blocker - continuons")
-            
-            # Pause supplémentaire avant de cliquer sur Accueil
-            time.sleep(2)
-            
-            # Cliquer sur le bouton "Accueil" (id="quitter")
-            accueil_btn = wait.until(
-                EC.element_to_be_clickable((By.ID, "quitter"))
-            )
-            
-            try:
-                accueil_btn.click()
-                print("      ✓ Bouton 'Accueil' cliqué")
-            except Exception as click_error:
-                print(f"      ⚠️  Clic normal intercepté, utilisation de JavaScript...")
-                driver.execute_script("arguments[0].click();", accueil_btn)
-                print("      ✓ Bouton 'Accueil' cliqué (via JavaScript)")
-            
-            # Attendre que le blocker de navigation disparaisse
-            print("      ⏳ Attente navigation vers accueil...")
-            if wait_for_ui_blocker_disappear(driver, timeout=10):
-                print("      ✓ Navigation terminée (blocker disparu)")
-            else:
-                print("      ⚠️  Timeout blocker navigation")
-            
-            # Attendre le retour à la page d'accueil
-            time.sleep(3)
-            
-            # IMPORTANT: Sortir de l'iframe pour revenir au contexte principal
-            driver.switch_to.default_content()
-            print("      ✓ Sorti de l'iframe, retour au contexte principal")
-            
-            print("      ✓ Retour à l'accueil réussi")
-            
-        except Exception as e:
-            print(f"      ❌ Erreur retour accueil: {e}")
-            traceback.print_exc()
-            # Essayer quand même de sortir de l'iframe
-            try:
-                driver.switch_to.default_content()
-                print("      ⚠️  Sorti de l'iframe malgré l'erreur")
-            except:
-                pass
-        
+        _return_to_home_for_next_dum(driver, wait)
+
         return True
         
     except Exception as e:
