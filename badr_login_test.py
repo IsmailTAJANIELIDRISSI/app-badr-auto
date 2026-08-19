@@ -1,10 +1,14 @@
 from selenium import webdriver
-from selenium.webdriver.edge.service import Service
-from selenium.webdriver.edge.options import Options
+# PROVISOIRE (Chrome): on importe les deux jeux Service/Options et on choisit selon
+# BROWSER plus bas (voir bloc "SÉLECTION DU NAVIGATEUR"). Pour revenir à Edge, il
+# suffit de remettre BROWSER = "edge" — ces imports fonctionnent pour les deux.
+from selenium.webdriver.edge.service import Service as EdgeService
+from selenium.webdriver.edge.options import Options as EdgeOptions
+from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.microsoft import EdgeChromiumDriverManager
 import subprocess
 import time
 import os
@@ -50,6 +54,39 @@ load_dotenv()
 EDGE_PATH = os.getenv('EDGE_PATH', r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe")
 DRIVER_PATH = os.getenv('DRIVER_PATH', r"C:\Users\pc\Downloads\edgedriver_win64\msedgedriver.exe")
 BADR_PASSWORD = os.getenv('BADR_PASSWORD', '')
+
+# ============================================================================
+# SÉLECTION DU NAVIGATEUR (PROVISOIRE — actuellement CHROME)
+# ----------------------------------------------------------------------------
+# Pour REVENIR À MICROSOFT EDGE: mettre BROWSER = "edge" ci-dessous
+# (ou définir BROWSER=edge dans le .env). Aucune autre modification requise.
+# Tout le reste du code utilise les variables BROWSER_* définies ici.
+# ============================================================================
+BROWSER = os.getenv('BROWSER', 'chrome').strip().lower()  # 'chrome' (provisoire) ou 'edge'
+USE_CHROME = (BROWSER == 'chrome')
+
+if USE_CHROME:
+    Service = ChromeService
+    Options = ChromeOptions
+    BROWSER_LABEL = "Chrome"
+    BROWSER_PROCESS_IMAGE = "chrome.exe"    # cible de taskkill /IM
+    BROWSER_PROCESS_MATCH = "chrome"        # sous-chaîne recherchée dans psutil (name)
+    BROWSER_EXE_PATH = os.getenv('CHROME_PATH', r"C:\Program Files\Google\Chrome\Application\chrome.exe")
+    BROWSER_EXE_ALT = r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
+    BROWSER_DRIVER_PATH = os.getenv('CHROME_DRIVER_PATH', '')  # optionnel; sinon auto (Selenium Manager)
+    BROWSER_DRIVER_NAME = "chromedriver.exe"
+else:
+    Service = EdgeService
+    Options = EdgeOptions
+    BROWSER_LABEL = "Edge"
+    BROWSER_PROCESS_IMAGE = "msedge.exe"
+    BROWSER_PROCESS_MATCH = "msedge"
+    BROWSER_EXE_PATH = EDGE_PATH
+    BROWSER_EXE_ALT = r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"
+    BROWSER_DRIVER_PATH = DRIVER_PATH
+    BROWSER_DRIVER_NAME = "msedgedriver.exe"
+
+print(f"🌐 Navigateur configuré: {BROWSER_LABEL} (BROWSER={BROWSER})")
 
 # Returned by create_etat_depotage() on E2800124 / weight mismatch — caller must NOT run a full ED restart
 ED_CREATE_BUSINESS_ERROR = object()
@@ -141,26 +178,26 @@ def force_kill_edge_processes():
     """Force la fermeture de tous les processus Edge avec vérification"""
     try:
         # Tuer tous les processus Edge
-        os.system("taskkill /F /IM msedge.exe >nul 2>&1")
+        os.system(f"taskkill /F /IM {BROWSER_PROCESS_IMAGE} >nul 2>&1")
         time.sleep(1)
         
         # Vérifier avec psutil que tous les processus sont terminés
         max_attempts = 5
         for attempt in range(max_attempts):
             edge_processes = [p for p in psutil.process_iter(['pid', 'name']) 
-                             if 'msedge' in p.info['name'].lower()]
+                             if BROWSER_PROCESS_MATCH in p.info['name'].lower()]
             if not edge_processes:
                 break
             if attempt < max_attempts - 1:
                 time.sleep(1)
-                os.system("taskkill /F /IM msedge.exe >nul 2>&1")
+                os.system(f"taskkill /F /IM {BROWSER_PROCESS_IMAGE} >nul 2>&1")
         
         if edge_processes:
-            print(f"⚠️  {len(edge_processes)} processus Edge encore actifs après {max_attempts} tentatives")
+            print(f"⚠️  {len(edge_processes)} processus {BROWSER_LABEL} encore actifs après {max_attempts} tentatives")
         else:
-            print("✓ Tous les processus Edge fermés")
+            print(f"✓ Tous les processus {BROWSER_LABEL} fermés")
     except Exception as e:
-        print(f"⚠️  Erreur lors de la fermeture des processus Edge: {e}")
+        print(f"⚠️  Erreur lors de la fermeture des processus {BROWSER_LABEL}: {e}")
 
 def cleanup_old_profiles():
     """Nettoie les anciens profils temporaires avec gestion des fichiers verrouillés"""
@@ -175,7 +212,7 @@ def cleanup_old_profiles():
                     try:
                         # Vérifier si des processus Edge utilisent encore ce profil
                         edge_processes = [p for p in psutil.process_iter(['pid', 'name', 'exe']) 
-                                         if 'msedge' in p.info['name'].lower()]
+                                         if BROWSER_PROCESS_MATCH in p.info['name'].lower()]
                         if edge_processes:
                             # Attendre un peu plus si des processus sont encore actifs
                             time.sleep(2)
@@ -397,17 +434,17 @@ def parse_lta_file(lta_file_path):
 def start_fresh_edge():
     """Lance Edge avec un profil complètement nouveau à chaque fois"""
     
-    if not os.path.exists(EDGE_PATH):
-        alt_path = r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"
+    if not os.path.exists(BROWSER_EXE_PATH):
+        alt_path = BROWSER_EXE_ALT
         if os.path.exists(alt_path):
             edge_path = alt_path
         else:
-            print("❌ Edge introuvable !")
+            print(f"❌ {BROWSER_LABEL} introuvable !")
             return None, None
     else:
-        edge_path = EDGE_PATH
-    
-    print("🔄 Fermeture des instances Edge existantes...")
+        edge_path = BROWSER_EXE_PATH
+
+    print(f"🔄 Fermeture des instances {BROWSER_LABEL} existantes...")
     force_kill_edge_processes()
     time.sleep(2)
     
@@ -419,8 +456,8 @@ def start_fresh_edge():
     debug_port = get_free_port()
     print(f"🔌 Port de debug: {debug_port}")
     
-    print("🚀 Lancement de Edge (nouvelle instance)...")
-    
+    print(f"🚀 Lancement de {BROWSER_LABEL} (nouvelle instance)...")
+
     command = [
         edge_path,
         f"--remote-debugging-port={debug_port}",
@@ -442,56 +479,69 @@ def start_fresh_edge():
     ]
     
     subprocess.Popen(command)
-    time.sleep(6)  # Augmenté de 4 à 6 secondes pour laisser Edge se stabiliser complètement
-    
-    print("✓ Edge lancé avec un profil vierge")
+    time.sleep(6)  # Augmenté de 4 à 6 secondes pour laisser le navigateur se stabiliser complètement
+
+    print(f"✓ {BROWSER_LABEL} lancé avec un profil vierge")
     return profile_path, debug_port
 
 def _get_edge_driver_path():
-    """Get Edge driver path with caching and fallback strategy"""
+    """Get the WebDriver path (Chrome or Edge, selon BROWSER) with caching and fallback."""
     global _CACHED_DRIVER_PATH
-    
+
     # Return cached path if available
     if _CACHED_DRIVER_PATH:
         if os.path.exists(_CACHED_DRIVER_PATH):
             return _CACHED_DRIVER_PATH
-    
-    # Strategy 1: Try manual driver path from .env (PRIORITÉ)
-    if DRIVER_PATH and os.path.exists(DRIVER_PATH):
-        print(f"   ✓ Utilisation driver manuel: {DRIVER_PATH}")
-        _CACHED_DRIVER_PATH = DRIVER_PATH
-        return DRIVER_PATH
-    
-    # Strategy 2: Search for msedgedriver.exe in common locations
-    common_paths = [
-        r"C:\Users\pc\Downloads\edgedriver_win64\msedgedriver.exe",
-        r"C:\WebDriver\msedgedriver.exe",
-        os.path.join(os.getcwd(), "msedgedriver.exe"),
-        os.path.join(os.path.expanduser("~"), "Downloads", "msedgedriver.exe")
-    ]
-    
+
+    # Strategy 1: Try explicit driver path from .env (PRIORITÉ)
+    if BROWSER_DRIVER_PATH and os.path.exists(BROWSER_DRIVER_PATH):
+        print(f"   ✓ Utilisation driver manuel: {BROWSER_DRIVER_PATH}")
+        _CACHED_DRIVER_PATH = BROWSER_DRIVER_PATH
+        return BROWSER_DRIVER_PATH
+
+    # Strategy 2: Search for the driver executable in common locations
+    driver_name = BROWSER_DRIVER_NAME
+    if USE_CHROME:
+        common_paths = [
+            r"C:\Users\pc\Downloads\chromedriver_win64\chromedriver.exe",
+            r"C:\WebDriver\chromedriver.exe",
+            os.path.join(os.getcwd(), driver_name),
+            os.path.join(os.path.expanduser("~"), "Downloads", driver_name),
+        ]
+    else:
+        common_paths = [
+            r"C:\Users\pc\Downloads\edgedriver_win64\msedgedriver.exe",
+            r"C:\WebDriver\msedgedriver.exe",
+            os.path.join(os.getcwd(), driver_name),
+            os.path.join(os.path.expanduser("~"), "Downloads", driver_name),
+        ]
+
     for path in common_paths:
         if os.path.exists(path):
             print(f"   ✓ Driver trouvé: {path}")
             _CACHED_DRIVER_PATH = path
             return path
-    
-    # Strategy 3: Try webdriver-manager as last resort (offline fallback)
+
+    # Strategy 3: Try webdriver-manager as last resort (téléchargement auto)
     try:
         print("   📥 Tentative téléchargement driver auto (webdriver-manager)...")
-        from webdriver_manager.microsoft import EdgeChromiumDriverManager
-        
         # Set timeout for download
         os.environ['WDM_TIMEOUT'] = '10'  # 10 seconds timeout
-        
-        driver_path = EdgeChromiumDriverManager().install()
+
+        if USE_CHROME:
+            from webdriver_manager.chrome import ChromeDriverManager
+            driver_path = ChromeDriverManager().install()
+        else:
+            from webdriver_manager.microsoft import EdgeChromiumDriverManager
+            driver_path = EdgeChromiumDriverManager().install()
+
         if driver_path and os.path.exists(driver_path):
             print(f"   ✓ Driver auto installé: {driver_path}")
             _CACHED_DRIVER_PATH = driver_path
             return driver_path
     except Exception as e:
         print(f"   ⚠️  Échec webdriver-manager: {str(e)[:100]}")
-    
+
     print("   ❌ Aucun driver trouvé")
     return None
 
@@ -530,26 +580,34 @@ def connect_to_edge(debug_port):
         edge_options.accept_insecure_certs = True
         
         # Get driver path with fallback strategy
-        print("🔗 Connexion à Edge...")
+        print(f"🔗 Connexion à {BROWSER_LABEL}...")
         driver_path = _get_edge_driver_path()
-        
-        if not driver_path:
+
+        # Edge exige un driver explicite; Chrome peut retomber sur Selenium Manager (auto).
+        if not driver_path and not USE_CHROME:
             print("❌ Impossible de trouver ou télécharger le driver Edge")
             print("💡 Solutions:")
             print("   1. Télécharger manuellement: https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/")
             print("   2. Placer msedgedriver.exe dans: C:\\WebDriver\\")
             print("   3. Configurer DRIVER_PATH dans .env")
             return None
-        
-        service = Service(driver_path)
-        driver = webdriver.Edge(service=service, options=edge_options)
+
+        if driver_path:
+            service = Service(driver_path)
+            driver = (webdriver.Chrome(service=service, options=edge_options)
+                      if USE_CHROME else
+                      webdriver.Edge(service=service, options=edge_options))
+        else:
+            # Chrome sans driver local: Selenium Manager résout/télécharge automatiquement
+            print("   ℹ️  Aucun chromedriver local — Selenium Manager (auto)")
+            driver = webdriver.Chrome(options=edge_options)
         
         # Vérifier que la fenêtre est toujours ouverte
         try:
             driver.current_window_handle
             print("✓ Connecté avec succès !")
         except Exception as e:
-            print(f"❌ Fenêtre Edge fermée immédiatement après connexion: {e}")
+            print(f"❌ Fenêtre {BROWSER_LABEL} fermée immédiatement après connexion: {e}")
             try:
                 driver.quit()
             except:
