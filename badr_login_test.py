@@ -1,14 +1,10 @@
 from selenium import webdriver
-# PROVISOIRE (Chrome): on importe les deux jeux Service/Options et on choisit selon
-# BROWSER plus bas (voir bloc "SÉLECTION DU NAVIGATEUR"). Pour revenir à Edge, il
-# suffit de remettre BROWSER = "edge" — ces imports fonctionnent pour les deux.
-from selenium.webdriver.edge.service import Service as EdgeService
-from selenium.webdriver.edge.options import Options as EdgeOptions
-from selenium.webdriver.chrome.service import Service as ChromeService
-from selenium.webdriver.chrome.options import Options as ChromeOptions
+from selenium.webdriver.edge.service import Service
+from selenium.webdriver.edge.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.microsoft import EdgeChromiumDriverManager
 import subprocess
 import time
 import os
@@ -54,49 +50,6 @@ load_dotenv()
 EDGE_PATH = os.getenv('EDGE_PATH', r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe")
 DRIVER_PATH = os.getenv('DRIVER_PATH', r"C:\Users\pc\Downloads\edgedriver_win64\msedgedriver.exe")
 BADR_PASSWORD = os.getenv('BADR_PASSWORD', '')
-
-# ============================================================================
-# SÉLECTION DU NAVIGATEUR (PROVISOIRE — actuellement CHROME)
-# ----------------------------------------------------------------------------
-# Pour REVENIR À MICROSOFT EDGE: mettre BROWSER = "edge" ci-dessous
-# (ou définir BROWSER=edge dans le .env). Aucune autre modification requise.
-# Tout le reste du code utilise les variables BROWSER_* définies ici.
-# ============================================================================
-BROWSER = os.getenv('BROWSER', 'chrome').strip().lower()  # 'chrome' (provisoire) ou 'edge'
-USE_CHROME = (BROWSER == 'chrome')
-
-if USE_CHROME:
-    Service = ChromeService
-    Options = ChromeOptions
-    BROWSER_LABEL = "Chrome"
-    BROWSER_PROCESS_IMAGE = "chrome.exe"    # cible de taskkill /IM
-    BROWSER_PROCESS_MATCH = "chrome"        # sous-chaîne recherchée dans psutil (name)
-    BROWSER_EXE_PATH = os.getenv('CHROME_PATH', r"C:\Program Files\Google\Chrome\Application\chrome.exe")
-    BROWSER_EXE_ALT = r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
-    BROWSER_DRIVER_PATH = os.getenv('CHROME_DRIVER_PATH', '')  # optionnel; sinon auto (Selenium Manager)
-    BROWSER_DRIVER_NAME = "chromedriver.exe"
-else:
-    Service = EdgeService
-    Options = EdgeOptions
-    BROWSER_LABEL = "Edge"
-    BROWSER_PROCESS_IMAGE = "msedge.exe"
-    BROWSER_PROCESS_MATCH = "msedge"
-    BROWSER_EXE_PATH = EDGE_PATH
-    BROWSER_EXE_ALT = r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"
-    BROWSER_DRIVER_PATH = DRIVER_PATH
-    BROWSER_DRIVER_NAME = "msedgedriver.exe"
-
-print(f"🌐 Navigateur configuré: {BROWSER_LABEL} (BROWSER={BROWSER})")
-
-# ============================================================================
-# 🛑 DEBUG (PROVISOIRE) — Arrêt après la sauvegarde de la déclaration
-# ----------------------------------------------------------------------------
-# Quand True: après un "SAUVEGARDER" réussi, on SAUTE complètement l'onglet
-# "Documents" (annexation) et toute la suite. On extrait uniquement la série
-# et on l'écrit dans generated_excel, puis le DUM est terminé (retour accueil).
-# Mettre False pour rétablir le flux complet (Documents + validation finale).
-# ============================================================================
-DEBUG_STOP_AFTER_SAVE = True
 
 # Returned by create_etat_depotage() on E2800124 / weight mismatch — caller must NOT run a full ED restart
 ED_CREATE_BUSINESS_ERROR = object()
@@ -188,26 +141,26 @@ def force_kill_edge_processes():
     """Force la fermeture de tous les processus Edge avec vérification"""
     try:
         # Tuer tous les processus Edge
-        os.system(f"taskkill /F /IM {BROWSER_PROCESS_IMAGE} >nul 2>&1")
+        os.system("taskkill /F /IM msedge.exe >nul 2>&1")
         time.sleep(1)
         
         # Vérifier avec psutil que tous les processus sont terminés
         max_attempts = 5
         for attempt in range(max_attempts):
             edge_processes = [p for p in psutil.process_iter(['pid', 'name']) 
-                             if BROWSER_PROCESS_MATCH in p.info['name'].lower()]
+                             if 'msedge' in p.info['name'].lower()]
             if not edge_processes:
                 break
             if attempt < max_attempts - 1:
                 time.sleep(1)
-                os.system(f"taskkill /F /IM {BROWSER_PROCESS_IMAGE} >nul 2>&1")
+                os.system("taskkill /F /IM msedge.exe >nul 2>&1")
         
         if edge_processes:
-            print(f"⚠️  {len(edge_processes)} processus {BROWSER_LABEL} encore actifs après {max_attempts} tentatives")
+            print(f"⚠️  {len(edge_processes)} processus Edge encore actifs après {max_attempts} tentatives")
         else:
-            print(f"✓ Tous les processus {BROWSER_LABEL} fermés")
+            print("✓ Tous les processus Edge fermés")
     except Exception as e:
-        print(f"⚠️  Erreur lors de la fermeture des processus {BROWSER_LABEL}: {e}")
+        print(f"⚠️  Erreur lors de la fermeture des processus Edge: {e}")
 
 def cleanup_old_profiles():
     """Nettoie les anciens profils temporaires avec gestion des fichiers verrouillés"""
@@ -222,7 +175,7 @@ def cleanup_old_profiles():
                     try:
                         # Vérifier si des processus Edge utilisent encore ce profil
                         edge_processes = [p for p in psutil.process_iter(['pid', 'name', 'exe']) 
-                                         if BROWSER_PROCESS_MATCH in p.info['name'].lower()]
+                                         if 'msedge' in p.info['name'].lower()]
                         if edge_processes:
                             # Attendre un peu plus si des processus sont encore actifs
                             time.sleep(2)
@@ -444,17 +397,17 @@ def parse_lta_file(lta_file_path):
 def start_fresh_edge():
     """Lance Edge avec un profil complètement nouveau à chaque fois"""
     
-    if not os.path.exists(BROWSER_EXE_PATH):
-        alt_path = BROWSER_EXE_ALT
+    if not os.path.exists(EDGE_PATH):
+        alt_path = r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"
         if os.path.exists(alt_path):
             edge_path = alt_path
         else:
-            print(f"❌ {BROWSER_LABEL} introuvable !")
+            print("❌ Edge introuvable !")
             return None, None
     else:
-        edge_path = BROWSER_EXE_PATH
-
-    print(f"🔄 Fermeture des instances {BROWSER_LABEL} existantes...")
+        edge_path = EDGE_PATH
+    
+    print("🔄 Fermeture des instances Edge existantes...")
     force_kill_edge_processes()
     time.sleep(2)
     
@@ -466,8 +419,8 @@ def start_fresh_edge():
     debug_port = get_free_port()
     print(f"🔌 Port de debug: {debug_port}")
     
-    print(f"🚀 Lancement de {BROWSER_LABEL} (nouvelle instance)...")
-
+    print("🚀 Lancement de Edge (nouvelle instance)...")
+    
     command = [
         edge_path,
         f"--remote-debugging-port={debug_port}",
@@ -489,69 +442,56 @@ def start_fresh_edge():
     ]
     
     subprocess.Popen(command)
-    time.sleep(6)  # Augmenté de 4 à 6 secondes pour laisser le navigateur se stabiliser complètement
-
-    print(f"✓ {BROWSER_LABEL} lancé avec un profil vierge")
+    time.sleep(6)  # Augmenté de 4 à 6 secondes pour laisser Edge se stabiliser complètement
+    
+    print("✓ Edge lancé avec un profil vierge")
     return profile_path, debug_port
 
 def _get_edge_driver_path():
-    """Get the WebDriver path (Chrome or Edge, selon BROWSER) with caching and fallback."""
+    """Get Edge driver path with caching and fallback strategy"""
     global _CACHED_DRIVER_PATH
-
+    
     # Return cached path if available
     if _CACHED_DRIVER_PATH:
         if os.path.exists(_CACHED_DRIVER_PATH):
             return _CACHED_DRIVER_PATH
-
-    # Strategy 1: Try explicit driver path from .env (PRIORITÉ)
-    if BROWSER_DRIVER_PATH and os.path.exists(BROWSER_DRIVER_PATH):
-        print(f"   ✓ Utilisation driver manuel: {BROWSER_DRIVER_PATH}")
-        _CACHED_DRIVER_PATH = BROWSER_DRIVER_PATH
-        return BROWSER_DRIVER_PATH
-
-    # Strategy 2: Search for the driver executable in common locations
-    driver_name = BROWSER_DRIVER_NAME
-    if USE_CHROME:
-        common_paths = [
-            r"C:\Users\pc\Downloads\chromedriver_win64\chromedriver.exe",
-            r"C:\WebDriver\chromedriver.exe",
-            os.path.join(os.getcwd(), driver_name),
-            os.path.join(os.path.expanduser("~"), "Downloads", driver_name),
-        ]
-    else:
-        common_paths = [
-            r"C:\Users\pc\Downloads\edgedriver_win64\msedgedriver.exe",
-            r"C:\WebDriver\msedgedriver.exe",
-            os.path.join(os.getcwd(), driver_name),
-            os.path.join(os.path.expanduser("~"), "Downloads", driver_name),
-        ]
-
+    
+    # Strategy 1: Try manual driver path from .env (PRIORITÉ)
+    if DRIVER_PATH and os.path.exists(DRIVER_PATH):
+        print(f"   ✓ Utilisation driver manuel: {DRIVER_PATH}")
+        _CACHED_DRIVER_PATH = DRIVER_PATH
+        return DRIVER_PATH
+    
+    # Strategy 2: Search for msedgedriver.exe in common locations
+    common_paths = [
+        r"C:\Users\pc\Downloads\edgedriver_win64\msedgedriver.exe",
+        r"C:\WebDriver\msedgedriver.exe",
+        os.path.join(os.getcwd(), "msedgedriver.exe"),
+        os.path.join(os.path.expanduser("~"), "Downloads", "msedgedriver.exe")
+    ]
+    
     for path in common_paths:
         if os.path.exists(path):
             print(f"   ✓ Driver trouvé: {path}")
             _CACHED_DRIVER_PATH = path
             return path
-
-    # Strategy 3: Try webdriver-manager as last resort (téléchargement auto)
+    
+    # Strategy 3: Try webdriver-manager as last resort (offline fallback)
     try:
         print("   📥 Tentative téléchargement driver auto (webdriver-manager)...")
+        from webdriver_manager.microsoft import EdgeChromiumDriverManager
+        
         # Set timeout for download
         os.environ['WDM_TIMEOUT'] = '10'  # 10 seconds timeout
-
-        if USE_CHROME:
-            from webdriver_manager.chrome import ChromeDriverManager
-            driver_path = ChromeDriverManager().install()
-        else:
-            from webdriver_manager.microsoft import EdgeChromiumDriverManager
-            driver_path = EdgeChromiumDriverManager().install()
-
+        
+        driver_path = EdgeChromiumDriverManager().install()
         if driver_path and os.path.exists(driver_path):
             print(f"   ✓ Driver auto installé: {driver_path}")
             _CACHED_DRIVER_PATH = driver_path
             return driver_path
     except Exception as e:
         print(f"   ⚠️  Échec webdriver-manager: {str(e)[:100]}")
-
+    
     print("   ❌ Aucun driver trouvé")
     return None
 
@@ -590,34 +530,26 @@ def connect_to_edge(debug_port):
         edge_options.accept_insecure_certs = True
         
         # Get driver path with fallback strategy
-        print(f"🔗 Connexion à {BROWSER_LABEL}...")
+        print("🔗 Connexion à Edge...")
         driver_path = _get_edge_driver_path()
-
-        # Edge exige un driver explicite; Chrome peut retomber sur Selenium Manager (auto).
-        if not driver_path and not USE_CHROME:
+        
+        if not driver_path:
             print("❌ Impossible de trouver ou télécharger le driver Edge")
             print("💡 Solutions:")
             print("   1. Télécharger manuellement: https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/")
             print("   2. Placer msedgedriver.exe dans: C:\\WebDriver\\")
             print("   3. Configurer DRIVER_PATH dans .env")
             return None
-
-        if driver_path:
-            service = Service(driver_path)
-            driver = (webdriver.Chrome(service=service, options=edge_options)
-                      if USE_CHROME else
-                      webdriver.Edge(service=service, options=edge_options))
-        else:
-            # Chrome sans driver local: Selenium Manager résout/télécharge automatiquement
-            print("   ℹ️  Aucun chromedriver local — Selenium Manager (auto)")
-            driver = webdriver.Chrome(options=edge_options)
+        
+        service = Service(driver_path)
+        driver = webdriver.Edge(service=service, options=edge_options)
         
         # Vérifier que la fenêtre est toujours ouverte
         try:
             driver.current_window_handle
             print("✓ Connecté avec succès !")
         except Exception as e:
-            print(f"❌ Fenêtre {BROWSER_LABEL} fermée immédiatement après connexion: {e}")
+            print(f"❌ Fenêtre Edge fermée immédiatement après connexion: {e}")
             try:
                 driver.quit()
             except:
@@ -7934,152 +7866,6 @@ def is_selenium_error(error):
     # Default: if unsure, assume it's a Selenium error (safer to retry)
     return True
 
-def _extract_and_save_dum_series(driver, wait, lta_folder_path, dum_data):
-    """Extrait la référence (série + clé) de la déclaration depuis la table de
-    référence BADR, puis l'enregistre dans result_LTAS.txt et dans generated_excel.
-
-    Returns:
-        str: la référence extraite (ex: "43050F"), ou un sentinel
-             ("REFERENCE_INCOMPLETE" / "REFERENCE_ERROR" / "REFERENCE_FAILED")
-             si l'extraction échoue (dans ce cas rien n'est écrit dans l'Excel).
-    """
-    print("\n   📋 Extraction de la référence de déclaration...")
-    dum_reference = None
-
-    for extract_attempt in range(3):
-        try:
-            if extract_attempt > 0:
-                print(f"      🔄 Tentative extraction {extract_attempt + 1}/3...")
-                time.sleep(1)
-
-            # Attendre que la page soit stable
-            time.sleep(2)
-            wait_for_ui_blocker_disappear(driver, timeout=5)
-
-            # Re-find the reference table on each attempt to avoid stale element
-            reference_table = wait.until(
-                EC.presence_of_element_located((By.ID, "mainTab:form0:j_id_3p_d"))
-            )
-
-            # Re-find rows to avoid stale element
-            rows = reference_table.find_elements(By.TAG_NAME, "tr")
-            if len(rows) >= 2:
-                # Re-find data row to avoid stale element
-                data_row_cells = rows[1].find_elements(By.TAG_NAME, "td")
-
-                if len(data_row_cells) >= 5:
-                    # Extract data immediately to avoid stale element
-                    serie = data_row_cells[3].text.strip()
-                    cle = data_row_cells[4].text.strip()
-
-                    # Combiner pour créer la référence complète
-                    dum_reference = f"{serie}{cle}"
-
-                    print(f"      ✓ Référence extraite: {dum_reference}")
-                    print(f"         - Série: {serie}")
-                    print(f"         - Clé: {cle}")
-
-                    # Sauvegarder la référence dans result_LTAS.txt
-                    save_dum_reference(lta_folder_path, dum_reference)
-
-                    # Extraire le numéro du DUM depuis sheet_name (ex: "Sheet 1" → 1)
-                    sheet_name = dum_data.get('sheet_name', '')
-                    dum_number = int(sheet_name.split()[-1]) if sheet_name.startswith('Sheet') else 1
-
-                    # Sauvegarder la série dans generated_excel
-                    save_dum_series_to_excel(lta_folder_path, dum_number, dum_reference)
-
-                    # Success - break retry loop
-                    break
-                else:
-                    if extract_attempt < 2:
-                        print(f"      ⚠️  Tentative {extract_attempt + 1}/3: Table de référence incomplète (cellules: {len(data_row_cells)})")
-                        continue
-                    else:
-                        print(f"      ❌ Table de référence incomplète après 3 tentatives (cellules: {len(data_row_cells)})")
-                        dum_reference = "REFERENCE_INCOMPLETE"
-            else:
-                if extract_attempt < 2:
-                    print(f"      ⚠️  Tentative {extract_attempt + 1}/3: Table de référence incomplète (lignes: {len(rows)})")
-                    continue
-                else:
-                    print(f"      ❌ Table de référence incomplète après 3 tentatives (lignes: {len(rows)})")
-                    dum_reference = "REFERENCE_INCOMPLETE"
-
-        except Exception as e:
-            if extract_attempt < 2:
-                print(f"      ⚠️  Tentative {extract_attempt + 1}/3 échouée: {e}")
-                if "stale element" in str(e).lower():
-                    print(f"      ℹ️  Stale element - retry extraction référence")
-            else:
-                print(f"      ❌ Erreur extraction référence après 3 tentatives: {e}")
-                dum_reference = "REFERENCE_ERROR"
-
-    if not dum_reference:
-        print(f"      ❌ Impossible d'extraire la référence après 3 tentatives")
-        dum_reference = "REFERENCE_FAILED"
-
-    return dum_reference
-
-
-def _return_to_home_for_next_dum(driver, wait):
-    """Retour à la page d'accueil (bouton 'quitter') puis sortie de l'iframe, afin
-    que le prochain DUM démarre proprement. Best-effort (ne lève jamais)."""
-    print("\n   🏠 Retour à l'accueil pour le prochain DUM...")
-    try:
-        # Attendre que la page soit complètement stable après validation
-        print("      ⏳ Attente stabilisation page...")
-        time.sleep(3)
-
-        # Attendre que le blocker soit complètement disparu
-        if wait_for_ui_blocker_disappear(driver, timeout=10):
-            print("      ✓ Page stabilisée (blocker disparu)")
-        else:
-            print("      ⚠️  Timeout blocker - continuons")
-
-        # Pause supplémentaire avant de cliquer sur Accueil
-        time.sleep(2)
-
-        # Cliquer sur le bouton "Accueil" (id="quitter")
-        accueil_btn = wait.until(
-            EC.element_to_be_clickable((By.ID, "quitter"))
-        )
-
-        try:
-            accueil_btn.click()
-            print("      ✓ Bouton 'Accueil' cliqué")
-        except Exception as click_error:
-            print(f"      ⚠️  Clic normal intercepté, utilisation de JavaScript...")
-            driver.execute_script("arguments[0].click();", accueil_btn)
-            print("      ✓ Bouton 'Accueil' cliqué (via JavaScript)")
-
-        # Attendre que le blocker de navigation disparaisse
-        print("      ⏳ Attente navigation vers accueil...")
-        if wait_for_ui_blocker_disappear(driver, timeout=10):
-            print("      ✓ Navigation terminée (blocker disparu)")
-        else:
-            print("      ⚠️  Timeout blocker navigation")
-
-        # Attendre le retour à la page d'accueil
-        time.sleep(3)
-
-        # IMPORTANT: Sortir de l'iframe pour revenir au contexte principal
-        driver.switch_to.default_content()
-        print("      ✓ Sorti de l'iframe, retour au contexte principal")
-
-        print("      ✓ Retour à l'accueil réussi")
-
-    except Exception as e:
-        print(f"      ❌ Erreur retour accueil: {e}")
-        traceback.print_exc()
-        # Essayer quand même de sortir de l'iframe
-        try:
-            driver.switch_to.default_content()
-            print("      ⚠️  Sorti de l'iframe malgré l'erreur")
-        except:
-            pass
-
-
 def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_reference_clean):
     """Fill the declaration form with shipper name and DUM data
     
@@ -9492,22 +9278,7 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             mark_dum_as_error_in_excel(lta_folder_path, dum_number)
             
             return False
-
-        # ==================================================================
-        # 🛑 DEBUG (PROVISOIRE): stop après SAUVEGARDER — voir DEBUG_STOP_AFTER_SAVE
-        # On saute l'onglet 'Documents' (annexation) et TOUTE la suite: on extrait
-        # seulement la série, on l'écrit dans generated_excel, puis on termine le DUM.
-        # ==================================================================
-        if DEBUG_STOP_AFTER_SAVE:
-            print("\n   🛑 [DEBUG] DEBUG_STOP_AFTER_SAVE actif — onglet 'Documents' et suite IGNORÉS.")
-            print("   🛑 [DEBUG] Extraction de la série puis écriture dans generated_excel...")
-            dum_reference = _extract_and_save_dum_series(driver, wait, lta_folder_path, dum_data)
-            print(f"   🛑 [DEBUG] Référence: {dum_reference} — DUM terminé (documents ignorés).")
-
-            # Retour à l'accueil pour laisser le prochain DUM démarrer proprement
-            _return_to_home_for_next_dum(driver, wait)
-            return True
-
+        
         # ==================================================================
         # ÉTAPE 7: Naviguer vers "Documents" et uploader les fichiers
         # ==================================================================
@@ -10925,13 +10696,139 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
         # ==================================================================
         # ÉTAPE 12: Extraire la référence de déclaration et la sauvegarder
         # ==================================================================
-        dum_reference = _extract_and_save_dum_series(driver, wait, lta_folder_path, dum_data)
-
+        print("\n   📋 Extraction de la référence de déclaration...")
+        dum_reference = None
+        
+        for extract_attempt in range(3):
+            try:
+                if extract_attempt > 0:
+                    print(f"      🔄 Tentative extraction {extract_attempt + 1}/3...")
+                    time.sleep(1)
+                
+                # Attendre que la page soit stable
+                time.sleep(2)
+                wait_for_ui_blocker_disappear(driver, timeout=5)
+                
+                # Re-find the reference table on each attempt to avoid stale element
+                reference_table = wait.until(
+                    EC.presence_of_element_located((By.ID, "mainTab:form0:j_id_3p_d"))
+                )
+                
+                # Re-find rows to avoid stale element
+                rows = reference_table.find_elements(By.TAG_NAME, "tr")
+                if len(rows) >= 2:
+                    # Re-find data row to avoid stale element
+                    data_row_cells = rows[1].find_elements(By.TAG_NAME, "td")
+                    
+                    if len(data_row_cells) >= 5:
+                        # Extract data immediately to avoid stale element
+                        serie = data_row_cells[3].text.strip()
+                        cle = data_row_cells[4].text.strip()
+                        
+                        # Combiner pour créer la référence complète
+                        dum_reference = f"{serie}{cle}"
+                        
+                        print(f"      ✓ Référence extraite: {dum_reference}")
+                        print(f"         - Série: {serie}")
+                        print(f"         - Clé: {cle}")
+                        
+                        # Sauvegarder la référence dans result_LTAS.txt
+                        save_dum_reference(lta_folder_path, dum_reference)
+                        
+                        # Extraire le numéro du DUM depuis sheet_name (ex: "Sheet 1" → 1)
+                        sheet_name = dum_data.get('sheet_name', '')
+                        dum_number = int(sheet_name.split()[-1]) if sheet_name.startswith('Sheet') else 1
+                        
+                        # Sauvegarder la série dans generated_excel
+                        save_dum_series_to_excel(lta_folder_path, dum_number, dum_reference)
+                        
+                        # Success - break retry loop
+                        break
+                    else:
+                        if extract_attempt < 2:
+                            print(f"      ⚠️  Tentative {extract_attempt + 1}/3: Table de référence incomplète (cellules: {len(data_row_cells)})")
+                            continue
+                        else:
+                            print(f"      ❌ Table de référence incomplète après 3 tentatives (cellules: {len(data_row_cells)})")
+                            dum_reference = "REFERENCE_INCOMPLETE"
+                else:
+                    if extract_attempt < 2:
+                        print(f"      ⚠️  Tentative {extract_attempt + 1}/3: Table de référence incomplète (lignes: {len(rows)})")
+                        continue
+                    else:
+                        print(f"      ❌ Table de référence incomplète après 3 tentatives (lignes: {len(rows)})")
+                        dum_reference = "REFERENCE_INCOMPLETE"
+                    
+            except Exception as e:
+                if extract_attempt < 2:
+                    print(f"      ⚠️  Tentative {extract_attempt + 1}/3 échouée: {e}")
+                    if "stale element" in str(e).lower():
+                        print(f"      ℹ️  Stale element - retry extraction référence")
+                else:
+                    print(f"      ❌ Erreur extraction référence après 3 tentatives: {e}")
+                    dum_reference = "REFERENCE_ERROR"
+        
+        if not dum_reference:
+            print(f"      ❌ Impossible d'extraire la référence après 3 tentatives")
+            dum_reference = "REFERENCE_FAILED"
+        
         # ==================================================================
         # ÉTAPE 13: Retour à l'accueil pour traiter le prochain DUM
         # ==================================================================
-        _return_to_home_for_next_dum(driver, wait)
-
+        print("\n   🏠 Retour à l'accueil pour le prochain DUM...")
+        try:
+            # Attendre que la page soit complètement stable après validation
+            print("      ⏳ Attente stabilisation page...")
+            time.sleep(3)
+            
+            # Attendre que le blocker soit complètement disparu
+            if wait_for_ui_blocker_disappear(driver, timeout=10):
+                print("      ✓ Page stabilisée (blocker disparu)")
+            else:
+                print("      ⚠️  Timeout blocker - continuons")
+            
+            # Pause supplémentaire avant de cliquer sur Accueil
+            time.sleep(2)
+            
+            # Cliquer sur le bouton "Accueil" (id="quitter")
+            accueil_btn = wait.until(
+                EC.element_to_be_clickable((By.ID, "quitter"))
+            )
+            
+            try:
+                accueil_btn.click()
+                print("      ✓ Bouton 'Accueil' cliqué")
+            except Exception as click_error:
+                print(f"      ⚠️  Clic normal intercepté, utilisation de JavaScript...")
+                driver.execute_script("arguments[0].click();", accueil_btn)
+                print("      ✓ Bouton 'Accueil' cliqué (via JavaScript)")
+            
+            # Attendre que le blocker de navigation disparaisse
+            print("      ⏳ Attente navigation vers accueil...")
+            if wait_for_ui_blocker_disappear(driver, timeout=10):
+                print("      ✓ Navigation terminée (blocker disparu)")
+            else:
+                print("      ⚠️  Timeout blocker navigation")
+            
+            # Attendre le retour à la page d'accueil
+            time.sleep(3)
+            
+            # IMPORTANT: Sortir de l'iframe pour revenir au contexte principal
+            driver.switch_to.default_content()
+            print("      ✓ Sorti de l'iframe, retour au contexte principal")
+            
+            print("      ✓ Retour à l'accueil réussi")
+            
+        except Exception as e:
+            print(f"      ❌ Erreur retour accueil: {e}")
+            traceback.print_exc()
+            # Essayer quand même de sortir de l'iframe
+            try:
+                driver.switch_to.default_content()
+                print("      ⚠️  Sorti de l'iframe malgré l'erreur")
+            except:
+                pass
+        
         return True
         
     except Exception as e:
