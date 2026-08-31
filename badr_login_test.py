@@ -11586,7 +11586,20 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
                     print(f"   DS: {partial['ds_serie']} {partial['ds_cle']}")
                     print(f"   ℹ️  Déjà dédouané à l'aéroport - Pas d'état de dépotage requis")
                     continue
-                
+
+                # CHECKPOINT: si l'ED de ce partiel a déjà été créé ET validé lors d'une
+                # exécution précédente (série DS déjà enregistrée dans le partial config),
+                # on ne le refait PAS. Permet de reprendre après un crash en ne créant
+                # que les partiels manquants.
+                already_validated = partial.get('ds_validated') or partial.get('signed_series')
+                if already_validated:
+                    print(f"\n{'='*70}")
+                    print(f"⏭️  PARTIEL {partial_num} DÉJÀ TRAITÉ (checkpoint)")
+                    print(f"{'='*70}")
+                    print(f"   ✓ Série DS déjà validée: {already_validated}")
+                    print(f"   ℹ️  ED déjà créé lors d'une exécution précédente — non recréé")
+                    continue
+
                 print(f"\n{'='*70}")
                 print(f"📦 TRAITEMENT PARTIEL {partial_num}/{len(partial_config['partials'])}")
                 print(f"{'='*70}")
