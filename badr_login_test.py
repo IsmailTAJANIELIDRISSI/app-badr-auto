@@ -77,22 +77,28 @@ LTA_license_expires = _load_lta_license()
 def close_excel_file(file_path):
     """
     Ferme un fichier Excel s'il est ouvert par Excel.
-    
+
+    Passe 1: fermeture ciblée via psutil.Process.open_files() (rapide).
+    Passe 2 (fallback garanti): si un processus EXCEL.EXE tourne encore, on force
+    la fermeture de TOUS les processus Excel (taskkill), car psutil.open_files()
+    NE DÉTECTE PAS TOUJOURS les fichiers verrouillés par Office (limitation connue
+    sur Windows) — c'est ce qui laissait le fichier verrouillé malgré cette fonction
+    "réussie", causant [WinError 5] Accès refusé lors de l'écriture (os.replace).
+
     Args:
         file_path: Chemin absolu du fichier Excel à fermer
-    
+
     Returns:
-        bool: True si fichier fermé ou n'était pas ouvert, False si erreur
+        bool: True si fichier fermé (ou aucun Excel actif), False si des processus
+              Excel restent actifs malgré la fermeture forcée.
     """
     try:
         file_name = os.path.basename(file_path)
-        excel_closed = False
-        
-        # Parcourir tous les processus Excel
+
+        # --- Passe 1: fermeture ciblée (best-effort, peu fiable pour Office) ---
         for proc in psutil.process_iter(['pid', 'name']):
             try:
                 if proc.info['name'] and 'EXCEL.EXE' in proc.info['name'].upper():
-                    # Vérifier si ce processus a le fichier ouvert
                     try:
                         for item in proc.open_files():
                             if file_path.lower() in item.path.lower():
@@ -100,7 +106,6 @@ def close_excel_file(file_path):
                                 print(f"      🔄 Fermeture du processus Excel...")
                                 proc.terminate()
                                 proc.wait(timeout=3)
-                                excel_closed = True
                                 print(f"      ✓ Processus Excel fermé")
                                 time.sleep(1)  # Attendre que le fichier soit libéré
                                 break
@@ -108,13 +113,33 @@ def close_excel_file(file_path):
                         continue
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
-        
-        if not excel_closed:
-            # Fichier pas ouvert, c'est OK
-            return True
-        
+
+        # --- Passe 2: fermeture forcée de TOUT Excel restant (fallback garanti) ---
+        remaining = [p for p in psutil.process_iter(['pid', 'name'])
+                     if p.info['name'] and 'EXCEL.EXE' in p.info['name'].upper()]
+        if remaining:
+            print(f"      🔄 {len(remaining)} processus Excel encore actif(s) — fermeture forcée de tous les Excel...")
+            os.system("taskkill /F /IM EXCEL.EXE >nul 2>&1")
+            time.sleep(1)
+
+            max_attempts = 5
+            for attempt in range(max_attempts):
+                remaining = [p for p in psutil.process_iter(['pid', 'name'])
+                             if p.info['name'] and 'EXCEL.EXE' in p.info['name'].upper()]
+                if not remaining:
+                    break
+                if attempt < max_attempts - 1:
+                    time.sleep(1)
+                    os.system("taskkill /F /IM EXCEL.EXE >nul 2>&1")
+
+            if remaining:
+                print(f"      ⚠️  {len(remaining)} processus Excel encore actifs après fermeture forcée")
+                return False
+            else:
+                print(f"      ✓ Tous les processus Excel fermés")
+
         return True
-        
+
     except Exception as e:
         print(f"      ⚠️  Erreur lors de la fermeture Excel: {e}")
         # Continuer quand même, l'opération pourrait réussir

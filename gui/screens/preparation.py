@@ -515,7 +515,14 @@ class PreparationScreen:
                 state="readonly"
             )
             loc_combo.grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
-            
+
+            # Empêcher le scroll de la molette de changer la valeur sélectionnée
+            # (l'utilisateur peut survoler le combobox en scrollant la page par erreur
+            # et changer accidentellement le "Lieu de Chargement")
+            loc_combo.bind("<MouseWheel>", lambda e: "break")
+            loc_combo.bind("<Button-4>", lambda e: "break")
+            loc_combo.bind("<Button-5>", lambda e: "break")
+
             # Set to current value if exists
             if loc_var.get() and loc_var.get() in self.locations:
                 loc_combo.set(loc_var.get())
@@ -718,9 +725,14 @@ class PreparationScreen:
                 canvas.yview_scroll(-1, "units")
         
         def bind_mousewheel(widget):
-            widget.bind("<MouseWheel>", on_mousewheel)
-            widget.bind("<Button-4>", on_mousewheel)
-            widget.bind("<Button-5>", on_mousewheel)
+            # Ne pas écraser le binding dédié du combobox "Lieu de Chargement"
+            # (voir plus haut: loc_combo.bind("<MouseWheel>", ...) -> "break").
+            # Sinon ce binding recursif le remplace et la molette recommence
+            # à changer la valeur sélectionnée quand on la survole.
+            if not isinstance(widget, ttk.Combobox):
+                widget.bind("<MouseWheel>", on_mousewheel)
+                widget.bind("<Button-4>", on_mousewheel)
+                widget.bind("<Button-5>", on_mousewheel)
             for child in widget.winfo_children():
                 bind_mousewheel(child)
         
