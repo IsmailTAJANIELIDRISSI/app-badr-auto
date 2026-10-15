@@ -3442,6 +3442,56 @@ def get_dum_preapurement_lots(dum_number, partial_config, validated_lta_referenc
             'split_id': None
         }]
 
+def type_and_verify_field(driver, wait, locator_value, value, field_label, max_attempts=3, by=By.ID):
+    """
+    Remplit un champ texte (clear + send_keys) PUIS VÉRIFIE que la valeur a bien
+    été acceptée en relisant field.get_attribute('value'). Réessaie jusqu'à
+    max_attempts fois si la valeur relue ne correspond pas avant d'abandonner.
+
+    Corrige un bug observé où send_keys() "réussissait" silencieusement (le log
+    affichait "✓ Année: 2026") alors que le champ restait vide ou incorrect côté
+    DOM (focus perdu, overlay PrimeFaces, re-render du champ, timing, etc.).
+
+    Args:
+        driver: WebDriver Selenium
+        wait: WebDriverWait instance (déjà configuré avec le bon timeout)
+        locator_value: Valeur du localisateur (ID HTML par défaut, ou XPath si by=By.XPATH)
+        value: Valeur à saisir (convertie en str)
+        field_label: Nom du champ pour les logs (ex: "Année", "Série", "Clé")
+        max_attempts: Nombre de tentatives avant abandon (défaut: 3)
+        by: Stratégie de localisation Selenium (défaut: By.ID; passer By.XPATH si besoin)
+
+    Returns:
+        bool: True si la valeur a été confirmée dans le champ, False sinon.
+    """
+    value = str(value)
+    for attempt in range(1, max_attempts + 1):
+        try:
+            field = wait.until(
+                EC.presence_of_element_located((by, locator_value))
+            )
+            field.clear()
+            field.send_keys(value)
+            time.sleep(0.3)
+
+            # Relire le champ pour CONFIRMER que la saisie a bien été prise en compte
+            actual = (field.get_attribute('value') or '').strip()
+            if actual == value.strip():
+                print(f"      ✓ {field_label}: {value}")
+                return True
+
+            print(f"      ⚠️  {field_label}: valeur non confirmée (attendu='{value}', trouvé='{actual}') — tentative {attempt}/{max_attempts}")
+            if attempt < max_attempts:
+                time.sleep(0.5)
+
+        except Exception as e:
+            print(f"      ⚠️  {field_label}: erreur saisie (tentative {attempt}/{max_attempts}): {e}")
+            if attempt < max_attempts:
+                time.sleep(0.5)
+
+    print(f"      ❌ {field_label}: échec de saisie confirmée après {max_attempts} tentatives")
+    return False
+
 def create_etat_depotage(driver, lta_folder_path, shipper_data):
     """
     Crée un Etat de Dépotage (Unloading Statement) pour une LTA avec référence DS MEAD.
@@ -3700,49 +3750,24 @@ def create_etat_depotage(driver, lta_folder_path, shipper_data):
             return_to_home_after_error(driver)
             return False
         
-        # ED.2.2: Entrer l'année actuelle
-        try:
-            annee_input = wait.until(
-                EC.presence_of_element_located((By.ID, "mainTab:form1:anneeId"))
-            )
-            annee_input.clear()
-            current_year = str(time.strftime("%Y"))
-            annee_input.send_keys(current_year)
-            print(f"      ✓ Année: {current_year}")
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"      ❌ Erreur saisie année: {e}")
+        # ED.2.2: Entrer l'année actuelle (avec vérification de la saisie)
+        current_year = str(time.strftime("%Y"))
+        if not type_and_verify_field(driver, wait, "mainTab:form1:anneeId", current_year, "Année"):
             return_to_home_after_error(driver)
             return False
-        
-        # ED.2.3: Entrer le numéro de série
-        try:
-            serie_input = wait.until(
-                EC.presence_of_element_located((By.ID, "mainTab:form1:serieId"))
-            )
-            serie_input.clear()
-            serie_input.send_keys(shipper_data['serie'])
-            print(f"      ✓ Série: {shipper_data['serie']}")
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"      ❌ Erreur saisie série: {e}")
+        time.sleep(0.2)
+
+        # ED.2.3: Entrer le numéro de série (avec vérification de la saisie)
+        if not type_and_verify_field(driver, wait, "mainTab:form1:serieId", shipper_data['serie'], "Série"):
             return_to_home_after_error(driver)
             return False
-        
-        # ED.2.4: Entrer la clé
-        try:
-            cle_input = wait.until(
-                EC.presence_of_element_located((By.ID, "mainTab:form1:cleId"))
-            )
-            cle_input.clear()
-            cle_input.send_keys(shipper_data['cle'])
-            print(f"      ✓ Clé: {shipper_data['cle']}")
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"      ❌ Erreur saisie clé: {e}")
+        time.sleep(0.2)
+
+        # ED.2.4: Entrer la clé (avec vérification de la saisie)
+        if not type_and_verify_field(driver, wait, "mainTab:form1:cleId", shipper_data['cle'], "Clé"):
             return_to_home_after_error(driver)
             return False
-        
+
         # ED.2.5: Entrer la référence LTA
         # Extraire la référence depuis le nom du fichier PDF LTA
         try:
@@ -6391,49 +6416,24 @@ def create_etat_depotage_partial(driver, lta_folder_path, partial_config, partia
             return_to_home_after_error(driver)
             return False
         
-        # ED.2.2: Entrer l'année actuelle
-        try:
-            annee_input = wait.until(
-                EC.presence_of_element_located((By.ID, "mainTab:form1:anneeId"))
-            )
-            annee_input.clear()
-            current_year = str(time.strftime("%Y"))
-            annee_input.send_keys(current_year)
-            print(f"      ✓ Année: {current_year}")
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"      ❌ Erreur saisie année: {e}")
+        # ED.2.2: Entrer l'année actuelle (avec vérification de la saisie)
+        current_year = str(time.strftime("%Y"))
+        if not type_and_verify_field(driver, wait, "mainTab:form1:anneeId", current_year, "Année"):
             return_to_home_after_error(driver)
             return False
-        
-        # ED.2.3: Entrer le numéro de série (from partial)
-        try:
-            serie_input = wait.until(
-                EC.presence_of_element_located((By.ID, "mainTab:form1:serieId"))
-            )
-            serie_input.clear()
-            serie_input.send_keys(shipper_data['serie'])
-            print(f"      ✓ Série: {shipper_data['serie']}")
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"      ❌ Erreur saisie série: {e}")
+        time.sleep(0.2)
+
+        # ED.2.3: Entrer le numéro de série (from partial, avec vérification)
+        if not type_and_verify_field(driver, wait, "mainTab:form1:serieId", shipper_data['serie'], "Série"):
             return_to_home_after_error(driver)
             return False
-        
-        # ED.2.4: Entrer la clé (from partial)
-        try:
-            cle_input = wait.until(
-                EC.presence_of_element_located((By.ID, "mainTab:form1:cleId"))
-            )
-            cle_input.clear()
-            cle_input.send_keys(shipper_data['cle'])
-            print(f"      ✓ Clé: {shipper_data['cle']}")
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"      ❌ Erreur saisie clé: {e}")
+        time.sleep(0.2)
+
+        # ED.2.4: Entrer la clé (from partial, avec vérification)
+        if not type_and_verify_field(driver, wait, "mainTab:form1:cleId", shipper_data['cle'], "Clé"):
             return_to_home_after_error(driver)
             return False
-        
+
         # ED.2.5: Référence LTA Partiel avec 3 formats (EXACT COPY from create_etat_depotage)
         lta_reference_raw = partial_config['lta_reference']
         
@@ -8761,46 +8761,33 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 print(f"      ❌ Erreur saisie régime: {e}")
                 return False
             
-            # PDS.3.4: Année actuelle
-            try:
-                annee_input = wait.until(
-                    EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'anneeId') or contains(@name, 'anneeId')]"))
-                )
-                annee_input.clear()
-                current_year = str(time.strftime("%Y"))
-                annee_input.send_keys(current_year)
-                print(f"      ✓ Année: {current_year}")
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"      ❌ Erreur saisie année: {e}")
+            # PDS.3.4: Année actuelle (avec vérification de la saisie)
+            current_year = str(time.strftime("%Y"))
+            if not type_and_verify_field(
+                driver, wait,
+                "//input[contains(@id, 'anneeId') or contains(@name, 'anneeId')]",
+                current_year, "Année", by=By.XPATH
+            ):
                 return False
-            
-            # PDS.3.5: Série DS
-            try:
-                serie_input = wait.until(
-                    EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'serieId') or contains(@name, 'serieId')]"))
-                )
-                serie_input.clear()
-                serie_input.send_keys(ds_serie)
-                print(f"      ✓ Série: {ds_serie}")
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"      ❌ Erreur saisie série: {e}")
+            time.sleep(0.2)
+
+            # PDS.3.5: Série DS (avec vérification de la saisie)
+            if not type_and_verify_field(
+                driver, wait,
+                "//input[contains(@id, 'serieId') or contains(@name, 'serieId')]",
+                ds_serie, "Série", by=By.XPATH
+            ):
                 return False
-            
-            # PDS.3.6: Clé DS
-            try:
-                cle_input = wait.until(
-                    EC.presence_of_element_located((By.XPATH, "//input[contains(@id, 'cleId') or contains(@name, 'cleId')]"))
-                )
-                cle_input.clear()
-                cle_input.send_keys(ds_cle)
-                print(f"      ✓ Clé: {ds_cle}")
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"      ❌ Erreur saisie clé: {e}")
+            time.sleep(0.2)
+
+            # PDS.3.6: Clé DS (avec vérification de la saisie)
+            if not type_and_verify_field(
+                driver, wait,
+                "//input[contains(@id, 'cleId') or contains(@name, 'cleId')]",
+                ds_cle, "Clé", by=By.XPATH
+            ):
                 return False
-            
+
             # PDS.3.7: BOUCLE pour ajouter tous les lots
             # Lots already calculated above (PDS.3.0), just get count
             num_lots_to_add = len(preap_lots)

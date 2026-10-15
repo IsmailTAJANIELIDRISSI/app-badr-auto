@@ -1546,12 +1546,26 @@ def validate_mawb_match(pdf_mawb, excel_mawb):
     """Validate that MAWB number from PDF matches the one in generated_excel"""
     if not pdf_mawb or not excel_mawb:
         return False
-    
+
     # Normalize both numbers (remove spaces, dashes, etc.)
     pdf_normalized = re.sub(r'[-\s]', '', str(pdf_mawb).strip())
     excel_normalized = re.sub(r'[-\s]', '', str(excel_mawb).strip())
-    
+
     return pdf_normalized == excel_normalized
+
+def _has_duplicate_download_marker(name_without_ext):
+    """True if a filename (without extension) ends with a Windows/browser
+    duplicate-download marker like ' [1]' or ' (1)' (added when the same
+    attachment is saved/downloaded twice)."""
+    return bool(re.search(r'[\[\(]\d+[\]\)]\s*$', name_without_ext.strip()))
+
+def _strip_duplicate_download_marker(value):
+    """Strip a trailing duplicate-download marker like ' [1]' or ' (1)' from a
+    MAWB number extracted from a filename, e.g. 'MAWB 235-96599543[1].pdf' ->
+    '235-96599543'. Without this, a second download of the same MAWB PDF
+    (auto-suffixed by the OS/browser) would be compared/renamed with the
+    bracket still attached, causing a false MAWB mismatch."""
+    return re.sub(r'\s*[\[\(]\d+[\]\)]\s*$', '', str(value)).strip()
 
 def compress_pdf_if_needed(pdf_path, max_size_mb=1.5):
     """Compress PDF progressively until target size is reached
@@ -1737,7 +1751,35 @@ def rename_mawb_pdfs_and_create_bloc_note(dir_path, directory_name, skip_rename=
     excel_mawb = extract_mawb_from_generated_excel(dir_path)
     if excel_mawb:
         print(f"    📋 Generated Excel MAWB: {excel_mawb}")
-    
+
+    # Deduplicate MAWB*.pdf files that are the same shipment saved/downloaded
+    # twice (e.g. a browser/OS auto-appends " [1]" or " (1)" to the second
+    # copy). Without this, glob's (non-deterministic) enumeration order could
+    # pick either copy first, and processing both would try to rename two
+    # files to the same target. Prefer the copy WITHOUT a duplicate marker.
+    if not use_doc_file and len(mawb_files) > 1:
+        deduped_by_key = {}
+        for fp in mawb_files:
+            fn = os.path.basename(fp)
+            m = re.search(r'MAWB\s*(.+)\.pdf', fn)
+            raw_number = m.group(1).strip() if m else fn
+            key = _strip_duplicate_download_marker(raw_number)
+            has_marker = _has_duplicate_download_marker(raw_number)
+
+            if key not in deduped_by_key:
+                deduped_by_key[key] = (fp, fn, has_marker)
+                continue
+
+            kept_fp, kept_fn, kept_has_marker = deduped_by_key[key]
+            if kept_has_marker and not has_marker:
+                # This copy is "cleaner" (no marker) - keep it instead
+                print(f"    ℹ️  Fichier MAWB en double ignoré (même référence): '{kept_fn}'")
+                deduped_by_key[key] = (fp, fn, has_marker)
+            else:
+                print(f"    ℹ️  Fichier MAWB en double ignoré (même référence): '{fn}'")
+
+        mawb_files = [v[0] for v in deduped_by_key.values()]
+
     for file_path in mawb_files:
         if not found_mawb:
             if use_doc_file:
@@ -1765,8 +1807,12 @@ def rename_mawb_pdfs_and_create_bloc_note(dir_path, directory_name, skip_rename=
             if not match:
                 print(f"    ⚠️  Skipping '{filename}' - Cannot extract MAWB number from filename")
                 continue
-                
-            mawb_number = match.group(1).strip()
+
+            # Strip a trailing duplicate-download marker (" [1]", " (1)", ...) so a
+            # second copy of the same MAWB PDF never produces a false mismatch
+            # against generated_excel, even if the dedup pass above didn't run
+            # (e.g. this is the only surviving copy and it kept the marker).
+            mawb_number = _strip_duplicate_download_marker(match.group(1).strip())
             
             # Validate MAWB number matches generated_excel
             if excel_mawb:
