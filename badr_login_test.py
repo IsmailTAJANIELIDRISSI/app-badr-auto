@@ -11673,9 +11673,27 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
         if not shipper_data:
             print(f"❌ Impossible de lire les données depuis {txt_file_path}")
             return False
-        
+
+        # CHECKPOINT: si la ligne 4 du fichier shipper contient déjà une référence DS
+        # validée (écrite par create_etat_depotage après un ED réussi lors d'une
+        # exécution précédente — exactement ce que la colonne "DS Validé" de la GUI
+        # affiche en vert), on NE RECRÉE PAS l'ED. Permet de relancer Phase 1 sur
+        # "Tous les LTAs" sans redoublonner le travail déjà fait/validé sur BADR.
+        try:
+            with open(txt_file_path, 'r', encoding='utf-8') as f:
+                _shipper_lines = [l.rstrip('\n') for l in f.readlines()]
+            already_validated_ds = _shipper_lines[3].strip() if len(_shipper_lines) > 3 else None
+        except Exception:
+            already_validated_ds = None
+
+        if already_validated_ds:
+            print(f"\n⏭️  LTA DÉJÀ TRAITÉ (checkpoint)")
+            print(f"   ✓ DS déjà validé: {already_validated_ds}")
+            print(f"   ℹ️  ED déjà créé lors d'une exécution précédente — non recréé")
+            return False
+
         print(f"✓ Expéditeur: {shipper_data['shipper_name']}")
-        
+
         # Check if has DS MEAD reference
         if not shipper_data['has_ds_mead']:
             print("\n⏭️  LTA sans référence DS MEAD (ligne 2 absente)")
