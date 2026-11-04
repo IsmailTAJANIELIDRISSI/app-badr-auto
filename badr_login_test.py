@@ -1025,7 +1025,286 @@ def detect_blocage_from_lta_file(lta_folder_path):
         return {'is_blocage': False, 'original_weight': None, 'blocked_weight': None, 'corrected_weight': None}
 
 
-def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data, partial_config=None, partial_number=None):
+# ======================================================================
+# Helpers ED ouvert (onglets Quantités / LTA) — blocage + partiel
+# ======================================================================
+
+def open_ed_tab(driver, wait, tab_id, label):
+    """Ouvre un onglet de l'ED ouvert (ex: 'mainTab:tab3' = Quantités, 'mainTab:tab4' = LTA)."""
+    for attempt in range(3):
+        try:
+            wait_for_ui_blocker_disappear(driver, timeout=10)
+            # Fermer les messages qui peuvent intercepter le clic
+            for btn in driver.find_elements(By.CSS_SELECTOR, "a.ui-messages-close"):
+                try:
+                    if btn.is_displayed():
+                        btn.click()
+                        time.sleep(0.3)
+                except Exception:
+                    pass
+            tab_link = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, f"a[href='#{tab_id}']")))
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", tab_link)
+            try:
+                tab_link.click()
+            except Exception:
+                driver.execute_script("arguments[0].click();", tab_link)
+            time.sleep(2)
+            wait_for_ui_blocker_disappear(driver, timeout=10)
+            if driver.find_element(By.ID, tab_id).is_displayed():
+                print(f"      ✓ Onglet {label} ouvert")
+                return True
+        except Exception as e:
+            print(f"      ⚠️  Tentative {attempt + 1}/3 ouverture onglet {label}: {e}")
+            time.sleep(1)
+    print(f"      ❌ Impossible d'ouvrir l'onglet {label}")
+    return False
+
+
+def _parse_badr_number(text):
+    """'1 329,10' / '1329.1' / '1848' → float, None si illisible."""
+    s = str(text or '').strip().replace(' ', '').replace(' ', '')
+    if not s:
+        return None
+    if ',' in s and '.' in s:
+        s = s.replace('.', '').replace(',', '.') if s.rfind(',') > s.rfind('.') else s.replace(',', '')
+    else:
+        s = s.replace(',', '.')
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+_ED_LOT_ROW_SELECTORS = ["tbody#mainTab\\:j_id_ku_data tr[data-ri]",
+                         "table[id*='j_id_ku'] tbody tr[data-ri]",
+                         "tbody tr[data-ri]"]
+
+_ED_LOTS_PAGE_JS = """
+var rows = document.querySelectorAll(arguments[0]);
+if (!rows.length) return null;
+var table = rows[0].closest('table');
+rows = Array.prototype.filter.call(rows, function (r) { return r.closest('table') === table; });
+var heads = table ? Array.prototype.map.call(table.querySelectorAll('thead th'),
+    function (th) { return (th.innerText || '').trim(); }) : [];
+var data = Array.prototype.map.call(rows, function (r) {
+    return Array.prototype.map.call(r.children, function (td) { return (td.innerText || '').trim(); });
+});
+return {heads: heads, rows: data};
+"""
+
+
+def read_ed_lots_table(driver):
+    """
+    Lit TOUS les lots du tableau de l'onglet LTA (toutes les pages).
+    Les colonnes 'contenant' / 'poids' sont repérées par l'en-tête du tableau.
+
+    Returns:
+        dict {'lots': [{'numero', 'reference', 'contenants', 'poids'}],
+              'has_contenants_col': bool, 'has_poids_col': bool}
+    """
+    import unicodedata
+
+    def norm(t):
+        return unicodedata.normalize('NFKD', t or '').encode('ascii', 'ignore').decode().lower()
+
+    def first_page_selector():
+        for sel in _ED_LOT_ROW_SELECTORS:
+            if driver.find_elements(By.CSS_SELECTOR, sel):
+                return sel
+        return None
+
+    # Revenir à la première page du tableau
+    try:
+        first_btn = driver.find_element(By.CSS_SELECTOR, "span.ui-paginator-first")
+        if "ui-state-disabled" not in (first_btn.get_attribute("class") or ""):
+            first_btn.click()
+            time.sleep(2)
+            wait_for_ui_blocker_disappear(driver, timeout=5)
+    except Exception:
+        pass
+
+    lots, seen = [], set()
+    has_cont = has_poids = False
+    for _page in range(50):
+        selector = first_page_selector()
+        page = driver.execute_script(_ED_LOTS_PAGE_JS, selector) if selector else None
+        if page:
+            heads = [norm(h) for h in page.get('heads') or []]
+            cont_idx = next((i for i, h in enumerate(heads) if 'contenant' in h), None)
+            poids_idx = next((i for i, h in enumerate(heads) if 'poids' in h), None)
+            has_cont = has_cont or cont_idx is not None
+            has_poids = has_poids or poids_idx is not None
+            for cells in page.get('rows') or []:
+                if len(cells) < 3:
+                    continue
+                key = (cells[0], cells[2])
+                if key in seen:
+                    continue
+                seen.add(key)
+                cont = _parse_badr_number(cells[cont_idx]) if cont_idx is not None and cont_idx < len(cells) else None
+                poids = _parse_badr_number(cells[poids_idx]) if poids_idx is not None and poids_idx < len(cells) else None
+                lots.append({'numero': cells[0], 'reference': cells[2],
+                             'contenants': int(cont) if cont is not None else None, 'poids': poids})
+        # Page suivante
+        try:
+            next_btn = driver.find_element(By.CSS_SELECTOR, "span.ui-paginator-next")
+            if "ui-state-disabled" in (next_btn.get_attribute("class") or ""):
+                break
+            next_btn.click()
+            time.sleep(2)
+            wait_for_ui_blocker_disappear(driver, timeout=5)
+        except Exception:
+            break
+    return {'lots': lots, 'has_contenants_col': has_cont, 'has_poids_col': has_poids}
+
+
+def fix_ed_quantites(driver, wait, target_poids=None, target_contenants=None):
+    """
+    Onglet Quantités de l'ED ouvert: corrige 'Poids brut total (Kg)' et 'Nombre total
+    Contenant(s)' UNIQUEMENT s'ils diffèrent des valeurs attendues.
+    Sinon BADR refuse la validation (ex: E2800435 — contenants calculés ≠ déclarés).
+
+    Returns:
+        bool: True si les deux valeurs sont justes (déjà ou après correction)
+    """
+    from selenium.webdriver.common.keys import Keys
+
+    print(f"\n   📊 Onglet Quantités: vérification poids brut total / nombre total de contenants...")
+    if not open_ed_tab(driver, wait, 'mainTab:tab3', 'Quantités'):
+        return False
+
+    def read_poids():
+        try:
+            hidden = driver.find_element(By.ID, "mainTab:form3:poidsBrutTotal_IT_id_hinput").get_attribute("value")
+            value = _parse_badr_number(hidden)
+            if value is not None:
+                return value
+        except Exception:
+            pass
+        try:
+            return _parse_badr_number(driver.find_element(
+                By.ID, "mainTab:form3:poidsBrutTotal_IT_id_input").get_attribute("value"))
+        except Exception:
+            return None
+
+    def read_contenants():
+        try:
+            value = _parse_badr_number(driver.find_element(
+                By.ID, "mainTab:form3:nombreContenantTotal_IT_id").get_attribute("value"))
+            return int(value) if value is not None else None
+        except Exception:
+            return None
+
+    def type_value(field_id, text):
+        for attempt in range(3):
+            try:
+                wait_for_ui_blocker_disappear(driver, timeout=10)
+                field = wait.until(EC.element_to_be_clickable((By.ID, field_id)))
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", field)
+                field.click()
+                field.send_keys(Keys.CONTROL + "a")
+                field.send_keys(Keys.DELETE)
+                field.send_keys(text)
+                field.send_keys(Keys.TAB)
+                time.sleep(1)
+                wait_for_ui_blocker_disappear(driver, timeout=5)
+                return True
+            except Exception as e:
+                print(f"         ⚠️  Tentative {attempt + 1}/3 saisie {field_id}: {e}")
+                time.sleep(1)
+        return False
+
+    all_ok = True
+
+    if target_poids is not None:
+        target_poids = round(float(target_poids), 2)
+        current = read_poids()
+        if current is not None and abs(current - target_poids) <= 0.005:
+            print(f"      ✓ Poids brut total déjà correct: {current} kg")
+        else:
+            print(f"      ✏️  Poids brut total: {current} → {target_poids} kg")
+            type_value("mainTab:form3:poidsBrutTotal_IT_id_input", str(target_poids))
+            current = read_poids()
+            if current is not None and abs(current - target_poids) <= 0.005:
+                print(f"      ✓ Poids brut total corrigé: {current} kg")
+            else:
+                print(f"      ❌ Poids brut total non confirmé (lu: {current}, attendu: {target_poids})")
+                all_ok = False
+
+    if target_contenants is not None:
+        target_contenants = int(target_contenants)
+        current = read_contenants()
+        if current == target_contenants:
+            print(f"      ✓ Nombre total de contenants déjà correct: {current}")
+        else:
+            print(f"      ✏️  Nombre total de contenants: {current} → {target_contenants}")
+            type_value("mainTab:form3:nombreContenantTotal_IT_id", str(target_contenants))
+            current = read_contenants()
+            if current == target_contenants:
+                print(f"      ✓ Nombre total de contenants corrigé: {current}")
+            else:
+                print(f"      ❌ Nombre total de contenants non confirmé (lu: {current}, attendu: {target_contenants})")
+                all_ok = False
+
+    return all_ok
+
+
+def click_ed_menu_action(driver, wait, label, fallback_id):
+    """Clique une action du menu de l'ED (ex: 'SAUVEGARDER' / secure_174, 'VALIDER' / secure_176)."""
+    try:
+        link = wait.until(EC.element_to_be_clickable(
+            (By.XPATH, f"//a[contains(@class, 'ui-menuitem-link')]//span[text()='{label}']/parent::a")))
+    except Exception:
+        link = wait.until(EC.element_to_be_clickable((By.ID, fallback_id)))
+    link.click()
+    print(f"      ✓ Bouton '{label}' cliqué")
+
+
+def retry_validation_with_system_contenants(driver, wait, error_text, quantites_ctx):
+    """
+    Blocage + partiel — filet de sécurité après VALIDER: si BADR répond E2800435
+    ("Le nombre total de contenants calculé par le Système (N) est différent du
+    nombre total de contenants déclaré (M)"), on déclare N (contenants réels des
+    articles bloqués + lots des DUMs), puis SAUVEGARDER + VALIDER une seule fois.
+
+    N n'est accepté que s'il est cohérent: N − contenants des lots DUM ajoutés doit
+    être ≥ nombre d'articles bloqués conservés (chaque article ≥ 1 contenant) et,
+    si les contenants des articles bloqués ont été lus dans le tableau, égal à leur somme.
+
+    Returns:
+        bool: True si la correction + nouvelle validation ont été tentées
+    """
+    text = error_text or ''
+    if 'E2800435' not in text and not ('contenants' in text.lower() and 'calcul' in text.lower()):
+        return False
+    numbers = re.findall(r'\((\d+)\)', text)
+    if not numbers:
+        return False
+    system_value = int(numbers[0])
+    implied_kept = system_value - quantites_ctx['new_lots_contenants']
+    print(f"\n      🔁 E2800435: contenants calculés par BADR = {system_value} "
+          f"(dont {implied_kept} pour les articles bloqués conservés)")
+    if implied_kept < quantites_ctx['kept_lots_count'] or (
+            quantites_ctx['kept_contenants_exact'] and implied_kept != quantites_ctx['kept_contenants']):
+        print(f"      ❌ Valeur incohérente avec les lots lus ({quantites_ctx['kept_lots_count']} article(s) "
+              f"bloqué(s), {quantites_ctx['kept_contenants']} contenant(s)) — pas de correction automatique")
+        return False
+
+    if not fix_ed_quantites(driver, wait, target_poids=quantites_ctx.get('target_poids'),
+                            target_contenants=system_value):
+        return False
+    try:
+        click_ed_menu_action(driver, wait, 'SAUVEGARDER', 'secure_174')
+        time.sleep(3)
+        click_ed_menu_action(driver, wait, 'VALIDER', 'secure_176')
+        time.sleep(6)
+    except Exception as e:
+        print(f"      ❌ Erreur nouvelle sauvegarde/validation: {e}")
+    return True
+
+
+def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data, partial_config=None, partial_number=None,
+                                     blocked_articles=None):
     """
     PHASE 2 - BLOCAGE: Modifier un Etat de Dépotage existant pour une LTA bloquée
 
@@ -1050,6 +1329,8 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data, part
         shipper_data: Dictionnaire avec série, clé, etc.
         partial_config: Configuration partielle (mode blocage + partiel uniquement)
         partial_number: Numéro du partiel fusionné avec le blocage
+        blocked_articles: Nombre d'articles bloqués saisi dans l'onglet Préparation
+            (1 article = 1 contenant) — onglet Quantités en mode blocage + partiel
 
     Returns:
         True si succès, False si erreur
@@ -1628,6 +1909,64 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data, part
             dums_weight = round(sum(d['p_brut'] for d in dum_lots_data), 2)
             print(f"      🔒 Partiel {partial_number} fusionné avec le blocage: {len(dum_lots_data)} lot(s) DUM, {dums_weight} kg")
             print(f"         Lots: {', '.join(d['dum_name'] + (' (' + d['split_id'] + ')' if d.get('split_id') else '') for d in dum_lots_data)}")
+
+        # MED.5c: BLOCAGE + PARTIEL — onglet Quantités. L'ED existant déclare encore les
+        # totaux d'origine (ex: 1830 contenants) alors que BADR calcule, à la validation,
+        # la somme des lots: articles bloqués conservés + lots DUM du partiel
+        # (ex: 19 + 1829 = 1848) → sinon E2800435. On corrige AVANT de créer les lots
+        # (même ordre que la création d'ED: Quantités puis lots), seulement si faux.
+        quantites_ctx = None
+        if partial_mode:
+            print("\n   📋 Articles bloqués conservés dans l'ED (lots restants)...")
+            lots_table = read_ed_lots_table(driver)
+            kept_lots = lots_table['lots']
+            leftover = [l for l in kept_lots if should_delete_lot(l['reference'], lta_reference_base)]
+            if leftover:
+                print(f"      ⚠️  {len(leftover)} lot(s) à la référence LTA encore présent(s): "
+                      f"{', '.join(l['reference'] for l in leftover)}")
+            kept_exact = (lots_table['has_contenants_col']
+                          and all(l['contenants'] is not None for l in kept_lots))
+            kept_contenants = (sum(l['contenants'] for l in kept_lots) if kept_exact else len(kept_lots))
+            new_lots_contenants = sum(int(d['p']) for d in dum_lots_data)
+            target_poids = round(float(partial_data['weight']), 2)
+
+            print(f"      ✓ Tableau des lots de l'ED: {len(kept_lots)} article(s) bloqué(s) conservé(s), "
+                  f"{kept_contenants} contenant(s)"
+                  + ("" if kept_exact else " (1 contenant par article — colonne 'contenants' non lue)"))
+            if blocked_articles:
+                # Source principale: 'Nb Articles Bloqués' saisi dans l'onglet Préparation
+                blocked_contenants = int(blocked_articles)
+                print(f"      ✓ Articles bloqués saisis (onglet Préparation): {blocked_contenants} contenant(s)")
+                if kept_lots and blocked_contenants != kept_contenants:
+                    print(f"      ⚠️  Différence: {blocked_contenants} saisi(s) ≠ {kept_contenants} dans l'ED — "
+                          f"la valeur saisie est utilisée (si BADR refuse, correction auto par sa valeur calculée)")
+            else:
+                blocked_contenants = kept_contenants
+                print(f"      ⚠️  'Nb Articles Bloqués' non saisi — valeur du tableau des lots utilisée")
+                if not kept_lots:
+                    print("      ⚠️  Aucun article bloqué trouvé dans le tableau des lots — vérifiez l'ED")
+            target_contenants = blocked_contenants + new_lots_contenants
+            if lots_table['has_poids_col'] and kept_lots and all(l['poids'] is not None for l in kept_lots):
+                kept_poids = round(sum(l['poids'] for l in kept_lots), 2)
+                expected_kept_poids = round(target_poids - sum(d['p_brut'] for d in dum_lots_data), 2)
+                if abs(kept_poids - expected_kept_poids) > 0.005:
+                    print(f"      ⚠️  Poids des articles bloqués dans l'ED = {kept_poids} kg ≠ poids bloqué "
+                          f"saisi {expected_kept_poids} kg — BADR risque de refuser le poids total")
+            print(f"      🎯 Attendu: contenants {blocked_contenants} + {new_lots_contenants} = {target_contenants}, "
+                  f"poids brut total {target_poids} kg (poids du partiel {partial_number})")
+
+            if not fix_ed_quantites(driver, wait, target_poids=target_poids, target_contenants=target_contenants):
+                print("      ❌ Impossible de corriger l'onglet Quantités — modification interrompue")
+                return_to_home_after_error(driver)
+                return False
+            if not open_ed_tab(driver, wait, 'mainTab:tab4', 'LTA'):
+                return_to_home_after_error(driver)
+                return False
+            quantites_ctx = {'target_poids': target_poids,
+                             'new_lots_contenants': new_lots_contenants,
+                             'kept_lots_count': len(kept_lots),
+                             'kept_contenants': kept_contenants,
+                             'kept_contenants_exact': kept_exact}
 
         # ==================================================================
         # ÉTAPE MED.6: Créer les nouveaux lots (comme create_etat_depotage)
@@ -2304,11 +2643,22 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data, part
             
             # Chercher erreurs
             error_msg = driver.find_elements(By.CSS_SELECTOR, "div.ui-messages-error-detail, span.ui-messages-error-detail")
-            
+
+            # Blocage + partiel: E2800435 (contenants calculés ≠ déclarés) → déclarer la
+            # valeur calculée par BADR (si cohérente), sauvegarder et revalider UNE fois.
+            if error_msg and quantites_ctx:
+                error_texts = [e.text.strip() for e in error_msg]
+                contenants_error = next((t for t in error_texts if 'E2800435' in t), error_texts[0])
+                if retry_validation_with_system_contenants(driver, wait, contenants_error, quantites_ctx):
+                    print("\n   🔍 Vérification du résultat de la nouvelle validation...")
+                    error_msg = [e for e in driver.find_elements(
+                        By.CSS_SELECTOR, "div.ui-messages-error-detail, span.ui-messages-error-detail")
+                        if e.is_displayed() and e.text.strip()]
+
             if error_msg and len(error_msg) > 0:
                 error_text = error_msg[0].text.strip()
                 print(f"      ❌ Erreur validation: {error_text}")
-                
+
                 # Si erreur et qu'on a la référence sauvegardée, l'enregistrer dans shipper
                 if sauvegarde_reference:
                     try:
@@ -3193,6 +3543,90 @@ def get_blocage_partial_number(partial_config):
 
     largest = max(partial_config['partials'], key=lambda p: float(p.get('weight') or 0))
     return largest.get('partial_number')
+
+def resolve_blocage_for_partial(blocage_info, partial_config):
+    """
+    LTA blocage + partiel: complète blocage_info à partir de la config partielle.
+
+    Le dialogue 'Configuration Partielle' enregistre 'blocage_weight' quand le blocage
+    est coché sur la carte Préparation: la config suffit donc à savoir que le LTA est
+    un blocage, même si la ligne 5 du fichier LTA n'est pas (encore) marquée 'blocage'
+    (Préparation pas re-sauvegardée). Sans cela, Phase 1 CRÉAIT un ED pour le plus
+    grand partiel au lieu de MODIFIER l'ED blocage existant.
+    """
+    if not partial_config:
+        return blocage_info
+    try:
+        cfg_blocked = float(partial_config.get('blocage_weight') or 0)
+    except (TypeError, ValueError):
+        cfg_blocked = 0.0
+    if cfg_blocked <= 0:
+        return blocage_info  # config sans blocage: la ligne 5 décide (garde-fou exact en aval)
+
+    file_is_blocage = bool(blocage_info.get('is_blocage'))
+    file_blocked = blocage_info.get('blocked_weight') if file_is_blocage else None
+    if file_blocked is not None and abs(float(file_blocked) - cfg_blocked) > 0.005:
+        # Poids bloqué modifié après la config: on garde la valeur du fichier, le
+        # garde-fou exact de process_blocage_partial_ed refusera la config périmée.
+        print(f"\n   ⚠️  Poids bloqué différent: fichier LTA (ligne 13) = {file_blocked} kg, "
+              f"config partielle = {cfg_blocked} kg")
+        return blocage_info
+
+    original = blocage_info.get('original_weight') if file_is_blocage else None
+    source_total = "ligne 12 du fichier LTA"
+    if original is None and partial_config.get('blocage_lta_total') not in (None, ''):
+        original, source_total = partial_config['blocage_lta_total'], "config partielle"
+    if original is None:
+        # Le dialogue impose: somme des poids des partiels = poids total du LTA
+        original = round(sum(float(p.get('weight') or 0) for p in partial_config.get('partials', [])), 3)
+        source_total = "somme des poids des partiels"
+    original = float(original)
+    corrected = round(abs(original - cfg_blocked), 3)
+
+    if not file_is_blocage:
+        print(f"\n   🔒 BLOCAGE détecté via la configuration partielle "
+              f"(ligne 5 du fichier LTA pas encore marquée 'blocage')")
+        print(f"      Poids total {original} kg ({source_total}) − bloqué {cfg_blocked} kg = {corrected} kg")
+
+    return {'is_blocage': True, 'original_weight': original,
+            'blocked_weight': cfg_blocked, 'corrected_weight': corrected}
+
+def _ds_key(ds_text):
+    """'5986 V', '5986/V', '5986V' → '5986V' (comparaison de DS série + clé)."""
+    return re.sub(r'[\s/]+', '', str(ds_text or '')).upper()
+
+def read_blocked_articles_count(lta_folder_path):
+    """
+    Nombre d'articles bloqués saisi dans l'onglet Préparation ('Nb Articles Bloqués'),
+    ligne 14 du fichier [X]eme LTA.txt (1 article = 1 contenant). None si absent.
+    """
+    lta_name = os.path.basename(lta_folder_path)
+    parent_dir = os.path.dirname(lta_folder_path) or "."
+    pattern = lta_name.replace(" ", "").lower()
+    try:
+        for file in os.listdir(parent_dir):
+            path = os.path.join(parent_dir, file)
+            if (os.path.isfile(path) and file.lower().endswith('.txt')
+                    and file.lower().replace(" ", "").replace(".txt", "") == pattern):
+                with open(path, 'r', encoding='utf-8') as f:
+                    lines = f.read().splitlines()
+                value = lines[13].strip() if len(lines) > 13 else ''
+                return int(value) if value.isdigit() and int(value) > 0 else None
+    except (OSError, ValueError):
+        pass
+    return None
+
+def read_preparation_ds(lta_folder_path):
+    """DS série saisie dans l'onglet Préparation (ligne 2 du fichier shipper), '' si vide."""
+    lta_name = os.path.basename(lta_folder_path)
+    parent_dir = os.path.dirname(lta_folder_path) or "."
+    shipper_path = os.path.join(parent_dir, f"{lta_name.replace(' ', '_')}_shipper_name.txt")
+    try:
+        with open(shipper_path, 'r', encoding='utf-8') as f:
+            lines = f.read().splitlines()
+        return lines[1].strip() if len(lines) > 1 else ''
+    except OSError:
+        return ''
 
 def save_ds_validated_to_partial_config(lta_folder_path, folder_name, partial_number, ds_validated):
     """
@@ -11599,6 +12033,19 @@ def process_blocage_partial_ed(driver, lta_folder_path, partial_config, partial_
         print(f"   ❌ Impossible de calculer le poids corrigé (lignes 12/13 du fichier LTA)")
         return False
 
+    # DS de l'ED blocage existant = DS du plus grand partiel (saisie dans la config).
+    # La DS de l'onglet Préparation est facultative; si elle est saisie, c'est la MÊME:
+    # une différence = faute de frappe → on refuse plutôt que de modifier le mauvais ED.
+    partial_ds = f"{partial_data.get('ds_serie', '')} {partial_data.get('ds_cle', '')}".strip()
+    prep_ds = read_preparation_ds(lta_folder_path)
+    if prep_ds and _ds_key(prep_ds) != _ds_key(partial_ds):
+        print(f"\n   ❌ DS série différente pour le blocage:")
+        print(f"      Onglet Préparation: {prep_ds}")
+        print(f"      Plus grand partiel (config partielle): {partial_ds}")
+        print(f"      Pour un LTA blocage + partiel c'est la MÊME DS (celle de l'ED blocage existant).")
+        print(f"      Corrigez l'une des deux (ou videz la DS de l'onglet Préparation) puis relancez.")
+        return False
+
     blocked_weight = float(blocage_info.get('blocked_weight') or 0)
     partial_weight = float(partial_data['weight'])
     partial_dums = partial_data.get('dums', [])
@@ -11655,11 +12102,22 @@ def process_blocage_partial_ed(driver, lta_folder_path, partial_config, partial_
         'cle': partial_data['ds_cle'],
         'loading_location': partial_data.get('loading_location')
     }
-    print(f"   DS (ED blocage existant): {partial_data['ds_serie']} {partial_data['ds_cle']}")
+    print(f"   DS (ED blocage existant = plus grand partiel): {partial_ds}"
+          + (" — identique à l'onglet Préparation" if prep_ds else " — DS onglet Préparation non saisie (facultative)"))
+
+    # Nombre d'articles bloqués (onglet Préparation, ligne 14 du fichier LTA):
+    # contenants des articles bloqués pour l'onglet Quantités de l'ED modifié.
+    blocked_articles = read_blocked_articles_count(lta_folder_path)
+    if blocked_articles:
+        print(f"   Articles bloqués (onglet Préparation): {blocked_articles} → {blocked_articles} contenant(s)")
+    else:
+        print(f"   ⚠️  'Nb Articles Bloqués' non saisi (ligne 14 du fichier LTA) — "
+              f"le nombre sera compté dans le tableau des lots de l'ED")
 
     return modify_etat_depotage_for_blocage(
         driver, lta_folder_path, shipper_data,
-        partial_config=partial_config, partial_number=partial_number
+        partial_config=partial_config, partial_number=partial_number,
+        blocked_articles=blocked_articles
     )
 
 def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
@@ -11685,6 +12143,10 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
         # blocage ET partiel (le plus grand partiel est fusionné avec le blocage).
         parent_dir = os.path.dirname(lta_folder_path) or "."
         partial_config = get_lta_partial_info(parent_dir, lta_name)
+        if partial_config:
+            # Blocage enregistré dans la config partielle (même si la ligne 5 du fichier
+            # LTA n'est pas marquée) → le plus grand partiel MODIFIE l'ED blocage existant.
+            blocage_info = resolve_blocage_for_partial(blocage_info, partial_config)
 
         if blocage_info['is_blocage'] and not partial_config:
             print(f"\n⚠️  LTA BLOCAGE DÉTECTÉ - Workflow spécial (PHASE 2)")
@@ -11738,6 +12200,8 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
             print(f"\n⚠️  LTA BLOCAGE + PARTIEL DÉTECTÉ")
             print(f"   Poids bloqué: {blocage_info.get('blocked_weight')} kg")
             print(f"   Partiel fusionné avec le blocage (plus grand vol): {blocage_partial_number} → modification de l'ED existant")
+            _bp = find_partial_by_number(partial_config, blocage_partial_number) or {}
+            print(f"   DS du blocage = DS du partiel {blocage_partial_number}: {_bp.get('ds_serie', '?')} {_bp.get('ds_cle', '')}")
             print(f"   Autres partiels: création d'ED ou DS MEAD (cas d'exception) comme un LTA partiel normal")
 
         if partial_config:

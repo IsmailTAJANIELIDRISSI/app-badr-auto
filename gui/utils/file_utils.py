@@ -539,48 +539,65 @@ def get_lta_blocage_info(lta_folder_path, folder_name):
         folder_name: Name of LTA folder
         
     Returns:
-        Dict with: is_blocage, total_weight, blocked_weight
+        Dict with: is_blocage, total_weight, blocked_weight, blocked_articles
     """
+    empty = {'is_blocage': False, 'total_weight': '', 'blocked_weight': '', 'blocked_articles': ''}
     try:
         lines = read_lta_file(lta_folder_path, folder_name)
         if not lines:
-            return {'is_blocage': False, 'total_weight': '', 'blocked_weight': ''}
-        
+            return empty
+
         is_blocage = len(lines) >= 5 and 'blocage' in lines[4].lower()
         total_weight = lines[11].strip() if len(lines) >= 12 else ''
         blocked_weight = lines[12].strip() if len(lines) >= 13 else ''
-        
+        # Ligne 14: nombre d'articles bloqués (1 article = 1 contenant)
+        blocked_articles = lines[13].strip() if len(lines) >= 14 else ''
+        if not blocked_articles.isdigit():
+            blocked_articles = ''  # ligne 14 vide ou séparateur d'un ancien fichier
+
         return {
             'is_blocage': is_blocage,
             'total_weight': total_weight,
-            'blocked_weight': blocked_weight
+            'blocked_weight': blocked_weight,
+            'blocked_articles': blocked_articles
         }
     except Exception as e:
         logger.error(f"Error getting blocage info: {e}")
-        return {'is_blocage': False, 'total_weight': '', 'blocked_weight': ''}
+        return empty
 
-def update_lta_blocage(lta_folder_path, folder_name, is_blocage, total_weight='', blocked_weight=''):
+def update_lta_blocage(lta_folder_path, folder_name, is_blocage, total_weight='', blocked_weight='',
+                       blocked_articles=''):
     """
     Update blocage information in LTA file
-    
+
     Args:
         lta_folder_path: Path to LTA folder
         folder_name: Name of LTA folder
         is_blocage: Boolean indicating if blocage
         total_weight: Total weight (line 12)
         blocked_weight: Blocked weight (line 13)
-        
+        blocked_articles: Number of blocked articles (line 14, 1 article = 1 contenant)
+
     Returns:
         True if successful, False otherwise
     """
     try:
         success = True
-        
+
         # Update line 5
         if is_blocage:
             success &= write_lta_file_line(lta_folder_path, folder_name, 5, 'blocage')
             success &= write_lta_file_line(lta_folder_path, folder_name, 12, str(total_weight))
             success &= write_lta_file_line(lta_folder_path, folder_name, 13, str(blocked_weight))
+            # Ligne 14 = 3e ligne vide avant le séparateur "-----" (format du script de
+            # préparation); ne jamais écraser une ligne 14 qui contient autre chose.
+            current = read_lta_file(lta_folder_path, folder_name) or []
+            line_14 = current[13].strip() if len(current) >= 14 else ''
+            if line_14 == '' or line_14.isdigit():
+                success &= write_lta_file_line(lta_folder_path, folder_name, 14, str(blocked_articles or ''))
+            elif blocked_articles:
+                logger.warning(f"{folder_name}: ligne 14 occupée ('{line_14}') — nombre d'articles bloqués non écrit")
+                success = False
         else:
             success &= write_lta_file_line(lta_folder_path, folder_name, 5, '')
         

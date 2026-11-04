@@ -8,16 +8,32 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import logging
 import os
+import re
 import subprocess
 import platform
 from gui.utils.script_manager import ScriptManager
 from gui.utils.file_utils import (detect_ltas, write_shipper_file,
                                   get_lta_shipper_name, update_lta_shipper_name,
                                   get_lta_blocage_info, update_lta_blocage,
-                                  find_lta_pdf, scan_lta_errors)
+                                  find_lta_pdf, scan_lta_errors, get_lta_partial_info)
 from gui.utils.validators import validate_ds_series, validate_location, validate_folder_path, normalize_ds_series
 
 logger = logging.getLogger(__name__)
+
+
+def _ds_key(ds_text):
+    """'5986 V', '5986/V', '5986V' → '5986V' (comparaison de DS série + clé)."""
+    return re.sub(r'[\s/]+', '', str(ds_text or '')).upper()
+
+
+def _blocage_partial_ds(config):
+    """DS ('5986 V') du partiel fusionné avec le blocage dans une config partielle, '' sinon."""
+    if not config or config.get('blocage_partial_number') is None:
+        return ''
+    for p in config.get('partials', []):
+        if p.get('partial_number') == config['blocage_partial_number']:
+            return f"{p.get('ds_serie', '')} {p.get('ds_cle', '')}".strip()
+    return ''
 
 
 class PreparationScreen:
@@ -241,11 +257,30 @@ class PreparationScreen:
         
         self.script_manager.run_preparation(folder, on_progress, on_complete, selected_ltas)
     
-    def populate_lta_table(self):
-        """Populate the LTA table with enhanced UI including shipper, location select, and blocage"""
+    def populate_lta_table(self, keep_inputs=False):
+        """Populate the LTA table with enhanced UI including shipper, location select, and blocage
+
+        keep_inputs: conserver les saisies pas encore sauvegardées (DS, lieu, expéditeur,
+        blocage) au lieu de les remplacer par le contenu des fichiers — utilisé après
+        'Configurer' partiel, qui rafraîchit la table.
+        """
         folder = self.folder_var.get()
         ltas = detect_ltas(folder)
-        
+
+        kept_inputs = {}
+        if keep_inputs:
+            for inp in self.lta_inputs:
+                try:
+                    kept_inputs[inp['lta']['name']] = {
+                        'ds': inp['ds_var'].get(), 'shipper': inp['shipper_var'].get(),
+                        'loc': inp['loc_var'].get(), 'loc_mode': inp['loc_mode_var'].get(),
+                        'blocage': inp['blocage_var'].get(), 'total': inp['total_weight_var'].get(),
+                        'blocked': inp['blocked_weight_var'].get(),
+                        'articles': inp['blocked_articles_var'].get(),
+                    }
+                except (KeyError, tk.TclError):
+                    pass
+
         if not ltas:
             messagebox.showwarning("Attention", "Aucun LTA détecté dans ce dossier")
             return
@@ -615,7 +650,27 @@ class PreparationScreen:
                 font=('Arial', 9)
             )
             blocked_weight_entry.grid(row=0, column=3, sticky=tk.W, padx=5)
-            
+
+            # Nombre d'articles bloqués (1 article = 1 contenant) — ligne 14 du fichier LTA.
+            # LTA blocage + partiel: sert à corriger "Nombre total Contenant(s)" de l'ED
+            # modifié (articles bloqués + positions du plus grand partiel).
+            ttk.Label(blocage_frame, text="Nb Articles Bloqués:", font=('Arial', 9)).grid(
+                row=1, column=0, sticky=tk.W, padx=(20, 5), pady=(6, 0)
+            )
+            blocked_articles_var = tk.StringVar(value=blocage_info.get('blocked_articles', ''))
+            ttk.Entry(
+                blocage_frame,
+                textvariable=blocked_articles_var,
+                width=15,
+                font=('Arial', 9)
+            ).grid(row=1, column=1, sticky=tk.W, padx=5, pady=(6, 0))
+            ttk.Label(
+                blocage_frame,
+                text="1 article = 1 contenant (requis si LTA partiel)",
+                font=('Arial', 8, 'italic'),
+                foreground='gray'
+            ).grid(row=1, column=2, columnspan=2, sticky=tk.W, padx=(20, 5), pady=(6, 0))
+
             # Toggle blocage frame visibility - use factory function
             def make_toggle_blocage(bvar, bframe):
                 def toggle():
@@ -656,7 +711,7 @@ class PreparationScreen:
             configure_btn = ttk.Button(
                 card,
                 text="⚙️ Configurer",
-                command=lambda f=folder, l=lta['name'], p=partial_var, lf=lta['lta_file'], bv=blocage_var, bw=blocked_weight_var, tw=total_weight_var: self._configure_partial(f, l, p, lf, bv, bw, tw)
+                command=lambda f=folder, l=lta['name'], p=partial_var, lf=lta['lta_file'], bv=blocage_var, bw=blocked_weight_var, tw=total_weight_var, ba=blocked_articles_var: self._configure_partial(f, l, p, lf, bv, bw, tw, ba)
             )
             configure_btn.grid(row=row_num, column=2, sticky=tk.E, pady=5)
             
@@ -687,7 +742,21 @@ class PreparationScreen:
             toggle_partial_func = make_toggle_partial(partial_var, configure_btn, partial_info_frame)
             partial_cb.config(command=toggle_partial_func)
             toggle_partial_func()
-            
+
+            # Restaurer les saisies non sauvegardées (rafraîchissement après 'Configurer')
+            kept = kept_inputs.get(lta['name'])
+            if kept:
+                ds_var.set(kept['ds'])
+                shipper_var.set(kept['shipper'])
+                loc_var.set(kept['loc'])
+                loc_mode_var.set(kept['loc_mode'])
+                toggle_func()
+                blocage_var.set(kept['blocage'])
+                total_weight_var.set(kept['total'])
+                blocked_weight_var.set(kept['blocked'])
+                blocked_articles_var.set(kept['articles'])
+                toggle_blocage_func()
+
             # Store all variables
             self.lta_inputs.append({
                 'lta': lta,
@@ -700,6 +769,7 @@ class PreparationScreen:
                 'blocage_var': blocage_var,
                 'total_weight_var': total_weight_var,
                 'blocked_weight_var': blocked_weight_var,
+                'blocked_articles_var': blocked_articles_var,
                 'partial_var': partial_var,
                 'status_var': ds_status_var,
                 'status_label': ds_status_label
@@ -763,7 +833,8 @@ class PreparationScreen:
             is_blocage = input_data['blocage_var'].get()
             total_weight = input_data['total_weight_var'].get().strip()
             blocked_weight = input_data['blocked_weight_var'].get().strip()
-            
+            blocked_articles = input_data['blocked_articles_var'].get().strip()
+
             logger.info(f"Processing LTA: {lta['name']}, DS: {ds_series}, Location: {location}, Shipper: {shipper_name}, Blocage: {is_blocage}")
             
             # Validate shipper name (required)
@@ -842,7 +913,38 @@ class PreparationScreen:
                     )
                     error_count += 1
                     continue
-            
+
+            # Nombre d'articles bloqués (ligne 14): entier > 0, obligatoire si blocage + partiel
+            # (sert à corriger "Nombre total Contenant(s)" de l'ED blocage modifié)
+            if is_blocage:
+                if blocked_articles:
+                    if not blocked_articles.isdigit() or int(blocked_articles) <= 0:
+                        messagebox.showerror(
+                            "Erreur de Validation",
+                            f"{lta['name']}: 'Nb Articles Bloqués' doit être un nombre entier > 0 (ex: 19)"
+                        )
+                        error_count += 1
+                        continue
+                    blocked_articles = str(int(blocked_articles))
+                elif input_data['partial_var'].get():
+                    messagebox.showerror(
+                        "Erreur de Validation",
+                        f"{lta['name']}: LTA blocage + partiel — saisissez le nombre d'articles bloqués "
+                        "(ex: 19).\n\nIl sert à corriger le 'Nombre total Contenant(s)' de l'ED blocage "
+                        "modifié (articles bloqués + positions du plus grand partiel)."
+                    )
+                    error_count += 1
+                    continue
+
+            # LTA blocage + partiel: la carte et la config partielle doivent concorder
+            if input_data['partial_var'].get():
+                mismatch = self._blocage_partial_mismatch(folder, lta['name'], is_blocage,
+                                                          blocked_weight, ds_series)
+                if mismatch:
+                    messagebox.showerror("Blocage + partiel", f"{lta['name']}: {mismatch}")
+                    error_count += 1
+                    continue
+
             try:
                 # Update shipper name (line 6 of LTA file + line 1 of shipper file)
                 # Use parent folder (folder) not subfolder
@@ -855,7 +957,8 @@ class PreparationScreen:
                     lta['name'],
                     is_blocage,
                     total_weight if is_blocage else '',
-                    blocked_weight if is_blocage else ''
+                    blocked_weight if is_blocage else '',
+                    blocked_articles if is_blocage else ''
                 )
                 
                 # Update DS and location in shipper file
@@ -894,7 +997,8 @@ class PreparationScreen:
             messagebox.showwarning("Attention", f"Sauvegarde terminée avec {error_count} erreur(s)")
     
     def _configure_partial(self, lta_folder_path, folder_name, partial_var, lta_file_path=None,
-                           blocage_var=None, blocked_weight_var=None, total_weight_var=None):
+                           blocage_var=None, blocked_weight_var=None, total_weight_var=None,
+                           blocked_articles_var=None):
         """Open partial LTA configuration dialog"""
         if not partial_var.get():
             messagebox.showinfo("Info", "Veuillez cocher la case 'LTA Partiel' d'abord")
@@ -934,12 +1038,78 @@ class PreparationScreen:
                 
                 # Refresh the display to show updated info
                 if dialog.config_saved:
-                    self.populate_lta_table()
-                    messagebox.showinfo("Succès", "Configuration partielle sauvegardée!")
+                    notes = []
+                    if blocked_weight:
+                        # Enregistrer le blocage TOUT DE SUITE dans le fichier LTA (ligne 5/12/13):
+                        # la config partielle a été calculée avec ces poids; sans cela Phase 1
+                        # pouvait ignorer le blocage et CRÉER un ED au lieu de MODIFIER l'ED blocage.
+                        articles = blocked_articles_var.get().strip() if blocked_articles_var is not None else ''
+                        update_lta_blocage(lta_folder_path, folder_name, True,
+                                           total_weight_var.get().strip().replace(',', '.'),
+                                           blocked_weight_var.get().strip().replace(',', '.'),
+                                           articles if articles.isdigit() else '')
+                        notes.append("🔒 Blocage enregistré dans le fichier LTA.")
+                        if not articles.isdigit():
+                            notes.append("⚠️ Saisissez aussi 'Nb Articles Bloqués' (ex: 19) avant de sauvegarder.")
+                        ds_note = self._sync_blocage_ds(lta_folder_path, folder_name)
+                        if ds_note:
+                            notes.append(ds_note)
+                    self.populate_lta_table(keep_inputs=True)
+                    messagebox.showinfo("Succès", "\n\n".join(["Configuration partielle sauvegardée!"] + notes))
         except Exception as e:
             logger.error(f"Error opening partial config dialog: {e}", exc_info=True)
             messagebox.showerror("Erreur", f"Impossible d'ouvrir la fenêtre de configuration:\n{str(e)}")
-    
+
+    def _sync_blocage_ds(self, folder, folder_name):
+        """
+        LTA blocage + partiel: la DS du blocage EST la DS du plus grand partiel.
+        DS de la carte vide → remplie avec celle du partiel; différente → avertissement.
+        Retourne une note pour le message de succès ('' si rien à dire).
+        """
+        partial_ds = _blocage_partial_ds(get_lta_partial_info(folder, folder_name))
+        inp = next((i for i in self.lta_inputs if i['lta']['name'] == folder_name), None)
+        if not partial_ds or inp is None:
+            return ''
+        card_ds = inp['ds_var'].get().strip()
+        if not card_ds:
+            inp['ds_var'].set(partial_ds)
+            return f"DS du blocage = DS du plus grand partiel: {partial_ds} (remplie automatiquement)."
+        if _ds_key(card_ds) != _ds_key(partial_ds):
+            messagebox.showwarning(
+                "DS série différente",
+                f"{folder_name}: la DS de la carte ({card_ds}) est différente de la DS du plus grand "
+                f"partiel ({partial_ds}).\n\nPour un LTA blocage + partiel c'est la MÊME DS (celle de "
+                "l'ED blocage existant). Corrigez l'une des deux, ou videz la DS de la carte."
+            )
+        return ''
+
+    def _blocage_partial_mismatch(self, folder, folder_name, is_blocage, blocked_weight, ds_series):
+        """Message d'erreur si la carte (blocage, poids bloqué, DS) ne concorde pas avec la
+        configuration partielle sauvegardée, None sinon."""
+        config = get_lta_partial_info(folder, folder_name)
+        if not config:
+            return None
+        try:
+            cfg_blocked = float(config.get('blocage_weight') or 0)
+        except (TypeError, ValueError):
+            cfg_blocked = 0.0
+        redo = "\n\nRé-ouvrez 'Configurer' (LTA Partiel) et sauvegardez à nouveau."
+        if is_blocage and cfg_blocked <= 0:
+            return "LTA coché 'Blocage' mais la configuration partielle a été faite sans blocage." + redo
+        if not is_blocage and cfg_blocked > 0:
+            return (f"La configuration partielle a été faite avec un blocage de {cfg_blocked} kg "
+                    "mais 'LTA Blocage' est décoché.\n\nRecochez-le, ou ré-ouvrez 'Configurer' "
+                    "(LTA Partiel) et sauvegardez à nouveau.")
+        if is_blocage and abs(float(blocked_weight) - cfg_blocked) > 0.005:
+            return (f"Poids bloqué {blocked_weight} kg ≠ {cfg_blocked} kg utilisé par la "
+                    "configuration partielle." + redo)
+        partial_ds = _blocage_partial_ds(config)
+        if is_blocage and ds_series and partial_ds and _ds_key(ds_series) != _ds_key(partial_ds):
+            return (f"DS série {ds_series} ≠ DS du plus grand partiel {partial_ds}.\n\n"
+                    "Pour un LTA blocage + partiel c'est la MÊME DS (celle de l'ED blocage existant). "
+                    "Corrigez l'une des deux, ou laissez la DS de la carte vide.")
+        return None
+
     def _create_tooltip(self, widget, text):
         """Create a tooltip for a widget"""
         def show_tooltip(event):
