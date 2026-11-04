@@ -823,6 +823,7 @@ class PartialConfigDialog:
                         dums_text.insert(
                             tk.END,
                             f"🔒 Fusionné avec le blocage → ED blocage existant MODIFIÉ\n"
+                            f"   DS Série de ce partiel = DS du blocage (onglet Préparation facultatif)\n"
                             f"   DUMs: {dum_targets[idx]:.2f} kg = {partial_weights[idx]} − {self.blocked_weight} kg bloqués"
                             f" (attribués: {assigned_here:.2f} kg)\n",
                         )
@@ -1543,6 +1544,7 @@ class PartialConfigDialog:
             if blocage_idx is not None:
                 config['blocage_partial_number'] = self.partial_forms[blocage_idx]['partial_number']
                 config['blocage_weight'] = self.blocked_weight
+                config['blocage_lta_total'] = self.blocage_lta_total
 
             # Add exception case fields if applicable
             if is_exception_case:
