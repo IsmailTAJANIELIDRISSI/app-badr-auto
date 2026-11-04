@@ -4,6 +4,29 @@ _Populated as we work. Each entry = problem + solution + files changed._
 
 ---
 
+## 2026-11-04 — `git pull` bloqué sur un autre PC + known_companies.json ne crée plus de conflits
+
+**Problème:** sur un autre PC (`~/Desktop/medafrica-app`), le dépôt était bloqué dans un conflit non résolu (`UU badr_login_test.py`, commit local `b6f05b2` du 20/08). À chaque lancement, le `git pull --autostash origin main` de l'exe échouait aussitôt (exit 128: "Pulling is not possible because you have unmerged files"), sans aucun message: la sortie de git est jetée (`except: pass`). Un `stash@{0}: autostash` restait en attente (réapplication échouée). Le PC avait donc raté les mises à jour du 21/09 et du 04/11. Le dépôt était public (accès anonyme OK), git était bien dans le PATH, `origin` était correct; l'exe est dans `medafrica-app/dist/`, donc git trouve bien le dépôt.
+
+Cause racine côté fichiers: `known_companies.json` est suivi par git ET écrit par l'app (`script_all_fuzy_match.py` y ajoutait chaque société apprise). Il diffère donc d'un PC à l'autre, et dès que le dépôt le modifie à son tour (mon commit `4f0b889` du jour, 39 → 69 noms), l'`--autostash` entre en conflit.
+
+**Solution (`script_all_fuzy_match.py`, `.gitignore`, fichiers JSON):**
+- 3 fichiers, un seul écrit par l'app:
+  - `known_companies.json`: suivi, FIGÉ à sa version d'origine (39 noms, commit `ed322d1`). L'app ne l'écrit plus. Tous les PCs ont déjà exactement cette version: le pull ne la modifie donc plus.
+  - `known_companies_shared.json`: suivi, géré par le mainteneur (29 noms appris sur le PC de dev, anciennement dans le commit `4f0b889`). L'app ne l'écrit jamais.
+  - `known_companies_local.json`: NON suivi (jamais dans `.gitignore` en liste blanche). Noms appris sur ce PC, seul fichier écrit par l'app.
+- Lecture = union des 3 fichiers (sans doublon, casse/espaces ignorés). `save_companies_database` n'écrit que les noms qui ne sont pas déjà dans les deux fichiers suivis. `add_company_to_database` et la sauvegarde finale relisent les 3 fichiers (un nom ajouté par une autre instance n'est pas perdu).
+- Nettoyage automatique une seule fois par PC (`_migrate_legacy_local_changes`): si `known_companies.json` diffère de git HEAD, les noms locaux passent dans `known_companies_local.json`, puis le fichier suivi est restauré depuis HEAD (arbre de travail propre). Sans effet hors dépôt git, ou si le fichier est illisible (marqueurs de conflit): il n'est alors pas touché.
+- Règle pour la suite: ne plus modifier `known_companies.json` dans git. Les noms partagés vont dans `known_companies_shared.json`.
+
+**Vérifié:** (1) tests sur dépôts jetables: chargement, migration, ajout/doublons, deux instances, PC neuf, dossier hors git, marqueurs de conflit; (2) simulation de vrais `git pull --autostash` sur des clones du dépôt réel (voir détails ci-dessous / message de fin).
+
+**À faire sur le PC bloqué:** réparé à la main (`git reset --hard origin/main` après sauvegarde dans `~/Desktop/pull_backup/`); le `stash@{0}` est conservé, ne pas le réappliquer.
+
+**Files:** `script_all_fuzy_match.py`, `.gitignore`, `known_companies.json` (restauré à l'identique d'origine), `known_companies_shared.json` (nouveau).
+
+---
+
 ## 2026-11-04 — Champ "Nb Articles Bloqués" (onglet Préparation) → ligne 14 du fichier LTA
 
 **Demande:** l'utilisateur saisit lui-même le nombre d'articles bloqués dans la section blocage de la carte LTA (1 article = 1 contenant). Ce nombre sert à corriger "Nombre total Contenant(s)" de l'ED blocage modifié (ex: 19 + 1829 = 1848). Auparavant, l'app ne le comptait que dans le tableau des lots de l'ED BADR.

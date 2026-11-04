@@ -8,6 +8,9 @@
 !validation.py
 !requirements.txt
 !known_companies.json
+!known_companies_shared.json
+# known_companies_local.json (names learned on each PC) is intentionally NOT whitelisted:
+# it stays untracked so `git pull` can never conflict on it.
 !.env.example
 !README_DEPLOYMENT.md
 !DEPLOYMENT_GUIDE.md

@@ -90,75 +90,155 @@ logger = logging.getLogger(__name__)
 
 # Global variable for known companies database
 KNOWN_COMPANIES = []
-DATABASE_FILE = "known_companies.json"
+
+# Known-companies storage is split in THREE files so that `git pull` never conflicts:
+#   known_companies.json         tracked, FROZEN legacy list — the app never writes it
+#   known_companies_shared.json  tracked, curated by the maintainer — the app never writes it
+#   known_companies_local.json   NOT tracked (.gitignore) — names learned on THIS PC; the only
+#                                file the app writes
+# (Before, the app wrote every learned name into the tracked known_companies.json, which
+# therefore differed from PC to PC and conflicted with `git pull --autostash`.)
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATABASE_FILE = os.path.join(_BASE_DIR, "known_companies.json")
+SHARED_DATABASE_FILE = os.path.join(_BASE_DIR, "known_companies_shared.json")
+LOCAL_DATABASE_FILE = os.path.join(_BASE_DIR, "known_companies_local.json")
+
+def _company_key(name):
+    """Case/space-insensitive key used to compare company names."""
+    return (name or '').upper().strip()
+
+def _read_company_list(path):
+    """Read a JSON list of company names. [] if the file is missing or unreadable (never raises)."""
+    try:
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return [c for c in data if isinstance(c, str) and c.strip()]
+            logger.warning(f"{os.path.basename(path)} is not a JSON list - ignored")
+    except Exception as e:
+        logger.warning(f"Could not read {os.path.basename(path)}: {e}")
+    return []
+
+def _merge_company_lists(*lists):
+    """Union of company lists, first occurrence wins, case/space-insensitive."""
+    seen, merged = set(), []
+    for companies in lists:
+        for company in companies:
+            key = _company_key(company)
+            if key and key not in seen:
+                seen.add(key)
+                merged.append(company)
+    return merged
+
+def _read_seed_companies():
+    """Companies from the two tracked files (legacy + shared)."""
+    return _merge_company_lists(_read_company_list(DATABASE_FILE), _read_company_list(SHARED_DATABASE_FILE))
+
+def _read_all_companies():
+    """Companies from tracked files + this PC's local file."""
+    return _merge_company_lists(_read_seed_companies(), _read_company_list(LOCAL_DATABASE_FILE))
+
+def _write_company_list(path, companies):
+    """Atomic JSON write (temp file + rename) to prevent corruption. Returns True on success."""
+    temp_file = path + '.tmp'
+    try:
+        with open(temp_file, 'w', encoding='utf-8') as f:
+            json.dump(companies, f, indent=2, ensure_ascii=False)
+        os.replace(temp_file, path)
+        return True
+    except Exception as e:
+        logger.error(f"Error saving {os.path.basename(path)}: {e}")
+        try:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        except Exception:
+            pass
+        return False
+
+def _migrate_legacy_local_changes():
+    """
+    One-time cleanup for PCs that ran an older version: names learned there were written
+    into the git-tracked known_companies.json. Move the names that are not in git HEAD's
+    version to known_companies_local.json, then restore the tracked file from HEAD so the
+    working tree is clean and `git pull` can never conflict on it.
+    Silent no-op outside a git repo, or when the file can't be read (e.g. conflict markers).
+    """
+    try:
+        flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+        name = os.path.basename(DATABASE_FILE)
+        head = subprocess.run(["git", "show", f"HEAD:{name}"], capture_output=True,
+                              cwd=_BASE_DIR, timeout=10, creationflags=flags)
+        if head.returncode != 0:
+            return
+        head_names = json.loads(head.stdout.decode('utf-8'))
+        if not os.path.exists(DATABASE_FILE):
+            return
+        with open(DATABASE_FILE, 'r', encoding='utf-8') as f:
+            working_names = json.load(f)   # raises on conflict markers -> abort, file untouched
+        if working_names == head_names:
+            return
+
+        head_keys = {_company_key(c) for c in head_names}
+        extras = [c for c in working_names if isinstance(c, str) and _company_key(c) not in head_keys]
+        if extras:
+            merged = _merge_company_lists(_read_company_list(LOCAL_DATABASE_FILE), extras)
+            if not _write_company_list(LOCAL_DATABASE_FILE, merged):
+                return   # could not keep the names safely -> leave the tracked file as is
+            logger.info(f"Moved {len(extras)} company name(s) from {name} to {os.path.basename(LOCAL_DATABASE_FILE)}")
+        subprocess.run(["git", "checkout", "HEAD", "--", name], capture_output=True,
+                       cwd=_BASE_DIR, timeout=10, creationflags=flags)
+    except Exception as e:
+        logger.debug(f"Legacy known_companies cleanup skipped: {e}")
 
 def load_companies_database():
-    """Load known companies from JSON file"""
+    """Load known companies: tracked files (legacy + shared) + this PC's local file"""
     global KNOWN_COMPANIES
     try:
-        if os.path.exists(DATABASE_FILE):
-            with open(DATABASE_FILE, 'r', encoding='utf-8') as f:
-                KNOWN_COMPANIES = json.load(f)
+        _migrate_legacy_local_changes()
+        KNOWN_COMPANIES = _read_all_companies()
+        if KNOWN_COMPANIES:
             logger.info(f"Loaded {len(KNOWN_COMPANIES)} companies from database")
         else:
-            logger.warning(f"Database file {DATABASE_FILE} not found. Creating empty database.")
-            KNOWN_COMPANIES = []
+            logger.warning("No known companies found (known_companies*.json missing or empty).")
     except Exception as e:
         logger.error(f"Error loading companies database: {e}")
         KNOWN_COMPANIES = []
 
 def save_companies_database():
-    """Save known companies to JSON file with atomic write to prevent corruption"""
-    try:
-        # Use atomic write: write to temp file first, then rename
-        temp_file = DATABASE_FILE + '.tmp'
-        with open(temp_file, 'w', encoding='utf-8') as f:
-            json.dump(KNOWN_COMPANIES, f, indent=2, ensure_ascii=False)
-        
-        # Atomic rename (works on Windows and Unix)
-        if os.path.exists(DATABASE_FILE):
-            os.replace(temp_file, DATABASE_FILE)
-        else:
-            os.rename(temp_file, DATABASE_FILE)
-        
-        logger.info(f"Saved {len(KNOWN_COMPANIES)} companies to database")
-    except Exception as e:
-        logger.error(f"Error saving companies database: {e}")
-        # Clean up temp file if it exists
-        try:
-            if os.path.exists(DATABASE_FILE + '.tmp'):
-                os.remove(DATABASE_FILE + '.tmp')
-        except:
-            pass
+    """Save ONLY the companies learned on this PC (not already in the tracked files) to
+    known_companies_local.json — atomic write. The tracked files are never modified."""
+    seed_keys = {_company_key(c) for c in _read_seed_companies()}
+    local = _merge_company_lists([c for c in KNOWN_COMPANIES if _company_key(c) not in seed_keys])
+    if _write_company_list(LOCAL_DATABASE_FILE, local):
+        logger.info(f"Saved {len(local)} local companies to database (total known: {len(KNOWN_COMPANIES)})")
 
 def add_company_to_database(company_name):
     """Add new company to database if it doesn't exist - reloads database first to prevent overwrites"""
     global KNOWN_COMPANIES
-    
+
     if not company_name:
         return False
-    
-    # CRITICAL: Reload database from file before adding to ensure we have the latest data
+
+    # CRITICAL: Reload database from disk before adding to ensure we have the latest data
     # This prevents overwriting companies added by other script instances
     try:
-        if os.path.exists(DATABASE_FILE):
-            with open(DATABASE_FILE, 'r', encoding='utf-8') as f:
-                current_companies = json.load(f)
-                # Update global list with latest data from file
-                KNOWN_COMPANIES = current_companies
-                logger.debug(f"Reloaded {len(KNOWN_COMPANIES)} companies from database before adding")
+        latest = _read_all_companies()
+        if latest:
+            KNOWN_COMPANIES = _merge_company_lists(latest, KNOWN_COMPANIES)
+            logger.debug(f"Reloaded {len(KNOWN_COMPANIES)} companies from database before adding")
     except Exception as e:
         logger.warning(f"Could not reload database before adding: {e}, using current in-memory list")
         # Continue with current KNOWN_COMPANIES if reload fails
-    
+
     # Check if company already exists (case-insensitive comparison)
     company_name_upper = company_name.upper().strip()
     existing_upper = [c.upper().strip() if c else '' for c in KNOWN_COMPANIES]
-    
+
     if company_name_upper in existing_upper:
         logger.debug(f"Company already exists in database (case-insensitive): {company_name}")
         return False
-    
+
     # Add the company
     KNOWN_COMPANIES.append(company_name)
     save_companies_database()
@@ -3448,14 +3528,8 @@ def main():
     # Final database save - reload first to ensure we have all companies
     global KNOWN_COMPANIES
     try:
-        if os.path.exists(DATABASE_FILE):
-            with open(DATABASE_FILE, 'r', encoding='utf-8') as f:
-                final_companies = json.load(f)
-                # Merge with in-memory list (avoid duplicates)
-                for company in KNOWN_COMPANIES:
-                    if company and company not in final_companies:
-                        final_companies.append(company)
-                KNOWN_COMPANIES = final_companies
+        # Merge disk content (tracked + local files) with the in-memory list (no duplicates)
+        KNOWN_COMPANIES = _merge_company_lists(_read_all_companies(), KNOWN_COMPANIES)
     except Exception as e:
         logger.warning(f"Could not reload database for final save: {e}")
     

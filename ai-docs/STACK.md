@@ -60,7 +60,9 @@ License is validated at startup (`gui/utils/license_validator.py`). App exits if
 Application_auto_ds/
 ├── badr_login_test.py          # Main automation engine (~11,900+ lines)
 ├── script_all_fuzy_match.py    # Preparation/preprocessing pipeline
-├── known_companies.json        # 53-entry fuzzy match database
+├── known_companies.json        # FROZEN legacy fuzzy-match list (39 names) — never written by the app
+├── known_companies_shared.json # shared names, curated by the maintainer (tracked)
+├── known_companies_local.json  # names learned on THIS PC (untracked, only file the app writes)
 ├── result_LTAS.txt             # Append-only DUM reference output log
 ├── requirements.txt            # pip dependencies
 ├── build_exe.py                # PyInstaller build helper
