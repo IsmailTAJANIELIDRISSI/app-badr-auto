@@ -3811,7 +3811,7 @@ def get_dum_preapurement_lots(dum_number, partial_config, validated_lta_referenc
                                 ds_serie = partial['ds_serie']
                                 ds_cle = partial['ds_cle']
                             lots.append({
-                                'reference': f"{legacy_ref}/{dum_str}",
+                                'reference': f"{validated_lta_reference}/{dum_str}",  # = lot de l'ED (réf. LTA)
                                 'ds_serie': ds_serie,
                                 'ds_cle': ds_cle,
                                 'split_id': None,
@@ -3832,8 +3832,10 @@ def get_dum_preapurement_lots(dum_number, partial_config, validated_lta_referenc
 
             else:
                 # --- General multi-smallest logic ---
-                # Airport reference base for Depotage lots = airport ref of the co-split small partial
-                airport_ref_for_dum = airport_refs_dict.get(str(small_piece['partial']), validated_lta_reference)
+                # Depotage lots of the big partial pieces must carry the SAME reference as the lots
+                # of the Etat de Dépotage ("<LTA ref>/<split_id>", e.g. 235-99381402/1/1), whatever the
+                # reference typed for the airport DS MEAD lot (only used for the DS MEAD lot below).
+                # (Before, the airport reference was used as base: "24/1/1" matched no ED lot.)
                 lots = []
 
                 for split in split_pieces:
@@ -3867,8 +3869,8 @@ def get_dum_preapurement_lots(dum_number, partial_config, validated_lta_referenc
                             ds_cle = partial_data['ds_cle']
                         split_id = split.get('split_id', '')
                         reference = (
-                            f"{airport_ref_for_dum}/{split_id}"
-                            if split_id else f"{airport_ref_for_dum}/{dum_str}"
+                            f"{validated_lta_reference}/{split_id}"
+                            if split_id else f"{validated_lta_reference}/{dum_str}"
                         )
                         lots.append({
                             'reference': reference,

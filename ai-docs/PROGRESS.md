@@ -4,6 +4,16 @@ _Populated as we work. Each entry = problem + solution + files changed._
 
 ---
 
+## 2026-11-04 — Préapurement DS (cas d'exception): lot du grand partiel = réf. LTA, pas réf. aéroport
+
+**Problème:** LTA 235-99381402 (partiel 1 = 1329.1 kg, partiel 2 = 24 kg exception, DUM 1 split). Phase 2 saisissait `24/1/1` comme référence du lot Dépotage de DUM 1 (morceau 1/1 du grand partiel) au lieu de `235-99381402/1/1`; BADR n'a trouvé aucun lot → "Erreur validation données" (retry 1/3). Cause: `get_dum_preapurement_lots` (branche exception) prenait comme base la référence aéroport du petit partiel (ici "24") alors que les lots de l'Etat de Dépotage sont `<réf. LTA>/<split_id>` (`create_etat_depotage_partial` et la modification blocage + partiel). Cela ne marchait que si la référence aéroport saisie était égale à la référence LTA.
+
+**Solution (`badr_login_test.py`, `get_dum_preapurement_lots`):** lot Dépotage du grand partiel = `{validated_lta_reference}/{split_id}` (ou `/{dum}`), y compris dans la branche "legacy". La référence aéroport ne sert plus que pour le lot DS MEAD du petit partiel (inchangé: `24`).
+
+**Vérifié** sur la vraie config: DUM 1 → `235-99381402/1/1` (DS 5278 T) + `24` (DS MEAD 8478 B); DUM 2 → `235-99381402/2`; DUM 14 → `235-99381402/14`. Non testé en live BADR.
+
+---
+
 ## 2026-11-04 — `git pull` bloqué sur un autre PC + known_companies.json ne crée plus de conflits
 
 **Problème:** sur un autre PC (`~/Desktop/medafrica-app`), le dépôt était bloqué dans un conflit non résolu (`UU badr_login_test.py`, commit local `b6f05b2` du 20/08). À chaque lancement, le `git pull --autostash origin main` de l'exe échouait aussitôt (exit 128: "Pulling is not possible because you have unmerged files"), sans aucun message: la sortie de git est jetée (`except: pass`). Un `stash@{0}: autostash` restait en attente (réapplication échouée). Le PC avait donc raté les mises à jour du 21/09 et du 04/11. Le dépôt était public (accès anonyme OK), git était bien dans le PATH, `origin` était correct; l'exe est dans `medafrica-app/dist/`, donc git trouve bien le dépôt.
