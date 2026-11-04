@@ -11,7 +11,7 @@ import glob
 import logging
 import re
 from openpyxl import load_workbook
-from gui.utils.file_utils import get_lta_partial_info, save_lta_partial_config
+from gui.utils.file_utils import get_lta_partial_info, save_lta_partial_config, get_lta_blocage_info
 from gui.utils.validators import validate_ds_series, normalize_ds_series, validate_location
 
 logger = logging.getLogger(__name__)
@@ -36,15 +36,75 @@ PARTIAL_LOCATIONS = [
     "SHANGHAI PU DONG"
 ]
 
+# Poids en kg avec 2 décimales (ex: 10.22, 1318.88): toute la répartition est faite
+# à cette précision — un arrondi au dixième faisait 48.9 au lieu de 48.88.
+WEIGHT_DECIMALS = 2
+
+
+def _apply_blocage_correction(dums, corrected_total):
+    """
+    Ramène le total P,BRUT des DUMs à `corrected_total` (poids LTA − poids bloqué).
+
+    MÊME règle que correct_blocage_weights() de badr_login_test.py (appliquée en
+    Phase 1 sur generated_excel): l'excédent est soustrait en partant du DERNIER
+    DUM, en gardant P,BRUT > P,NET (marge 0.01 kg sur le dernier, 1 kg sur les
+    autres); un déficit est ajouté au dernier DUM. Le dialogue répartit ainsi les
+    poids que les DUMs auront réellement après cette correction. La Phase 1
+    vérifie ensuite DUM par DUM que les deux calculs concordent.
+
+    Returns:
+        Nouvelle liste (copies) avec 'weight' corrigé.
+    """
+    dums = [dict(d) for d in dums]
+    if not dums:
+        return dums
+
+    difference = round(round(sum(d['weight'] for d in dums), 3) - corrected_total, 3)
+    if abs(difference) < 0.01:
+        return dums
+
+    if difference < 0:
+        dums[-1]['weight'] = round(dums[-1]['weight'] + abs(difference), 3)
+        return dums
+
+    remaining = difference
+    for i in range(len(dums) - 1, -1, -1):
+        if remaining < 0.005:
+            break
+        dum = dums[i]
+        pnet = dum.get('pnet', 0.0)
+        is_last = (i == len(dums) - 1)
+
+        if is_last and remaining <= 0.3:
+            max_safe = round(dum['weight'] - pnet - 0.01, 3)
+            new_weight = round(dum['weight'] - remaining, 3)
+            if max_safe >= remaining and new_weight > pnet:
+                dum['weight'] = new_weight
+                remaining = 0.0
+                continue
+
+        available = round(dum['weight'] - pnet - (0.01 if is_last else 1.0), 3)
+        if available > 0.01:
+            taken = min(available, remaining)
+            dum['weight'] = round(dum['weight'] - taken, 3)
+            remaining = round(remaining - taken, 3)
+
+    return dums
+
 
 class PartialConfigDialog:
     """Dialog for configuring partial LTA processing"""
     
-    def __init__(self, parent, lta_folder_path, folder_name):
+    def __init__(self, parent, lta_folder_path, folder_name, blocked_weight=None, blocage_total_weight=None):
         self.parent = parent
         self.lta_folder_path = lta_folder_path
         self.folder_name = folder_name
         self.config_saved = False
+
+        # LTA blocage + partiel: poids bloqué (déduit du plus grand partiel) et poids
+        # total LTA (pour la correction des DUMs). Valeurs live de la carte LTA si
+        # fournies, sinon celles du fichier LTA (lignes 5/12/13).
+        self.blocked_weight, self.blocage_lta_total = self._resolve_blocage(blocked_weight, blocage_total_weight)
         
         # Create dialog FIRST (before any operations that might fail)
         self.dialog = tk.Toplevel(parent)
@@ -65,9 +125,63 @@ class PartialConfigDialog:
             # Don't return - let the dialog stay open so user can see what went wrong
             # But don't call _setup_ui() if data is invalid
             return
-        
+
+        self._apply_blocage_to_lta_data()
         self._setup_ui()
-    
+
+    def _resolve_blocage(self, blocked_weight, total_weight):
+        """(poids bloqué, poids total LTA) en kg; (0.0, 0.0) si le LTA n'est pas un blocage."""
+        if blocked_weight is None:
+            info = get_lta_blocage_info(self.lta_folder_path, self.folder_name)
+            if not info.get('is_blocage'):
+                return 0.0, 0.0
+            blocked_weight, total_weight = info.get('blocked_weight', ''), info.get('total_weight', '')
+        try:
+            blocked = max(0.0, float(str(blocked_weight).replace(',', '.')))
+        except (ValueError, TypeError):
+            logger.warning(f"Poids bloqué illisible pour {self.folder_name} — blocage ignoré pour la répartition")
+            return 0.0, 0.0
+        try:
+            total = float(str(total_weight).replace(',', '.'))
+        except (ValueError, TypeError):
+            total = 0.0
+        return blocked, total
+
+    def _apply_blocage_to_lta_data(self):
+        """
+        LTA blocage: generated_excel peut encore contenir le poids bloqué dans ses DUMs
+        (selon le LTA, son total vaut le poids LTA complet ou déjà LTA − bloqué).
+        La Phase 1 corrige generated_excel (correct_blocage_weights) AVANT de créer les
+        lots: on applique ici la même correction pour répartir les poids réels des DUMs
+        (ex: dernier DUM 59.1 → 48.88) et ne laisser aucun poids de DUM non attribué.
+        """
+        if self.blocked_weight <= 0 or self.blocage_lta_total <= 0:
+            return
+        corrected_total = round(abs(self.blocage_lta_total - self.blocked_weight), 3)
+        self.lta_data['excel_total_weight'] = self.lta_data['total_weight']
+        self.lta_data['dums'] = _apply_blocage_correction(self.lta_data['dums'], corrected_total)
+        self.lta_data['total_weight'] = round(sum(d['weight'] for d in self.lta_data['dums']), WEIGHT_DECIMALS)
+        logger.info(f"Blocage: DUMs corrigés {self.lta_data['excel_total_weight']} → {self.lta_data['total_weight']} kg "
+                    f"(LTA {self.blocage_lta_total} − bloqué {self.blocked_weight})")
+
+    def _blocage_dum_targets(self, partial_weights):
+        """
+        Poids de DUMs à attribuer à chaque partiel.
+
+        LTA blocage + partiel: le plus grand partiel est fusionné avec le blocage —
+        son poids de vol inclut les waybills bloqués, donc ses DUMs ne doivent
+        totaliser que (poids du vol − poids bloqué). Les autres partiels sont inchangés.
+
+        Returns:
+            (targets, blocage_idx): blocage_idx = index du partiel fusionné, ou None.
+        """
+        targets = list(partial_weights)
+        if self.blocked_weight <= 0 or not partial_weights or max(partial_weights) <= 0:
+            return targets, None
+        blocage_idx = partial_weights.index(max(partial_weights))
+        targets[blocage_idx] = round(max(0.0, partial_weights[blocage_idx] - self.blocked_weight), 2)
+        return targets, blocage_idx
+
     def _load_lta_data(self):
         """Load LTA data from generated_excel file"""
         try:
@@ -148,13 +262,15 @@ class PartialConfigDialog:
                     
                     dum_positions = ws[f'B{dum_positions_row}'].value or 0
                     dum_weight = ws[f'B{dum_weight_row}'].value or 0
-                    
+                    dum_pnet = ws[f'B{row_num + 3}'].value or 0  # P,NET (marge pour la correction blocage)
+
                     logger.info(f"DUM {dum_idx} (row {row_num}): weight={dum_weight}, positions={dum_positions}")
-                    
+
                     dums.append({
                         'number': dum_idx,
                         'weight': float(dum_weight) if dum_weight else 0,
-                        'positions': int(dum_positions) if dum_positions else 0
+                        'positions': int(dum_positions) if dum_positions else 0,
+                        'pnet': float(dum_pnet) if dum_pnet else 0.0
                     })
                 else:
                     # No DUM found at this position, stop searching
@@ -200,6 +316,23 @@ class PartialConfigDialog:
         ttk.Label(totals_frame, text=f"Poids Total: {self.lta_data['total_weight']} kg").pack(anchor=tk.W)
         ttk.Label(totals_frame, text=f"Positions Totales: {self.lta_data['total_positions']}").pack(anchor=tk.W)
         ttk.Label(totals_frame, text=f"Nombre de DUMs: {len(self.lta_data['dums'])}").pack(anchor=tk.W)
+
+        if self.blocked_weight > 0:
+            excel_total = self.lta_data.get('excel_total_weight', self.lta_data['total_weight'])
+            correction_note = ""
+            if round(excel_total, WEIGHT_DECIMALS) != self.lta_data['total_weight']:
+                correction_note = (f"\n   DUMs generated_excel: {excel_total} kg → corrigés blocage: "
+                                   f"{self.lta_data['total_weight']:.2f} kg (même correction qu'en Phase 1).")
+            ttk.Label(
+                totals_frame,
+                text=(f"🔒 LTA BLOCAGE: {self.blocked_weight} kg bloqués — fusionnés avec le plus grand partiel.\n"
+                      f"   Ce partiel MODIFIE l'ED blocage existant (avec sa DS); ses DUMs = son poids − {self.blocked_weight} kg.\n"
+                      f"   Les poids des partiels doivent totaliser le poids LTA: "
+                      f"{round(self.lta_data['total_weight'] + self.blocked_weight, WEIGHT_DECIMALS)} kg."
+                      f"{correction_note}"),
+                foreground="#b35900",
+                font=('Arial', 9, 'bold')
+            ).pack(anchor=tk.W, pady=(5, 0))
         
         # Number of partials
         partials_frame = ttk.LabelFrame(main_frame, text="Nombre de Partiels", padding="10")
@@ -595,8 +728,10 @@ class PartialConfigDialog:
                 except (ValueError, AttributeError):
                     pass
             
-            # Calculate distribution
-            distribution = self._calculate_dum_distribution(partial_weights, smallest_partial_idx, smallest_partial_positions)
+            # Calculate distribution (blocage + partiel: le plus grand partiel ne reçoit
+            # que poids − poids bloqué de DUMs)
+            dum_targets, blocage_idx = self._blocage_dum_targets(partial_weights)
+            distribution = self._calculate_dum_distribution(dum_targets, smallest_partial_idx, smallest_partial_positions)
 
             # For multi-smallest exception: override positions with user-filled values.
             # Small partials get user-entered positions; big partial(s) get
@@ -665,22 +800,40 @@ class PartialConfigDialog:
                                     remaining_dum * p['weight'] / big_w_total
                                 )
 
-            sum_partial_weights = sum(partial_weights)
+            sum_partial_weights = sum(dum_targets)  # hors poids bloqué si blocage
             tw_lta = self.lta_data['total_weight']
-            
+
             # Update each partial's display
             for idx, form_data in enumerate(self.partial_forms):
                 if idx < len(distribution):
                     partial_dist = distribution[idx]
-                    
+
                     # Update positions
                     form_data['positions_var'].set(str(partial_dist['positions']))
-                    
+
                     # Update DUM list
                     dums_text = form_data['dums_text']
                     dums_text.configure(state='normal')
                     dums_text.delete('1.0', tk.END)
-                    
+
+                    if idx == blocage_idx:
+                        assigned_here = round(sum(d['weight'] for d in partial_dist['dums']), WEIGHT_DECIMALS)
+                        unassigned = round(tw_lta - sum(d['weight'] for pd in distribution for d in pd['dums']),
+                                           WEIGHT_DECIMALS)
+                        dums_text.insert(
+                            tk.END,
+                            f"🔒 Fusionné avec le blocage → ED blocage existant MODIFIÉ\n"
+                            f"   DUMs: {dum_targets[idx]:.2f} kg = {partial_weights[idx]} − {self.blocked_weight} kg bloqués"
+                            f" (attribués: {assigned_here:.2f} kg)\n",
+                        )
+                        if abs(unassigned) > 0.005:
+                            dums_text.insert(
+                                tk.END,
+                                f"   ⚠️ {unassigned:.2f} kg de DUMs non attribués — les poids des partiels doivent "
+                                f"totaliser exactement {round(tw_lta + self.blocked_weight, WEIGHT_DECIMALS):.2f} kg\n",
+                            )
+                        dums_text.insert(tk.END, "\n")
+
                     if not partial_dist['dums']:
                         if partial_weights[idx] <= 0:
                             dums_text.insert(tk.END, "Aucun DUM assigné (poids partiel = 0)")
@@ -689,7 +842,8 @@ class PartialConfigDialog:
                             if abs(sum_partial_weights - tw_lta) > max(0.5, tw_lta * 0.01):
                                 dums_text.insert(
                                     tk.END,
-                                    f"\n\n⚠️ Somme des partiels ({sum_partial_weights:.1f} kg) ≠ total LTA ({tw_lta:.1f} kg). "
+                                    f"\n\n⚠️ Somme des partiels{' hors blocage' if blocage_idx is not None else ''} "
+                                    f"({sum_partial_weights:.2f} kg) ≠ total DUMs LTA ({tw_lta:.2f} kg). "
                                     "Les poids des N partiels doivent totaliser le poids LTA pour répartir tous les DUMs.",
                                 )
                             else:
@@ -706,9 +860,9 @@ class PartialConfigDialog:
                             split_id = dum_info.get('split_id', '')
                             
                             if is_split:
-                                dums_text.insert(tk.END, f"DUM {dum_num} {split_id}: {dum_weight:.1f}kg, {dum_positions}p ⚠️ PARTIEL\n")
+                                dums_text.insert(tk.END, f"DUM {dum_num} {split_id}: {dum_weight:.2f}kg, {dum_positions}p ⚠️ PARTIEL\n")
                             else:
-                                dums_text.insert(tk.END, f"DUM {dum_num}: {dum_weight:.1f}kg, {dum_positions}p\n")
+                                dums_text.insert(tk.END, f"DUM {dum_num}: {dum_weight:.2f}kg, {dum_positions}p\n")
                     
                     dums_text.configure(state='disabled')
         except Exception as e:
@@ -759,19 +913,19 @@ class PartialConfigDialog:
                 return f"{dum_number}/{count}"
 
             # Smallest partial consumes DUM 1 first (exception business rule).
-            rounded_smallest_weight = round(partial_weights[smallest_partial_idx], 1)
+            rounded_smallest_weight = round(partial_weights[smallest_partial_idx], WEIGHT_DECIMALS)
             rounded_smallest_positions = round(smallest_partial_positions)
             smallest_partial_dums = []
 
             current_dum_idx = 0
-            remaining_dum_weight = round(dums[0]['weight'], 1) if dums else 0
+            remaining_dum_weight = round(dums[0]['weight'], WEIGHT_DECIMALS) if dums else 0
             remaining_dum_positions = round(dums[0]['positions']) if dums else 0
             is_continuing_split = False
             original_dum_weight_at_start = remaining_dum_weight
 
             if dums and rounded_smallest_weight > 0:
                 first_dum_num = dums[0]['number']
-                first_dum_weight = round(dums[0]['weight'], 1)
+                first_dum_weight = round(dums[0]['weight'], WEIGHT_DECIMALS)
                 taken_weight = min(rounded_smallest_weight, first_dum_weight)
                 smallest_partial_dums.append({
                     'dum_number': first_dum_num,
@@ -781,7 +935,7 @@ class PartialConfigDialog:
                     'split_id': ''  # airport lot keeps base reference
                 })
 
-                remaining_after_smallest = round(first_dum_weight - taken_weight, 1)
+                remaining_after_smallest = round(first_dum_weight - taken_weight, WEIGHT_DECIMALS)
                 if remaining_after_smallest > 0:
                     current_dum_idx = 0
                     remaining_dum_weight = remaining_after_smallest
@@ -791,7 +945,7 @@ class PartialConfigDialog:
                 else:
                     current_dum_idx = 1
                     if current_dum_idx < len(dums):
-                        remaining_dum_weight = round(dums[current_dum_idx]['weight'], 1)
+                        remaining_dum_weight = round(dums[current_dum_idx]['weight'], WEIGHT_DECIMALS)
                         remaining_dum_positions = round(dums[current_dum_idx]['positions'])
                         original_dum_weight_at_start = remaining_dum_weight
                     else:
@@ -800,7 +954,7 @@ class PartialConfigDialog:
                     is_continuing_split = False
 
             for order_idx, partial_idx in enumerate(non_smallest_indices):
-                target_weight = round(partial_weights[partial_idx], 1)
+                target_weight = round(partial_weights[partial_idx], WEIGHT_DECIMALS)
                 if target_weight <= 0:
                     continue
 
@@ -808,13 +962,13 @@ class PartialConfigDialog:
                 positions_accumulated = 0
 
                 while weight_accumulated < target_weight and current_dum_idx < len(dums):
-                    weight_needed = round(target_weight - weight_accumulated, 1)
+                    weight_needed = round(target_weight - weight_accumulated, WEIGHT_DECIMALS)
                     dum_number = dums[current_dum_idx]['number']
 
                     if remaining_dum_weight <= weight_needed:
-                        rounded_weight = round(remaining_dum_weight, 1)
+                        rounded_weight = round(remaining_dum_weight, WEIGHT_DECIMALS)
                         rounded_positions = round(remaining_dum_positions)
-                        actually_split = is_continuing_split and (abs(remaining_dum_weight - original_dum_weight_at_start) > 0.1)
+                        actually_split = is_continuing_split and (abs(remaining_dum_weight - original_dum_weight_at_start) > 0.005)
 
                         per_partial_dums[partial_idx].append({
                             'dum_number': dum_number,
@@ -823,17 +977,17 @@ class PartialConfigDialog:
                             'is_split': actually_split,
                             'split_id': next_split_id(dum_number) if actually_split else ''
                         })
-                        weight_accumulated = round(weight_accumulated + rounded_weight, 1)
+                        weight_accumulated = round(weight_accumulated + rounded_weight, WEIGHT_DECIMALS)
                         positions_accumulated += rounded_positions
 
                         current_dum_idx += 1
                         is_continuing_split = False
                         if current_dum_idx < len(dums):
-                            remaining_dum_weight = round(dums[current_dum_idx]['weight'], 1)
+                            remaining_dum_weight = round(dums[current_dum_idx]['weight'], WEIGHT_DECIMALS)
                             remaining_dum_positions = round(dums[current_dum_idx]['positions'])
                             original_dum_weight_at_start = remaining_dum_weight
                     else:
-                        split_weight = round(weight_needed, 1)
+                        split_weight = round(weight_needed, WEIGHT_DECIMALS)
                         if remaining_dum_weight > 0:
                             split_positions = round((split_weight / remaining_dum_weight) * remaining_dum_positions)
                         else:
@@ -847,15 +1001,15 @@ class PartialConfigDialog:
                             'is_split': True,
                             'split_id': next_split_id(dum_number)
                         })
-                        weight_accumulated = round(weight_accumulated + split_weight, 1)
+                        weight_accumulated = round(weight_accumulated + split_weight, WEIGHT_DECIMALS)
                         positions_accumulated += split_positions
 
-                        remaining_dum_weight = round(remaining_dum_weight - split_weight, 1)
+                        remaining_dum_weight = round(remaining_dum_weight - split_weight, WEIGHT_DECIMALS)
                         remaining_dum_positions = round(remaining_dum_positions - split_positions)
                         is_continuing_split = True
                         break
 
-                per_partial_weight[partial_idx] = round(weight_accumulated, 1)
+                per_partial_weight[partial_idx] = round(weight_accumulated, WEIGHT_DECIMALS)
                 per_partial_positions[partial_idx] = round(positions_accumulated)
 
             for partial_idx in range(len(partial_weights)):
@@ -887,7 +1041,7 @@ class PartialConfigDialog:
             return f"{dum_number}/{count}"
 
         current_dum_idx = 0
-        remaining_dum_weight = round(dums[0]['weight'], 1) if dums else 0
+        remaining_dum_weight = round(dums[0]['weight'], WEIGHT_DECIMALS) if dums else 0
         remaining_dum_positions = round(dums[0]['positions']) if dums else 0
         is_continuing_split = False  # Track if we're continuing a split DUM
         original_dum_weight_at_start = remaining_dum_weight  # Track original DUM weight at start of partial
@@ -896,7 +1050,9 @@ class PartialConfigDialog:
             if partial_weight <= 0:
                 distribution.append({'weight': 0, 'positions': 0, 'dums': []})
                 continue
-            
+            # Comparaisons exactes: cible et cumul toujours arrondis à WEIGHT_DECIMALS
+            partial_weight = round(partial_weight, WEIGHT_DECIMALS)
+
             # Calculate positions for this partial (safe division)
             if total_lta_weight > 0:
                 partial_positions = round((partial_weight * total_lta_positions) / total_lta_weight)
@@ -909,15 +1065,15 @@ class PartialConfigDialog:
             
             # Fill DUMs until we reach the target weight
             while weight_accumulated < partial_weight and current_dum_idx < len(dums):
-                weight_needed = partial_weight - weight_accumulated
+                weight_needed = round(partial_weight - weight_accumulated, WEIGHT_DECIMALS)
                 
                 if remaining_dum_weight <= weight_needed:
                     # Take entire remaining DUM (or remaining part of split DUM)
                     # Check if this is the ENTIRE DUM (not a split continuation)
                     # If remaining_dum_weight equals the original DUM weight at start, it's not a split
-                    original_dum_weight = round(dums[current_dum_idx]['weight'], 1)
+                    original_dum_weight = round(dums[current_dum_idx]['weight'], WEIGHT_DECIMALS)
                     # Check if this is actually a split: only if we're continuing a split AND the weight is less than original
-                    is_actually_split = is_continuing_split and (abs(remaining_dum_weight - original_dum_weight_at_start) > 0.1)
+                    is_actually_split = is_continuing_split and (abs(remaining_dum_weight - original_dum_weight_at_start) > 0.005)
                     
                     # Special case: If this is smallest partial with manual positions (exception case)
                     if (smallest_partial_idx is not None and partial_idx == smallest_partial_idx and 
@@ -929,7 +1085,7 @@ class PartialConfigDialog:
                         positions_to_use = remaining_dum_positions
                     
                     # Round weight to 1 decimal place to avoid floating point errors
-                    rounded_weight = round(remaining_dum_weight, 1)
+                    rounded_weight = round(remaining_dum_weight, WEIGHT_DECIMALS)
                     rounded_positions = round(positions_to_use)
                     
                     partial_dums.append({
@@ -939,14 +1095,14 @@ class PartialConfigDialog:
                         'is_split': is_actually_split,  # Only true if it's actually a split continuation
                         'split_id': next_split_id(dums[current_dum_idx]['number']) if is_actually_split else ''
                     })
-                    weight_accumulated += rounded_weight
+                    weight_accumulated = round(weight_accumulated + rounded_weight, WEIGHT_DECIMALS)
                     positions_accumulated += rounded_positions
                     
                     # Move to next DUM
                     current_dum_idx += 1
                     is_continuing_split = False
                     if current_dum_idx < len(dums):
-                        remaining_dum_weight = round(dums[current_dum_idx]['weight'], 1)
+                        remaining_dum_weight = round(dums[current_dum_idx]['weight'], WEIGHT_DECIMALS)
                         remaining_dum_positions = round(dums[current_dum_idx]['positions'])
                         original_dum_weight_at_start = remaining_dum_weight  # Reset for new DUM
                 else:
@@ -958,7 +1114,7 @@ class PartialConfigDialog:
                     if is_last_partial:
                         # Last partial: take entire remaining DUM without splitting
                         # (even if weight is slightly more due to floating point)
-                        rounded_weight = round(remaining_dum_weight, 1)
+                        rounded_weight = round(remaining_dum_weight, WEIGHT_DECIMALS)
                         rounded_positions = round(remaining_dum_positions)
                         
                         partial_dums.append({
@@ -968,14 +1124,14 @@ class PartialConfigDialog:
                             'is_split': is_continuing_split,  # Only true if it was already split from previous partial
                             'split_id': next_split_id(dums[current_dum_idx]['number']) if is_continuing_split else ''
                         })
-                        weight_accumulated += rounded_weight
+                        weight_accumulated = round(weight_accumulated + rounded_weight, WEIGHT_DECIMALS)
                         positions_accumulated += rounded_positions
                         
                         # Move to next DUM
                         current_dum_idx += 1
                         is_continuing_split = False
                         if current_dum_idx < len(dums):
-                            remaining_dum_weight = round(dums[current_dum_idx]['weight'], 1)
+                            remaining_dum_weight = round(dums[current_dum_idx]['weight'], WEIGHT_DECIMALS)
                             remaining_dum_positions = round(dums[current_dum_idx]['positions'])
                             original_dum_weight_at_start = remaining_dum_weight
                     else:
@@ -1007,7 +1163,7 @@ class PartialConfigDialog:
                         positions_for_split = max(0, positions_for_split)
                         
                         # Round weight and positions to avoid floating point errors
-                        rounded_weight_needed = round(weight_needed, 1)
+                        rounded_weight_needed = round(weight_needed, WEIGHT_DECIMALS)
                         rounded_positions_for_split = round(positions_for_split)
                         
                         partial_dums.append({
@@ -1017,11 +1173,11 @@ class PartialConfigDialog:
                             'is_split': True,
                             'split_id': next_split_id(dums[current_dum_idx]['number'])
                         })
-                        weight_accumulated += rounded_weight_needed
+                        weight_accumulated = round(weight_accumulated + rounded_weight_needed, WEIGHT_DECIMALS)
                         positions_accumulated += rounded_positions_for_split
                         
                         # Update remaining DUM (round to avoid floating point errors)
-                        remaining_dum_weight = round(remaining_dum_weight - rounded_weight_needed, 1)
+                        remaining_dum_weight = round(remaining_dum_weight - rounded_weight_needed, WEIGHT_DECIMALS)
                         if next_partial_is_smallest:
                             # For exception case, remaining positions = manual positions
                             remaining_dum_positions = smallest_partial_positions
@@ -1037,7 +1193,7 @@ class PartialConfigDialog:
                 final_positions = positions_accumulated  # Use actual accumulated positions from DUMs
             
             # Round accumulated weight to 1 decimal place
-            rounded_weight_accumulated = round(weight_accumulated, 1)
+            rounded_weight_accumulated = round(weight_accumulated, WEIGHT_DECIMALS)
             rounded_final_positions = round(final_positions)
             
             distribution.append({
@@ -1100,9 +1256,27 @@ class PartialConfigDialog:
                 except (ValueError, AttributeError):
                     pass  # If not valid, use normal calculation
             
-            # Calculate DUM distribution automatically (with exception case parameters)
-            distribution = self._calculate_dum_distribution(partial_weights, smallest_partial_idx, smallest_partial_positions)
-            
+            # Calculate DUM distribution automatically (with exception case parameters).
+            # Blocage + partiel: le plus grand partiel ne reçoit que poids − poids bloqué de DUMs.
+            dum_targets, blocage_idx = self._blocage_dum_targets(partial_weights)
+            distribution = self._calculate_dum_distribution(dum_targets, smallest_partial_idx, smallest_partial_positions)
+
+            # Blocage + partiel: la répartition doit être EXACTE — aucun poids de DUM non
+            # attribué (sinon la Phase 1 refuse de modifier l'ED blocage).
+            if blocage_idx is not None:
+                assigned = sum(d['weight'] for pd in distribution for d in pd['dums'])
+                unassigned = round(self.lta_data['total_weight'] - assigned, WEIGHT_DECIMALS)
+                if abs(unassigned) > 0.005:
+                    lta_total = round(self.lta_data['total_weight'] + self.blocked_weight, WEIGHT_DECIMALS)
+                    messagebox.showerror(
+                        "Répartition inexacte (blocage)",
+                        f"{unassigned:.2f} kg de DUMs ne sont attribués à aucun partiel.\n\n"
+                        f"Les poids des partiels ({sum(partial_weights):.2f} kg) doivent totaliser exactement "
+                        f"le poids LTA ({lta_total:.2f} kg = DUMs {self.lta_data['total_weight']:.2f} + "
+                        f"bloqué {self.blocked_weight} kg)."
+                    )
+                    return
+
             # Build partials configuration using calculated distribution
             for idx, form_data in enumerate(self.partial_forms):
                 partial_num = form_data['partial_number']
@@ -1218,14 +1392,18 @@ class PartialConfigDialog:
                     if p['partial_number'] not in small_partial_nums_set:
                         p['positions'] = round(remaining_pos * p['weight'] / big_total_w)
 
-            # Validate weight tolerance (allow 1% difference)
-            weight_diff = abs(total_weight_check - self.lta_data['total_weight'])
+            # Validate weight tolerance (allow 1% difference).
+            # Blocage: les poids des vols incluent le poids bloqué, absent du total DUMs.
+            dums_weight_check = total_weight_check - self.blocked_weight
+            weight_diff = abs(dums_weight_check - self.lta_data['total_weight'])
             weight_tolerance = self.lta_data['total_weight'] * 0.01
-            
+
             if weight_diff > weight_tolerance:
+                blocage_note = (f" − {self.blocked_weight} kg bloqués = {dums_weight_check:.2f} kg"
+                                if self.blocked_weight > 0 else "")
                 response = messagebox.askyesno(
                     "Attention",
-                    f"La somme des poids partiels ({total_weight_check} kg) ne correspond pas exactement au poids total ({self.lta_data['total_weight']} kg).\n\n"
+                    f"La somme des poids partiels ({total_weight_check} kg{blocage_note}) ne correspond pas exactement au poids total des DUMs ({self.lta_data['total_weight']} kg).\n\n"
                     f"Différence: {weight_diff:.2f} kg\n\n"
                     "Continuer quand même?"
                 )
@@ -1359,6 +1537,12 @@ class PartialConfigDialog:
                 'partials': partials,
                 'split_dums': split_dums
             }
+
+            # Blocage + partiel: partiel fusionné avec le blocage (son ED existant sera
+            # MODIFIÉ en Phase 1, pas créé) et poids bloqué déduit de ses DUMs.
+            if blocage_idx is not None:
+                config['blocage_partial_number'] = self.partial_forms[blocage_idx]['partial_number']
+                config['blocage_weight'] = self.blocked_weight
 
             # Add exception case fields if applicable
             if is_exception_case:

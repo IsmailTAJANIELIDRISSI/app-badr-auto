@@ -1025,10 +1025,10 @@ def detect_blocage_from_lta_file(lta_folder_path):
         return {'is_blocage': False, 'original_weight': None, 'blocked_weight': None, 'corrected_weight': None}
 
 
-def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
+def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data, partial_config=None, partial_number=None):
     """
     PHASE 2 - BLOCAGE: Modifier un Etat de Dépotage existant pour une LTA bloquée
-    
+
     Cette fonction:
     1. Navigue vers Modifier une Déclaration → Etat de Dépotage → Voyage Aérien
     2. Recherche l'ED existant par Série/Clé
@@ -1036,12 +1036,21 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
     4. Supprime les lots conflictuels (ceux avec la référence LTA)
     5. Ajoute les nouveaux lots pour chaque DUM (comme create_etat_depotage)
     6. Sauvegarde et valide l'ED modifié
-    
+
+    Mode BLOCAGE + PARTIEL (partial_config et partial_number fournis):
+    seuls les DUMs (et morceaux de DUM split) du partiel fusionné avec le blocage
+    sont ajoutés, avec poids/positions du partial config et références de lot au
+    format partiel (comme create_etat_depotage_partial) pour que la Phase 2 les
+    retrouve. La référence DS validée est enregistrée dans le partial config
+    (ds_validated = checkpoint) au lieu de la ligne 4 du fichier shipper.
+
     Args:
         driver: WebDriver Selenium
         lta_folder_path: Chemin vers le dossier LTA
         shipper_data: Dictionnaire avec série, clé, etc.
-    
+        partial_config: Configuration partielle (mode blocage + partiel uniquement)
+        partial_number: Numéro du partiel fusionné avec le blocage
+
     Returns:
         True si succès, False si erreur
     """
@@ -1590,12 +1599,36 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
             wb.close()
             
             print(f"      ✓ {len(dum_lots_data)} DUM(s) détecté(s)")
-            
+
         except Exception as e:
             print(f"      ❌ Erreur lecture DUMs: {e}")
             return_to_home_after_error(driver)
             return False
-        
+
+        # MED.5b: BLOCAGE + PARTIEL — ne garder que les lots du partiel fusionné avec
+        # le blocage (les autres DUMs appartiennent aux autres partiels: ED créé ou
+        # DS MEAD). Références de lot au format partiel pour la Phase 2.
+        partial_mode = partial_config is not None and partial_number is not None
+        lot_ref_base = None
+        if partial_mode:
+            partial_data = find_partial_by_number(partial_config, partial_number)
+            dum_lots_data = get_dum_lots_for_partial(partial_data, partial_config) if partial_data else []
+            if not dum_lots_data:
+                print(f"      ❌ Aucun DUM pour le partiel {partial_number} dans la configuration partielle")
+                return_to_home_after_error(driver)
+                return False
+
+            ref_parts = partial_config['lta_reference'].split("-")
+            try:
+                ref_parts[0] = str(int(ref_parts[0]))  # Enlever zéros initiaux (même format que create_etat_depotage_partial)
+            except ValueError:
+                pass
+            lot_ref_base = "-".join(ref_parts)
+
+            dums_weight = round(sum(d['p_brut'] for d in dum_lots_data), 2)
+            print(f"      🔒 Partiel {partial_number} fusionné avec le blocage: {len(dum_lots_data)} lot(s) DUM, {dums_weight} kg")
+            print(f"         Lots: {', '.join(d['dum_name'] + (' (' + d['split_id'] + ')' if d.get('split_id') else '') for d in dum_lots_data)}")
+
         # ==================================================================
         # ÉTAPE MED.6: Créer les nouveaux lots (comme create_etat_depotage)
         # ==================================================================
@@ -1631,10 +1664,18 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
                     
                     # Référence: {lta_reference}/N (toujours ajouter /N, ne jamais remplacer) - avec retry et robustesse
                     try:
-                        # Toujours ajouter /N à la fin
-                        # "235-94908936/1" → "235-94908936/1/2" pour DUM 2
-                        # "23594908936" → "23594908936/2" pour DUM 2
-                        lot_reference = f"{lta_reference_existing}/{dum_index}"
+                        if lot_ref_base is not None:
+                            # Blocage + partiel: même format que create_etat_depotage_partial
+                            # (ref/DUM ou ref/DUM/k pour un morceau de DUM split)
+                            if dum_data.get('is_split') and dum_data.get('split_id'):
+                                lot_reference = f"{lot_ref_base}/{dum_data['split_id']}"
+                            else:
+                                lot_reference = f"{lot_ref_base}/{dum_data['dum_number']}"
+                        else:
+                            # Toujours ajouter /N à la fin
+                            # "235-94908936/1" → "235-94908936/1/2" pour DUM 2
+                            # "23594908936" → "23594908936/2" pour DUM 2
+                            lot_reference = f"{lta_reference_existing}/{dum_index}"
                         
                         # Attendre que le blocker UI disparaisse après le clic "Nouveau"
                         wait_for_ui_blocker_disappear(driver, timeout=10)
@@ -2389,7 +2430,16 @@ def modify_etat_depotage_for_blocage(driver, lta_folder_path, shipper_data):
                 
             # MED.9.2: Enregistrer la référence dans le fichier shipper (ligne 4)
             # NOTE: Must be OUTSIDE the for-loop so it runs after break (successful extraction)
-            if ds_reference:
+            if ds_reference and partial_mode:
+                # Blocage + partiel: ds_validated du partiel = checkpoint (un relancement
+                # ne refera pas ce partiel) et source de la colonne "DS Validé" de la GUI
+                try:
+                    lta_name = os.path.basename(lta_folder_path)
+                    parent_dir = os.path.dirname(lta_folder_path) or "."
+                    save_ds_validated_to_partial_config(parent_dir, lta_name, partial_number, ds_reference)
+                except Exception as e:
+                    print(f"      ⚠️  Erreur mise à jour partial config: {e}")
+            elif ds_reference:
                 try:
                     lta_name = os.path.basename(lta_folder_path)
                     parent_dir = os.path.dirname(lta_folder_path)
@@ -3122,9 +3172,27 @@ def get_dum_lots_for_partial(partial_data, partial_config=None):
             'split_id': dum.get('split_id', ''),
             'is_split': dum.get('is_split', False),
             'p': dum_positions,
-            'p_brut': round(dum_weight, 1)
+            'p_brut': round(dum_weight, 2)  # exact (kg à 2 décimales) — pas d'arrondi au dixième
         })
     return dum_lots
+
+def get_blocage_partial_number(partial_config):
+    """
+    LTA blocage + partiel: renvoie le numéro du partiel fusionné avec le blocage.
+
+    Règle métier: le plus grand partiel (en poids) est toujours celui fusionné
+    avec les waybills bloqués — son ED existe déjà et sera MODIFIÉ, pas créé.
+    Utilise 'blocage_partial_number' enregistré par la GUI s'il est présent.
+    """
+    if not partial_config or not partial_config.get('partials'):
+        return None
+
+    saved = partial_config.get('blocage_partial_number')
+    if saved is not None and find_partial_by_number(partial_config, saved):
+        return saved
+
+    largest = max(partial_config['partials'], key=lambda p: float(p.get('weight') or 0))
+    return largest.get('partial_number')
 
 def save_ds_validated_to_partial_config(lta_folder_path, folder_name, partial_number, ds_validated):
     """
@@ -8277,11 +8345,13 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
             # Si le texte actuel ne contient pas "SOIT", utiliser le texte par défaut
             if not current_text or "SOIT" not in current_text:
                 print("      ⚠️  Texte actuel invalide ou vide, utilisation du pattern par défaut")
-                current_text = f"SOIT {carton_value} COLIS  NS SOLL LA DISP DES FORM CCEC"
+                current_text = f"SOIT {carton_value} CARTON  NS SOLL LA DISP DES FORM CCEC"
             else:
                 # Construire le nouveau texte avec préfixe LTA
-                # Format: "LTA N° 72-73799132 SOIT {carton_value} COLIS.NS SOLL LA DISP DES FORM CCEC"
-                current_text = re.sub(r'SOIT\s+\d+\s+COLIS', f'SOIT {carton_value} COLIS', current_text)
+                # Format: "LTA N° 72-73799132 SOIT {carton_value} CARTON.NS SOLL LA DISP DES FORM CCEC"
+                # (tolère aussi "COLIS" dans un texte déjà présent sur la déclaration,
+                # écrit par une version précédente de l'app, et le convertit en CARTON)
+                current_text = re.sub(r'SOIT\s+\d+\s+(?:COLIS|CARTON)', f'SOIT {carton_value} CARTON', current_text)
                 # Retirer le préfixe LTA existant s'il y en a un
                 current_text = re.sub(r'^LTA N°\s+\d+[-\d]*\s*', '', current_text)
             
@@ -8322,9 +8392,9 @@ def fill_declaration_form(driver, shipper_name, dum_data, lta_folder_path, lta_r
                 if not current_text or "SOIT" not in current_text:
                     current_text = driver.execute_script("return arguments[0].value;", textarea_alt)
                 if not current_text or "SOIT" not in current_text:
-                    current_text = f"SOIT {carton_value} COLIS  NS SOLL LA DISP DES FORM CCEC"
+                    current_text = f"SOIT {carton_value} CARTON  NS SOLL LA DISP DES FORM CCEC"
                 else:
-                    current_text = re.sub(r'SOIT\s+\d+\s+COLIS', f'SOIT {carton_value} COLIS', current_text)
+                    current_text = re.sub(r'SOIT\s+\d+\s+(?:COLIS|CARTON)', f'SOIT {carton_value} CARTON', current_text)
                     current_text = re.sub(r'^LTA N°\s+\d+[-\d]*\s*', '', current_text)
                 
                 new_text = f"LTA N° {lta_reference_clean} {current_text}"
@@ -11485,6 +11555,113 @@ def find_lta_folders(base_path="."):
     
     return lta_folders
 
+def read_generated_excel_dum_weights(lta_folder_path):
+    """
+    P,BRUT de chaque DUM de generated_excel (feuille Summary), dans l'ordre:
+    {numéro DUM: poids}. Même disposition que le dialogue de config partielle
+    (libellé "DUM N" en colonne C à la ligne 11 + 7k, P,BRUT 4 lignes plus bas).
+    """
+    excel_files = glob.glob(os.path.join(lta_folder_path, "generated_excel*.xlsx"))
+    if not excel_files:
+        return {}
+    close_excel_file(excel_files[0])
+    wb = load_workbook(excel_files[0], data_only=True)
+    try:
+        ws = wb['Summary']
+        weights = {}
+        for dum_idx in range(1, 51):
+            row = 11 + (dum_idx - 1) * 7
+            label = ws[f'C{row}'].value
+            if not label or 'DUM' not in str(label).upper():
+                break
+            weights[dum_idx] = round(float(ws[f'B{row + 4}'].value or 0), 2)
+        return weights
+    finally:
+        wb.close()
+
+def process_blocage_partial_ed(driver, lta_folder_path, partial_config, partial_number, blocage_info):
+    """
+    LTA blocage + partiel: traite le partiel fusionné avec le blocage.
+
+    Son ED existe déjà (créé avec les waybills bloqués): on le MODIFIE avec la DS
+    série de ce partiel — suppression des lots à la référence LTA, conservation
+    des waybills bloqués (MA...), ajout des lots des seuls DUMs de ce partiel.
+
+    Returns:
+        bool: True si l'ED a été modifié et validé, False sinon
+    """
+    partial_data = find_partial_by_number(partial_config, partial_number)
+    if not partial_data:
+        print(f"   ❌ Partiel {partial_number} introuvable dans la configuration")
+        return False
+
+    if blocage_info.get('corrected_weight') is None:
+        print(f"   ❌ Impossible de calculer le poids corrigé (lignes 12/13 du fichier LTA)")
+        return False
+
+    blocked_weight = float(blocage_info.get('blocked_weight') or 0)
+    partial_weight = float(partial_data['weight'])
+    partial_dums = partial_data.get('dums', [])
+
+    resave_hint = ("   ℹ️  Ouvrez 'Configuration Partielle' dans la GUI (blocage coché) et sauvegardez à nouveau\n"
+                   "      (le dialogue relit generated_excel et répartit les poids exacts).")
+
+    # Garde-fou EXACT: les DUMs de ce partiel doivent totaliser (poids du vol − poids
+    # bloqué) au centième près, sinon l'ED modifié ne correspondrait pas au poids de la DS.
+    expected_dums_weight = round(partial_weight - blocked_weight, 2)
+    actual_dums_weight = round(sum(float(d['weight']) for d in partial_dums), 2)
+
+    print(f"\n🔒 PARTIEL {partial_number} FUSIONNÉ AVEC LE BLOCAGE (ED existant → MODIFICATION)")
+    print(f"   Poids vol: {partial_weight} kg = {blocked_weight} kg bloqués + {expected_dums_weight} kg de DUMs")
+    print(f"   DUMs configurés: {actual_dums_weight} kg")
+
+    if abs(actual_dums_weight - expected_dums_weight) > 0.005:
+        print(f"   ❌ Les DUMs du partiel ({actual_dums_weight} kg) ne correspondent pas exactement à "
+              f"poids vol − poids bloqué ({expected_dums_weight} kg)")
+        print(resave_hint)
+        return False
+
+    # BC.2 & BC.3: Corriger les fichiers Excel (même étape que le blocage simple)
+    if not correct_blocage_weights(lta_folder_path, blocage_info['corrected_weight']):
+        print(f"   ❌ Échec correction poids blocage")
+        return False
+
+    # Contrôle de cohérence: après correction, chaque DUM de generated_excel doit être
+    # entièrement réparti entre les partiels, au centième près (le dialogue applique la
+    # même correction que correct_blocage_weights; un écart = config périmée ou
+    # divergence des deux calculs → on refuse plutôt que de saisir de faux lots).
+    corrected_weights = read_generated_excel_dum_weights(lta_folder_path)
+    allocated = {}
+    for p in partial_config['partials']:
+        for d in p.get('dums', []):
+            n = int(d['dum_number'])
+            allocated[n] = round(allocated.get(n, 0.0) + float(d['weight']), 2)
+    mismatches = [(n, w, allocated.get(n, 0.0)) for n, w in corrected_weights.items()
+                  if abs(w - allocated.get(n, 0.0)) > 0.005]
+    mismatches += [(n, 0.0, a) for n, a in allocated.items() if n not in corrected_weights]
+    if not corrected_weights or mismatches:
+        print(f"   ❌ Répartition des DUMs ≠ poids corrigés de generated_excel:")
+        for n, w, a in mismatches[:10]:
+            print(f"      DUM {n}: generated_excel {w} kg / réparti entre partiels {a} kg")
+        print(resave_hint)
+        return False
+    print(f"   ✓ {len(corrected_weights)} DUMs: répartition = poids corrigés generated_excel (au centième)")
+
+    # La DS de l'ED blocage existant est celle du plus grand partiel (saisie dans la config)
+    shipper_data = {
+        'shipper_name': 'MARCHANDISES DIVERSES',
+        'has_ds_mead': True,
+        'serie': partial_data['ds_serie'],
+        'cle': partial_data['ds_cle'],
+        'loading_location': partial_data.get('loading_location')
+    }
+    print(f"   DS (ED blocage existant): {partial_data['ds_serie']} {partial_data['ds_cle']}")
+
+    return modify_etat_depotage_for_blocage(
+        driver, lta_folder_path, shipper_data,
+        partial_config=partial_config, partial_number=partial_number
+    )
+
 def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
     """Process LTA folder - ED creation only (Phase 1)
     
@@ -11503,8 +11680,13 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
         
         # ========== ÉTAPE BC.1: Vérifier si c'est un LTA blocage ==========
         blocage_info = detect_blocage_from_lta_file(lta_folder_path)
-        
-        if blocage_info['is_blocage']:
+
+        # La config partielle est lue AVANT de choisir le workflow: un LTA peut être
+        # blocage ET partiel (le plus grand partiel est fusionné avec le blocage).
+        parent_dir = os.path.dirname(lta_folder_path) or "."
+        partial_config = get_lta_partial_info(parent_dir, lta_name)
+
+        if blocage_info['is_blocage'] and not partial_config:
             print(f"\n⚠️  LTA BLOCAGE DÉTECTÉ - Workflow spécial (PHASE 2)")
             
             # Vérifier que le poids corrigé est disponible
@@ -11543,15 +11725,21 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
                 print(f"\n❌ Échec modification ED blocage")
                 return False
         
-        # ========== Traitement NORMAL (pas de blocage) ==========
-        
+        # ========== Traitement NORMAL (pas de blocage) ou BLOCAGE + PARTIEL ==========
+
         # ========== ÉTAPE PARTIAL: Vérifier si LTA partiel D'ABORD ==========
         print("\n🔍 Vérification configuration partielle...")
-        # get_lta_partial_info expects parent directory + folder name
-        # lta_folder_path is "./4eme LTA", so parent is dirname
-        parent_dir = os.path.dirname(lta_folder_path) or "."
-        partial_config = get_lta_partial_info(parent_dir, lta_name)
-        
+
+        # Blocage + partiel: le plus grand partiel est fusionné avec le blocage
+        # (ED existant MODIFIÉ); les autres partiels suivent le traitement partiel normal.
+        blocage_partial_number = None
+        if blocage_info['is_blocage'] and partial_config:
+            blocage_partial_number = get_blocage_partial_number(partial_config)
+            print(f"\n⚠️  LTA BLOCAGE + PARTIEL DÉTECTÉ")
+            print(f"   Poids bloqué: {blocage_info.get('blocked_weight')} kg")
+            print(f"   Partiel fusionné avec le blocage (plus grand vol): {blocage_partial_number} → modification de l'ED existant")
+            print(f"   Autres partiels: création d'ED ou DS MEAD (cas d'exception) comme un LTA partiel normal")
+
         if partial_config:
             print(f"\n📦 LTA PARTIEL DÉTECTÉ - {len(partial_config['partials'])} vol(s)")
             print(f"   Référence LTA: {partial_config['lta_reference']}")
@@ -11578,6 +11766,14 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
                 print(f"   Références aéroport: {partial_config.get('smallest_partial_airport_references', partial_config.get('smallest_partial_airport_reference'))}")
                 print(f"   ℹ️  Seuls les grands partiels recevront un état de dépotage")
             
+            # Le partiel fusionné avec le blocage ne peut pas être un partiel d'exception
+            # (dédouané à l'aéroport): ce serait une configuration incohérente.
+            if (blocage_partial_number is not None and partial_type == 'exception'
+                    and blocage_partial_number in smallest_partial_nums_cfg):
+                print(f"\n❌ Configuration incohérente: le partiel {blocage_partial_number} (fusionné avec le blocage)")
+                print(f"   est aussi un partiel d'exception (DS MEAD). Vérifiez la configuration partielle.")
+                return False
+
             # Process each partial
             all_success = True
             for partial in partial_config['partials']:
@@ -11623,14 +11819,22 @@ def process_lta_folder_ed_only(driver, lta_folder_path, lta_name):
                 # For exception case, adjust DUM 1 to exclude smallest partials
                 if partial_type == 'exception':
                     print(f"   ⚠️  Cas d'exception: DUM 1 ajusté (partiels {smallest_partial_nums_cfg} déduits)")
-                
-                # Create ED for this partial
-                if not create_etat_depotage_partial(driver, lta_folder_path, partial_config, partial_num):
-                    print(f"\n❌ Échec création ED partiel {partial_num}")
-                    all_success = False
-                    continue
-                
-                print(f"\n✅ ED Partiel {partial_num} créé avec succès!")
+
+                if partial_num == blocage_partial_number:
+                    # Partiel fusionné avec le blocage: l'ED existe déjà → MODIFICATION
+                    if not process_blocage_partial_ed(driver, lta_folder_path, partial_config, partial_num, blocage_info):
+                        print(f"\n❌ Échec modification ED blocage (partiel {partial_num})")
+                        all_success = False
+                        continue
+                    print(f"\n✅ ED Blocage modifié avec succès (partiel {partial_num})!")
+                else:
+                    # Create ED for this partial
+                    if not create_etat_depotage_partial(driver, lta_folder_path, partial_config, partial_num):
+                        print(f"\n❌ Échec création ED partiel {partial_num}")
+                        all_success = False
+                        continue
+
+                    print(f"\n✅ ED Partiel {partial_num} créé avec succès!")
                 
                 # Return to home after each partial
                 print(f"\n🏠 Retour à l'accueil...")

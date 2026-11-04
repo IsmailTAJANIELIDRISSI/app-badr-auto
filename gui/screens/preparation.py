@@ -656,7 +656,7 @@ class PreparationScreen:
             configure_btn = ttk.Button(
                 card,
                 text="⚙️ Configurer",
-                command=lambda f=folder, l=lta['name'], p=partial_var, lf=lta['lta_file']: self._configure_partial(f, l, p, lf)
+                command=lambda f=folder, l=lta['name'], p=partial_var, lf=lta['lta_file'], bv=blocage_var, bw=blocked_weight_var, tw=total_weight_var: self._configure_partial(f, l, p, lf, bv, bw, tw)
             )
             configure_btn.grid(row=row_num, column=2, sticky=tk.E, pady=5)
             
@@ -893,18 +893,40 @@ class PreparationScreen:
             self.app.log_message(f"Sauvegarde terminée avec {error_count} erreur(s)", "WARNING")
             messagebox.showwarning("Attention", f"Sauvegarde terminée avec {error_count} erreur(s)")
     
-    def _configure_partial(self, lta_folder_path, folder_name, partial_var, lta_file_path=None):
+    def _configure_partial(self, lta_folder_path, folder_name, partial_var, lta_file_path=None,
+                           blocage_var=None, blocked_weight_var=None, total_weight_var=None):
         """Open partial LTA configuration dialog"""
         if not partial_var.get():
             messagebox.showinfo("Info", "Veuillez cocher la case 'LTA Partiel' d'abord")
             return
-        
+
+        # LTA blocage + partiel: passer les poids saisis sur la carte (pas encore
+        # forcément enregistrés dans le fichier LTA): le bloqué est déduit du plus grand
+        # partiel, et (total − bloqué) sert à corriger les poids des DUMs comme en Phase 1.
+        # 0 = blocage décoché.
+        blocked_weight = None
+        blocage_total_weight = None
+        if blocage_var is not None:
+            blocked_weight = 0.0
+            if blocage_var.get():
+                try:
+                    blocked_weight = float(blocked_weight_var.get().strip().replace(',', '.'))
+                    blocage_total_weight = float(total_weight_var.get().strip().replace(',', '.'))
+                except (ValueError, AttributeError):
+                    messagebox.showerror(
+                        "Poids blocage invalides",
+                        f"{folder_name}: le LTA est coché 'Blocage' mais le poids total ou le poids bloqué "
+                        "n'est pas un nombre valide.\n\n"
+                        "Saisissez les deux poids (ex: 1353.1 et 10.22) avant de configurer les partiels."
+                    )
+                    return
+
         try:
             # Import the partial configuration dialog
             from gui.screens.partial_config_dialog import PartialConfigDialog
-            
-            # Create dialog (only accepts 3 arguments: parent, lta_folder_path, folder_name)
-            dialog = PartialConfigDialog(self.parent, lta_folder_path, folder_name)
+
+            dialog = PartialConfigDialog(self.parent, lta_folder_path, folder_name,
+                                         blocked_weight=blocked_weight, blocage_total_weight=blocage_total_weight)
             
             # Wait for dialog to close
             if hasattr(dialog, 'dialog'):
