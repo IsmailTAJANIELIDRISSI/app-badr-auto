@@ -1372,7 +1372,7 @@ class PartialConfigDialog:
                 else:
                     actual_positions = partial_dist['positions']
 
-                partials.append({
+                new_partial = {
                     'partial_number': partial_num,
                     'weight': weight_float,
                     'positions': actual_positions,
@@ -1380,7 +1380,22 @@ class PartialConfigDialog:
                     'ds_cle': ds_cle,
                     'loading_location': location,
                     'dums': selected_dums
-                })
+                }
+
+                # Keep the progress already recorded for this partial (Phase 1 checkpoint
+                # 'ds_validated', signed series 'signed_series') when its DS is unchanged:
+                # re-saving the config to fix a typo (e.g. an airport reference) used to wipe
+                # them -> Phase 1 redid the ED and Phase 2 skipped the Préapurement DS.
+                old_partial = next(
+                    (p for p in (self.existing_config or {}).get('partials', [])
+                     if p.get('partial_number') == partial_num), None)
+                if (old_partial and str(old_partial.get('ds_serie', '')) == str(ds_serie)
+                        and str(old_partial.get('ds_cle', '')).upper() == str(ds_cle).upper()):
+                    for key in ('ds_validated', 'signed_series'):
+                        if old_partial.get(key):
+                            new_partial[key] = old_partial[key]
+
+                partials.append(new_partial)
             
             # For multi-smallest exception: fix big partial positions =
             # total_positions - sum(exception partial positions)

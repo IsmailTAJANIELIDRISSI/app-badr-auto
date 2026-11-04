@@ -4,6 +4,16 @@ _Populated as we work. Each entry = problem + solution + files changed._
 
 ---
 
+## 2026-11-04 — Re-sauvegarder la config partielle effaçait ds_validated / signed_series
+
+**Problème:** Phase 2 affichait "Aucun DS validé ou série signée trouvé pour les partiels" et sautait tout le Préapurement DS, alors qu'au run précédent le partiel 1 avait `ds_validated: 5986V` et `signed_series: 5278 T`. Cause: `_save_config` du dialogue reconstruit chaque partiel à partir du formulaire et ne recopiait pas ces deux champs. Re-sauvegarder via "Configurer" (ex: pour corriger la référence aéroport "24") effaçait donc le checkpoint Phase 1 et la série signée. Conséquences: Phase 1 refaisait l'ED, Phase 2 sautait le Préapurement.
+
+**Solution (`gui/screens/partial_config_dialog.py`):** à la sauvegarde, `ds_validated` et `signed_series` de l'ancienne config sont conservés pour chaque partiel dont la DS série + clé n'a pas changé. Une DS modifiée repart à zéro (normal: autre déclaration).
+
+**Contournement immédiat sur un PC déjà touché** (le correctif GUI n'agit qu'après rebuild de l'exe): ressaisir la série signée du partiel (ex: `5278 T`) dans la colonne "Série Signée" du tableau, ou remettre les champs dans le JSON.
+
+---
+
 ## 2026-11-04 — Préapurement DS (cas d'exception): lot du grand partiel = réf. LTA, pas réf. aéroport
 
 **Problème:** LTA 235-99381402 (partiel 1 = 1329.1 kg, partiel 2 = 24 kg exception, DUM 1 split). Phase 2 saisissait `24/1/1` comme référence du lot Dépotage de DUM 1 (morceau 1/1 du grand partiel) au lieu de `235-99381402/1/1`; BADR n'a trouvé aucun lot → "Erreur validation données" (retry 1/3). Cause: `get_dum_preapurement_lots` (branche exception) prenait comme base la référence aéroport du petit partiel (ici "24") alors que les lots de l'Etat de Dépotage sont `<réf. LTA>/<split_id>` (`create_etat_depotage_partial` et la modification blocage + partiel). Cela ne marchait que si la référence aéroport saisie était égale à la référence LTA.
