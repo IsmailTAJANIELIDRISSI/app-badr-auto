@@ -24,6 +24,10 @@
 !config/**
 !config/license.json
 
+# Include project docs (PROJECT / PROGRESS / TASKS / STACK) — always tracked and pushed
+!ai-docs/
+!ai-docs/**
+
 # Exclude dist folder (build artifacts including .exe)
 dist/
 *.exe
